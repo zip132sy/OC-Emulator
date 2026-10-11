@@ -1,7 +1,7 @@
 # OC Emulator
 
 > 一个在本地运行的 **OpenComputers 模拟器**，配套一套浏览器 Web 控制面板。
-> 用 Node.js 负责进程 / 磁盘 / 网络，用 Lua 运行真正的 OpenOS / MineOS 系统，前端用 Canvas 逐像素还原 OpenComputers 的屏幕渲染。
+> 用 Node.js 负责进程 / 磁盘 / 网络，用 Lua 在本地运行 OpenOS (兼容MineOS) 系统，前端用 Canvas 逐像素还原 OpenComputers 的屏幕渲染。
 
 - GitHub：https://github.com/zip132sy/OC-Emulator
 - Gitee：https://gitee.com/zip132sy/OC-Emulator
