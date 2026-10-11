@@ -141,6 +141,13 @@ const App = (() => {
             <label></label>
             <span class="hint">${I18N.t('settings.auto-update-hint')}</span>
           </div>
+          <div class="form-row">
+            <label>${I18N.t('settings.rollback')}</label>
+            <div style="display:flex;align-items:center;gap:8px;flex:1;">
+              <button class="btn" id="settings-rollback" type="button">${I18N.t('settings.rollback-btn')}</button>
+              <span class="hint">${I18N.t('settings.rollback-hint')}</span>
+            </div>
+          </div>
         `,
         footerHTML: `
           <button class="btn" data-action="modal-close">${I18N.t('settings.cancel')}</button>
@@ -206,6 +213,9 @@ const App = (() => {
               }
             });
           }
+          // 版本回退
+          const rollbackBtn = body.querySelector('#settings-rollback');
+          if (rollbackBtn) rollbackBtn.addEventListener('click', () => openRollbackDialog());
           // 浏览按钮 (隐藏的 file input)
           const browseBtn = body.querySelector('#settings-browse');
           const fileInput = document.createElement('input');
@@ -290,11 +300,18 @@ const App = (() => {
     setStatus(I18N.t('server.stopped'));
   }
 
-  // 检查更新: 检查 -> 有更新则询问是否更新 -> 更新后询问是否重启后端
-  // (不自动重启, 避免正在运行虚拟机时被迫中断)
+  // ---------- 检查更新 / 版本回退 ----------
+  // 结果统一在弹窗里展示 (含更新日志); 更新或回退后由用户决定是否重启后端,
+  // 不自动重启, 避免正在运行虚拟机时被迫中断。
   let updateBusy = false;
 
-  // "处理中"弹窗: 让用户知道操作已开始, 同时在此期间按钮被禁用, 防止重复点击
+  function trLang(zh, en) { return I18N.getLang() === 'zh' ? zh : en; }
+
+  function escapeHtml(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  // "处理中"弹窗: 让用户知道操作已开始, 同时按钮被禁用防止重复点击
   function openBusyModal(titleKey, hintKey) {
     Modal.open({
       title: I18N.t(titleKey),
@@ -304,101 +321,226 @@ const App = (() => {
     });
   }
 
+  function runningVmCount() {
+    try {
+      return (state.vms || []).filter((v) => v.state === 'running' || v.state === 'paused' || v.state === 'starting').length;
+    } catch (e) {
+      return 0;
+    }
+  }
+
+  // 重启提醒: 有虚拟机在运行时额外提示会被中断
+  function restartWarn() {
+    const n = runningVmCount();
+    return n > 0
+      ? trLang(`\n\n注意：当前有 ${n} 台虚拟机正在运行，重启会中断它们。`, `\n\nNote: ${n} VM(s) are running; restarting will interrupt them.`)
+      : '';
+  }
+
+  function commitListHtml(commits) {
+    const items = (commits || []).map((c) => `
+      <li style="margin:6px 0;list-style:disc;">
+        <code style="color:var(--accent);">${escapeHtml(c.short || c.sha || '')}</code>
+        <span style="margin-left:6px;">${escapeHtml(c.subject || '')}</span>
+        <span style="color:var(--fg-muted);margin-left:6px;font-size:11px;">${escapeHtml(c.date || '')}</span>
+      </li>`).join('');
+    return items || `<li style="list-style:disc;color:var(--fg-muted);">${escapeHtml(trLang('（无提交记录）', '(no commits)'))}</li>`;
+  }
+
+  // 更新结果窗口 (mode: available / uptodate / error / info)
+  function showUpdateModal(mode, opts) {
+    const o = opts || {};
+    let title, body, footer;
+
+    if (mode === 'available') {
+      const d = o.data || {};
+      title = trLang('发现新版本', 'Update available');
+      body = `
+        <div style="margin-bottom:10px;">${escapeHtml(trLang(
+          `本地 ${d.current}，远端 ${d.latest}，落后 ${d.behind} 个提交`,
+          `local ${d.current}, remote ${d.latest}, ${d.behind} commit(s) behind`
+        ))}</div>
+        <div style="margin:10px 0 4px;color:var(--fg-muted);font-size:12px;">${escapeHtml(trLang('本次更新内容', 'Changes in this update'))}</div>
+        <ul style="margin:0;padding-left:18px;max-height:280px;overflow:auto;font-size:12px;">${commitListHtml(d.log)}</ul>`;
+      footer = `<button class="btn" data-action="modal-close">${escapeHtml(trLang('取消', 'Cancel'))}</button>`
+             + `<button class="btn btn-primary" id="update-apply">${escapeHtml(trLang('立即更新', 'Update now'))}</button>`;
+    } else if (mode === 'uptodate') {
+      const d = o.data || {};
+      title = trLang('已是最新版本', 'Already up to date');
+      body = `
+        <div style="margin-bottom:10px;">${escapeHtml(trLang(`当前版本：${d.current}`, `current version: ${d.current}`))}</div>
+        <div style="margin:10px 0 4px;color:var(--fg-muted);font-size:12px;">${escapeHtml(trLang('当前版本更新日志', 'Changelog of the current version'))}</div>
+        <ul style="margin:0;padding-left:18px;max-height:280px;overflow:auto;font-size:12px;">${commitListHtml(d.log)}</ul>`;
+      footer = `<button class="btn" data-action="modal-close">${escapeHtml(trLang('关闭', 'Close'))}</button>`;
+    } else {
+      title = (mode === 'error') ? trLang('检查更新失败', 'Update check failed') : trLang('提示', 'Notice');
+      body = `<div style="word-break:break-word;${mode === 'error' ? 'color:var(--err);' : ''}">${escapeHtml(o.message || '')}</div>`;
+      footer = `<button class="btn" data-action="modal-close">${escapeHtml(trLang('关闭', 'Close'))}</button>`;
+    }
+
+    Modal.open({
+      title,
+      size: 'medium',
+      bodyHTML: body,
+      footerHTML: footer,
+      onMount(_bodyEl, footerEl) {
+        const applyBtn = footerEl && footerEl.querySelector('#update-apply');
+        if (applyBtn) applyBtn.addEventListener('click', () => applyUpdateFlow());
+      },
+    });
+  }
+
+  // 检查更新 (结果在弹窗中展示)
   async function checkUpdate() {
     if (updateBusy) return;
     updateBusy = true;
     const btn = document.getElementById('menu-check-update');
     if (btn) btn.disabled = true;
 
-    const zh = I18N.getLang() === 'zh';
-    const tr = (z, e) => (zh ? z : e);
     setStatus(I18N.t('update.checking'));
     openBusyModal('update.checking', 'update.checking-hint');
 
+    let r = null, err = null;
     try {
-      let r;
-      try {
-        r = await api('update/check');
-      } catch (e) {
-        Modal.close();
-        setStatus(I18N.t('update.failed'));
-        alert(tr('检查更新失败: ', 'Update check failed: ') + e.message);
-        return;
-      }
-      Modal.close();
-
-      if (!r || !r.ok) {
-        setStatus(I18N.t('update.failed'));
-        const map = {
-          'not-a-repo': tr('当前目录不是 git 仓库，无法检查更新。', 'Not a git repository; cannot check for updates.'),
-          'fetch-failed': tr('无法连接远端仓库，请检查网络或 git 配置。', 'Cannot reach the remote repository. Check your network or git settings.'),
-          'no-upstream': tr('未找到远端跟踪分支，无法比较版本。', 'No remote tracking branch found; cannot compare versions.'),
-        };
-        alert(map[r && r.error] || (tr('检查更新失败: ', 'Update check failed: ') + ((r && (r.detail || r.error)) || '')));
-        return;
-      }
-
-      if (!r.available) {
-        setStatus(I18N.t('update.up-to-date'));
-        alert(tr(`已是最新版本（${r.current}）。`, `Already up to date (${r.current}).`));
-        return;
-      }
-
-      setStatus(I18N.t('update.available'));
-      const info = tr(
-        `发现新版本：\n\n本地版本：${r.current}\n远端版本：${r.latest}\n落后提交：${r.behind} 个\n最新提交：${r.subject}`,
-        `Update available:\n\nlocal: ${r.current}\nremote: ${r.latest}\nbehind: ${r.behind} commit(s)\nlatest: ${r.subject}`
-      );
-      if (!confirm(info + tr('\n\n是否立即更新？', '\n\nUpdate now?'))) return;
-
-      setStatus(I18N.t('update.applying'));
-      openBusyModal('update.applying', 'update.applying-hint');
-
-      let a;
-      try {
-        a = await api('update/apply', { method: 'POST' });
-      } catch (e) {
-        Modal.close();
-        setStatus(I18N.t('update.failed'));
-        alert(tr('更新失败: ', 'Update failed: ') + e.message);
-        return;
-      }
-      Modal.close();
-
-      if (!a || !a.ok) {
-        setStatus(I18N.t('update.failed'));
-        alert(tr('更新失败: ', 'Update failed: ') + ((a && (a.output || a.error)) || ''));
-        return;
-      }
-      if (!a.changed) {
-        setStatus(I18N.t('update.up-to-date'));
-        alert(tr('已是最新版本，无需重启。', 'Already up to date; no restart needed.'));
-        return;
-      }
-
-      setStatus(I18N.t('update.done'));
-      let running = 0;
-      try {
-        running = (state.vms || []).filter((v) => v.state === 'running' || v.state === 'paused' || v.state === 'starting').length;
-      } catch (e) { running = 0; }
-      const warn = running > 0
-        ? tr(`\n\n注意：当前有 ${running} 台虚拟机正在运行，重启会中断它们。`, `\n\nNote: ${running} VM(s) are running; restarting will interrupt them.`)
-        : '';
-      const ask = tr(
-        `更新完成（${a.before} → ${a.after}）。\n\n是否立即重启后端使更新生效？`,
-        `Update complete (${a.before} -> ${a.after}).\n\nRestart the backend now to apply the update?`
-      ) + warn;
-
-      if (confirm(ask)) {
-        await restartServer(true);
-      } else {
-        setStatus(I18N.t('update.done'));
-      }
-    } finally {
-      Modal.close();
-      updateBusy = false;
-      if (btn) btn.disabled = false;
+      r = await api('update/check');
+    } catch (e) {
+      err = e;
     }
+    Modal.close();
+    updateBusy = false;
+    if (btn) btn.disabled = false;
+
+    if (err) {
+      setStatus(I18N.t('update.failed'));
+      showUpdateModal('error', { message: trLang('检查更新失败: ', 'Update check failed: ') + err.message });
+      return;
+    }
+    if (!r || !r.ok) {
+      setStatus(I18N.t('update.failed'));
+      const map = {
+        'not-a-repo': trLang('当前目录不是 git 仓库，无法检查更新。', 'Not a git repository; cannot check for updates.'),
+        'fetch-failed': trLang('无法连接远端仓库，请检查网络或 git 配置。', 'Cannot reach the remote repository. Check your network or git settings.'),
+        'no-upstream': trLang('未找到远端跟踪分支，无法比较版本。', 'No remote tracking branch found; cannot compare versions.'),
+      };
+      showUpdateModal('error', { message: map[r && r.error] || String((r && (r.detail || r.error)) || '') });
+      return;
+    }
+
+    if (r.available) {
+      setStatus(I18N.t('update.available'));
+      showUpdateModal('available', { data: r });
+    } else {
+      setStatus(I18N.t('update.up-to-date'));
+      showUpdateModal('uptodate', { data: r });
+    }
+  }
+
+  // 执行更新; 完成后询问是否重启后端
+  async function applyUpdateFlow() {
+    if (updateBusy) return;
+    updateBusy = true;
+    setStatus(I18N.t('update.applying'));
+    openBusyModal('update.applying', 'update.applying-hint');
+
+    let a = null, err = null;
+    try {
+      a = await api('update/apply', { method: 'POST' });
+    } catch (e) {
+      err = e;
+    }
+    Modal.close();
+    updateBusy = false;
+
+    if (err) { setStatus(I18N.t('update.failed')); showUpdateModal('error', { message: trLang('更新失败: ', 'Update failed: ') + err.message }); return; }
+    if (!a || !a.ok) { setStatus(I18N.t('update.failed')); showUpdateModal('error', { message: trLang('更新失败: ', 'Update failed: ') + String((a && (a.output || a.error)) || '') }); return; }
+    if (!a.changed) { setStatus(I18N.t('update.up-to-date')); showUpdateModal('info', { message: trLang('已是最新版本，无需重启。', 'Already up to date; no restart needed.') }); return; }
+
+    setStatus(I18N.t('update.done'));
+    const ask = trLang(
+      `更新完成（${a.before} → ${a.after}）。\n\n是否立即重启后端使更新生效？`,
+      `Update complete (${a.before} -> ${a.after}).\n\nRestart the backend now to apply the update?`
+    ) + restartWarn();
+    if (confirm(ask)) await restartServer(true);
+  }
+
+  // 设置里的"版本回退": 列出历史版本供选择
+  async function openRollbackDialog() {
+    if (updateBusy) return;
+    updateBusy = true;
+    openBusyModal('update.versions-loading', 'update.versions-loading-hint');
+
+    let v = null, err = null;
+    try {
+      v = await api('update/versions');
+    } catch (e) {
+      err = e;
+    }
+    Modal.close();
+    updateBusy = false;
+
+    if (err || !v || !v.ok) {
+      showUpdateModal('error', { message: err ? err.message : String((v && v.error) || '') });
+      return;
+    }
+
+    const rows = (v.versions || []).map((c) => {
+      const isCur = (c.short === v.current);
+      return `
+        <li style="margin:6px 0;">
+          <button class="btn rollback-item" data-sha="${escapeAttr(c.sha)}" type="button"
+                  style="width:100%;text-align:left;padding:6px 8px;" ${isCur ? 'disabled' : ''}>
+            <code style="color:var(--accent);">${escapeHtml(c.short)}</code>
+            <span style="margin-left:6px;">${escapeHtml(c.subject)}</span>
+            <span style="color:var(--fg-muted);margin-left:6px;font-size:11px;">${escapeHtml(c.date || '')}</span>
+            ${isCur ? `<span style="color:var(--fg-muted);font-size:11px;"> ${escapeHtml(trLang('（当前）', '(current)'))}</span>` : ''}
+          </button>
+        </li>`;
+    }).join('');
+
+    Modal.open({
+      title: trLang('版本回退', 'Rollback'),
+      size: 'medium',
+      bodyHTML: `
+        <div style="color:var(--fg-muted);font-size:12px;margin-bottom:8px;">
+          ${escapeHtml(trLang('选择要回退到的历史版本（会覆盖本地对已跟踪文件的修改）。', 'Choose a previous version (local changes to tracked files will be overwritten).'))}
+        </div>
+        <ul style="margin:0;padding:0;list-style:none;max-height:300px;overflow:auto;">${rows}</ul>
+      `,
+      footerHTML: `<button class="btn" data-action="modal-close">${escapeHtml(trLang('关闭', 'Close'))}</button>`,
+      onMount(bodyEl) {
+        bodyEl.querySelectorAll('.rollback-item').forEach((el) => {
+          el.addEventListener('click', () => rollbackFlow(el.dataset.sha));
+        });
+      },
+    });
+  }
+
+  async function rollbackFlow(sha) {
+    if (updateBusy || !sha) return;
+    if (!confirm(trLang(`确定回退到 ${sha} 吗？`, `Roll back to ${sha}?`) + restartWarn())) return;
+
+    updateBusy = true;
+    setStatus(trLang('正在回退版本…', 'Rolling back…'));
+    openBusyModal('update.rollback-loading', 'update.rollback-loading-hint');
+
+    let a = null, err = null;
+    try {
+      a = await api('update/rollback', { method: 'POST', body: { ref: sha } });
+    } catch (e) {
+      err = e;
+    }
+    Modal.close();
+    updateBusy = false;
+
+    if (err) { showUpdateModal('error', { message: err.message }); return; }
+    if (!a || !a.ok) { showUpdateModal('error', { message: trLang('回退失败: ', 'Rollback failed: ') + String((a && (a.output || a.error)) || '') }); return; }
+    if (!a.changed) { showUpdateModal('info', { message: trLang('已经处于该版本。', 'Already at this version.') }); return; }
+
+    const ask = trLang(
+      `版本回退完成（${a.before} → ${a.after}）。\n\n是否立即重启后端使回退生效？`,
+      `Rollback complete (${a.before} -> ${a.after}).\n\nRestart the backend now to apply it?`
+    ) + restartWarn();
+    if (confirm(ask)) await restartServer(true);
   }
 
   // ---------- VM 列表 ----------

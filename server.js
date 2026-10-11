@@ -113,6 +113,25 @@ function gitRun(args, timeout = 90000) {
   });
 }
 
+// 解析 git log 输出 (格式: %H \x1f %h \x1f %s \x1f %ad)
+const LOG_SEP = '\x1f';
+async function gitLogLines(args) {
+  const r = await gitRun(args, 30000);
+  if (!r.ok) return [];
+  return r.stdout.split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const parts = line.split(LOG_SEP);
+      return {
+        sha: parts[0] || '',
+        short: parts[1] || parts[0] || '',
+        subject: parts[2] || '',
+        date: parts[3] || '',
+      };
+    });
+}
+
 // 当前分支的上游 ref (如 origin/main); 没有上游时回退到常见远端分支
 async function resolveUpstreamRef() {
   const up = await gitRun(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}'], 15000);
@@ -153,6 +172,17 @@ async function checkForUpdate() {
   out.subject = sub.ok ? sub.stdout.trim() : '';
 
   out.available = out.behind > 0;
+
+  // 更新日志: 有更新时列出待拉取的提交; 已是最新时列出当前版本最近的提交
+  const LOG_FMT = ['--pretty=%H%x1f%h%x1f%s%x1f%ad', '--date=short'];
+  if (out.available) {
+    out.logMode = 'new';
+    out.log = await gitLogLines(['log', ...LOG_FMT, '-n', '30', `HEAD..${ref}`]);
+  } else {
+    out.logMode = 'current';
+    out.log = await gitLogLines(['log', ...LOG_FMT, '-n', '10', ref]);
+  }
+
   out.ok = true;
   return out;
 }
@@ -176,6 +206,40 @@ async function applyUpdate() {
   }
   out.output = ((pull.stdout || '') + (pull.stderr || '')).trim().slice(0, 2000);
   if (!pull.ok) { out.error = 'pull-failed'; return out; }
+
+  const after = await gitRun(['rev-parse', 'HEAD'], 15000);
+  out.after = after.ok ? after.stdout.trim().slice(0, 7) : null;
+  out.changed = !!(out.before && out.after && out.before !== out.after);
+  out.ok = true;
+  return out;
+}
+
+// 列出最近的历史版本 (供设置里的"版本回退"选择)
+async function listVersions() {
+  const out = { ok: false, error: null, current: null, versions: [] };
+  if (!fs.existsSync(path.join(PROJECT_DIR, '.git'))) { out.error = 'not-a-repo'; return out; }
+  const head = await gitRun(['rev-parse', 'HEAD'], 15000);
+  out.current = head.ok ? head.stdout.trim().slice(0, 7) : null;
+  out.versions = await gitLogLines(['log', '--pretty=%H%x1f%h%x1f%s%x1f%ad', '--date=short', '-n', '15', 'HEAD']);
+  out.ok = true;
+  return out;
+}
+
+// 回退到指定提交 (git reset --hard); 仅切换版本, 不重启, 由前端决定是否重启
+async function rollbackTo(ref) {
+  const out = { ok: false, changed: false, before: null, after: null, output: '', error: null };
+  if (!fs.existsSync(path.join(PROJECT_DIR, '.git'))) { out.error = 'not-a-repo'; return out; }
+  if (!ref || typeof ref !== 'string' || !/^[0-9a-fA-F]{7,40}$/.test(ref)) { out.error = 'bad-ref'; return out; }
+
+  const verify = await gitRun(['rev-parse', '--verify', `${ref}^{commit}`], 15000);
+  if (!verify.ok) { out.error = 'bad-ref'; return out; }
+
+  const before = await gitRun(['rev-parse', 'HEAD'], 15000);
+  out.before = before.ok ? before.stdout.trim().slice(0, 7) : null;
+
+  const reset = await gitRun(['reset', '--hard', ref], 30000);
+  out.output = ((reset.stdout || '') + (reset.stderr || '')).trim().slice(0, 1000);
+  if (!reset.ok) { out.error = 'reset-failed'; return out; }
 
   const after = await gitRun(['rev-parse', 'HEAD'], 15000);
   out.after = after.ok ? after.stdout.trim().slice(0, 7) : null;
@@ -420,7 +484,7 @@ async function handleApi(req, res, body) {
       }
     }
 
-    // /api/update/check 与 /api/update/apply: 前端"检查更新"按钮
+    // /api/update/* : 前端"检查更新"与"版本回退"
     if (parts[1] === 'update') {
       if (parts[2] === 'check') {
         return json(res, await checkForUpdate());
@@ -428,6 +492,15 @@ async function handleApi(req, res, body) {
       if (parts[2] === 'apply' && method === 'POST') {
         logger.log('[server] 前端请求拉取更新');
         return json(res, await applyUpdate());
+      }
+      if (parts[2] === 'versions') {
+        return json(res, await listVersions());
+      }
+      if (parts[2] === 'rollback' && method === 'POST') {
+        let ref = '';
+        try { ref = (JSON.parse(body || '{}') || {}).ref || ''; } catch (e) { /* 忽略非法 body */ }
+        logger.log('[server] 前端请求回退版本: ' + ref);
+        return json(res, await rollbackTo(ref));
       }
     }
 
