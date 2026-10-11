@@ -118,6 +118,7 @@ html, body {
   border-color: var(--border);
 }
 .menu-btn:active { background: var(--accent); }
+.menu-btn:disabled { opacity: .5; cursor: default; }
 
 .conn-status {
   margin-left: auto;

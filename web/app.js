@@ -292,81 +292,112 @@ const App = (() => {
 
   // 检查更新: 检查 -> 有更新则询问是否更新 -> 更新后询问是否重启后端
   // (不自动重启, 避免正在运行虚拟机时被迫中断)
+  let updateBusy = false;
+
+  // "处理中"弹窗: 让用户知道操作已开始, 同时在此期间按钮被禁用, 防止重复点击
+  function openBusyModal(titleKey, hintKey) {
+    Modal.open({
+      title: I18N.t(titleKey),
+      size: 'small',
+      bodyHTML: `<div style="text-align:center;padding:18px 8px;color:var(--fg-muted);font-size:13px;">${I18N.t(hintKey)}</div>`,
+      footerHTML: '',
+    });
+  }
+
   async function checkUpdate() {
+    if (updateBusy) return;
+    updateBusy = true;
+    const btn = document.getElementById('menu-check-update');
+    if (btn) btn.disabled = true;
+
     const zh = I18N.getLang() === 'zh';
     const tr = (z, e) => (zh ? z : e);
     setStatus(I18N.t('update.checking'));
+    openBusyModal('update.checking', 'update.checking-hint');
 
-    let r;
     try {
-      r = await api('update/check');
-    } catch (e) {
-      setStatus(I18N.t('update.failed'));
-      alert(tr('检查更新失败: ', 'Update check failed: ') + e.message);
-      return;
-    }
+      let r;
+      try {
+        r = await api('update/check');
+      } catch (e) {
+        Modal.close();
+        setStatus(I18N.t('update.failed'));
+        alert(tr('检查更新失败: ', 'Update check failed: ') + e.message);
+        return;
+      }
+      Modal.close();
 
-    if (!r || !r.ok) {
-      setStatus(I18N.t('update.failed'));
-      const map = {
-        'not-a-repo': tr('当前目录不是 git 仓库，无法检查更新。', 'Not a git repository; cannot check for updates.'),
-        'fetch-failed': tr('无法连接远端仓库，请检查网络或 git 配置。', 'Cannot reach the remote repository. Check your network or git settings.'),
-        'no-upstream': tr('未找到远端跟踪分支，无法比较版本。', 'No remote tracking branch found; cannot compare versions.'),
-      };
-      alert(map[r && r.error] || (tr('检查更新失败: ', 'Update check failed: ') + ((r && (r.detail || r.error)) || '')));
-      return;
-    }
+      if (!r || !r.ok) {
+        setStatus(I18N.t('update.failed'));
+        const map = {
+          'not-a-repo': tr('当前目录不是 git 仓库，无法检查更新。', 'Not a git repository; cannot check for updates.'),
+          'fetch-failed': tr('无法连接远端仓库，请检查网络或 git 配置。', 'Cannot reach the remote repository. Check your network or git settings.'),
+          'no-upstream': tr('未找到远端跟踪分支，无法比较版本。', 'No remote tracking branch found; cannot compare versions.'),
+        };
+        alert(map[r && r.error] || (tr('检查更新失败: ', 'Update check failed: ') + ((r && (r.detail || r.error)) || '')));
+        return;
+      }
 
-    if (!r.available) {
-      setStatus(I18N.t('update.up-to-date'));
-      alert(tr(`已是最新版本（${r.current}）。`, `Already up to date (${r.current}).`));
-      return;
-    }
+      if (!r.available) {
+        setStatus(I18N.t('update.up-to-date'));
+        alert(tr(`已是最新版本（${r.current}）。`, `Already up to date (${r.current}).`));
+        return;
+      }
 
-    setStatus(I18N.t('update.available'));
-    const info = tr(
-      `发现新版本：\n\n本地版本：${r.current}\n远端版本：${r.latest}\n落后提交：${r.behind} 个\n最新提交：${r.subject}`,
-      `Update available:\n\nlocal: ${r.current}\nremote: ${r.latest}\nbehind: ${r.behind} commit(s)\nlatest: ${r.subject}`
-    );
-    if (!confirm(info + tr('\n\n是否立即更新？', '\n\nUpdate now?'))) return;
+      setStatus(I18N.t('update.available'));
+      const info = tr(
+        `发现新版本：\n\n本地版本：${r.current}\n远端版本：${r.latest}\n落后提交：${r.behind} 个\n最新提交：${r.subject}`,
+        `Update available:\n\nlocal: ${r.current}\nremote: ${r.latest}\nbehind: ${r.behind} commit(s)\nlatest: ${r.subject}`
+      );
+      if (!confirm(info + tr('\n\n是否立即更新？', '\n\nUpdate now?'))) return;
 
-    setStatus(I18N.t('update.applying'));
-    let a;
-    try {
-      a = await api('update/apply', { method: 'POST' });
-    } catch (e) {
-      setStatus(I18N.t('update.failed'));
-      alert(tr('更新失败: ', 'Update failed: ') + e.message);
-      return;
-    }
-    if (!a || !a.ok) {
-      setStatus(I18N.t('update.failed'));
-      alert(tr('更新失败: ', 'Update failed: ') + ((a && (a.output || a.error)) || ''));
-      return;
-    }
-    if (!a.changed) {
-      setStatus(I18N.t('update.up-to-date'));
-      alert(tr('已是最新版本，无需重启。', 'Already up to date; no restart needed.'));
-      return;
-    }
+      setStatus(I18N.t('update.applying'));
+      openBusyModal('update.applying', 'update.applying-hint');
 
-    setStatus(I18N.t('update.done'));
-    let running = 0;
-    try {
-      running = (state.vms || []).filter((v) => v.state === 'running' || v.state === 'paused' || v.state === 'starting').length;
-    } catch (e) { running = 0; }
-    const warn = running > 0
-      ? tr(`\n\n注意：当前有 ${running} 台虚拟机正在运行，重启会中断它们。`, `\n\nNote: ${running} VM(s) are running; restarting will interrupt them.`)
-      : '';
-    const ask = tr(
-      `更新完成（${a.before} → ${a.after}）。\n\n是否立即重启后端使更新生效？`,
-      `Update complete (${a.before} -> ${a.after}).\n\nRestart the backend now to apply the update?`
-    ) + warn;
+      let a;
+      try {
+        a = await api('update/apply', { method: 'POST' });
+      } catch (e) {
+        Modal.close();
+        setStatus(I18N.t('update.failed'));
+        alert(tr('更新失败: ', 'Update failed: ') + e.message);
+        return;
+      }
+      Modal.close();
 
-    if (confirm(ask)) {
-      await restartServer(true);
-    } else {
+      if (!a || !a.ok) {
+        setStatus(I18N.t('update.failed'));
+        alert(tr('更新失败: ', 'Update failed: ') + ((a && (a.output || a.error)) || ''));
+        return;
+      }
+      if (!a.changed) {
+        setStatus(I18N.t('update.up-to-date'));
+        alert(tr('已是最新版本，无需重启。', 'Already up to date; no restart needed.'));
+        return;
+      }
+
       setStatus(I18N.t('update.done'));
+      let running = 0;
+      try {
+        running = (state.vms || []).filter((v) => v.state === 'running' || v.state === 'paused' || v.state === 'starting').length;
+      } catch (e) { running = 0; }
+      const warn = running > 0
+        ? tr(`\n\n注意：当前有 ${running} 台虚拟机正在运行，重启会中断它们。`, `\n\nNote: ${running} VM(s) are running; restarting will interrupt them.`)
+        : '';
+      const ask = tr(
+        `更新完成（${a.before} → ${a.after}）。\n\n是否立即重启后端使更新生效？`,
+        `Update complete (${a.before} -> ${a.after}).\n\nRestart the backend now to apply the update?`
+      ) + warn;
+
+      if (confirm(ask)) {
+        await restartServer(true);
+      } else {
+        setStatus(I18N.t('update.done'));
+      }
+    } finally {
+      Modal.close();
+      updateBusy = false;
+      if (btn) btn.disabled = false;
     }
   }
 
