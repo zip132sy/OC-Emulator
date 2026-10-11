@@ -1,0 +1,788 @@
+// ============================================================
+// app.js - 主应用: VM 列表 / WebSocket / 标签页管理
+// ============================================================
+
+const App = (() => {
+  const state = {
+    vms: [],            // [{ name, state, config }]
+    tabs: [],           // [{ id, vm, type, title, dirty }]
+    activeTabId: null,
+    ws: null,
+    wsReconnectTimer: null,
+    wsSubscribedVm: null,
+    tabPanes: new Map(), // tabId -> HTMLElement (缓存 pane 避免切换时重建)
+  };
+
+  // ---------- 工具 ----------
+  const $  = (sel, root = document) => root.querySelector(sel);
+  const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+
+  function setStatus(text, kind = '') {
+    const el = $('#status-text');
+    if (el) el.textContent = text;
+  }
+
+  function setStatusRight(text) {
+    const el = $('#status-right');
+    if (el) el.textContent = text;
+  }
+
+  function setConnStatus(text, kind = '') {
+    const el = $('#conn-status');
+    el.textContent = I18N.t('ws.' + text);
+    el.className = 'conn-status ' + kind;
+  }
+
+  // ---------- HTTP 请求 ----------
+  async function api(path, opts = {}) {
+    const res = await fetch('/api/' + path, {
+      method: opts.method || 'GET',
+      headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) },
+      body: opts.body ? JSON.stringify(opts.body) : undefined,
+    });
+    const txt = await res.text();
+    if (!txt) return null;
+    try { return JSON.parse(txt); }
+    catch { return txt; }
+  }
+
+  // ---------- Lua 检测 ----------
+  async function checkLua() {
+    const badge = $('#lua-badge');
+    badge.textContent = 'Lua: 检查中…';
+    badge.className = 'brand-sub';
+    try {
+      const r = await api('lua/check', { method: 'POST' });
+      if (r && r.ok) {
+        badge.textContent = 'Lua: ' + r.version + (r.cached ? ' (缓存)' : '');
+        badge.className = 'brand-sub ok';
+      } else {
+        badge.textContent = 'Lua: 失败';
+        badge.className = 'brand-sub err';
+        const errs = (r && r.errors) ? r.errors.join('; ') : '未知错误';
+        setStatus('Lua 检测失败: ' + errs, 'err');
+      }
+    } catch (e) {
+      badge.textContent = 'Lua: 错误';
+      badge.className = 'brand-sub err';
+      setStatus('Lua 检测请求失败: ' + e.message, 'err');
+    }
+  }
+
+  // ---------- 设置对话框 ----------
+  async function openSettings() {
+    try {
+      const cur = await api('settings') || {};
+      const curLang = I18N.getLang();
+      Modal.open({
+        title: I18N.t('settings.title'),
+        size: 'medium',
+        bodyHTML: `
+          <div class="form-row">
+            <label>${I18N.t('settings.lua-path')}</label>
+            <div style="display:flex;gap:6px;">
+              <input type="text" id="settings-luaexe" value="${escapeAttr(cur.luaExe || '')}" style="flex:1;" placeholder="${escapeAttr(I18N.t('settings.lua-path'))}">
+              <button class="btn" id="settings-browse" type="button">${I18N.t('settings.browse')}</button>
+            </div>
+          </div>
+          <div class="form-row">
+            <label></label>
+            <span class="hint">${I18N.t('settings.lua-hint')}</span>
+          </div>
+          <div class="form-row">
+            <label>${I18N.t('settings.language')}</label>
+            <select id="settings-lang" style="flex:1;padding:6px 8px;background:var(--bg-input);color:var(--fg-primary);border:1px solid var(--border);border-radius:3px;">
+              <option value="zh" ${curLang === 'zh' ? 'selected' : ''}>简体中文</option>
+              <option value="en" ${curLang === 'en' ? 'selected' : ''}>English</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label>${I18N.t('settings.log-level')}</label>
+            <select id="settings-loglevel" style="flex:1;padding:6px 8px;background:var(--bg-input);color:var(--fg-primary);border:1px solid var(--border);border-radius:3px;">
+              <option value="full" ${cur.logLevel === 'full' ? 'selected' : ''}>${I18N.t('settings.log-level.full')}</option>
+              <option value="error" ${cur.logLevel === 'error' ? 'selected' : ''}>${I18N.t('settings.log-level.error')}</option>
+              <option value="off" ${cur.logLevel === 'off' ? 'selected' : ''}>${I18N.t('settings.log-level.off')}</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label></label>
+            <span class="hint">${I18N.t('settings.log-level-hint')}</span>
+          </div>
+          <div class="form-row">
+            <label for="settings-showconsole">${I18N.t('settings.show-console')}</label>
+            <label class="checkbox-line">
+              <input type="checkbox" id="settings-showconsole" ${cur.showConsole !== false ? 'checked' : ''}>
+              <span id="settings-console-state">${cur.showConsole !== false ? I18N.t('settings.console-on') : I18N.t('settings.console-off')}</span>
+            </label>
+          </div>
+          <div class="form-row">
+            <label></label>
+            <span class="hint">${I18N.t('settings.show-console-hint')}</span>
+          </div>
+          <div class="form-row">
+            <label for="settings-wheelkeys">${I18N.t('settings.wheel-keys')}</label>
+            <label class="checkbox-line">
+              <input type="checkbox" id="settings-wheelkeys" ${(window.Console && Console.isWheelKeyCompat && Console.isWheelKeyCompat()) ? 'checked' : ''}>
+              <span id="settings-wheelkeys-state">${(window.Console && Console.isWheelKeyCompat && Console.isWheelKeyCompat()) ? I18N.t('settings.wheel-keys-on') : I18N.t('settings.wheel-keys-off')}</span>
+            </label>
+          </div>
+          <div class="form-row">
+            <label></label>
+            <span class="hint">${I18N.t('settings.wheel-keys-hint')}</span>
+          </div>
+          <div class="form-row">
+            <label for="settings-autoupdate">${I18N.t('settings.auto-update')}</label>
+            <label class="checkbox-line">
+              <input type="checkbox" id="settings-autoupdate" ${cur.autoUpdate !== false ? 'checked' : ''}>
+              <span id="settings-autoupdate-state">${cur.autoUpdate !== false ? I18N.t('settings.auto-update-on') : I18N.t('settings.auto-update-off')}</span>
+            </label>
+          </div>
+          <div class="form-row">
+            <label></label>
+            <span class="hint">${I18N.t('settings.auto-update-hint')}</span>
+          </div>
+        `,
+        footerHTML: `
+          <button class="btn" data-action="modal-close">${I18N.t('settings.cancel')}</button>
+          <button class="btn btn-primary" id="settings-save">${I18N.t('settings.save')}</button>
+        `,
+        onMount(body) {
+          const input = body.querySelector('#settings-luaexe');
+          const langSelect = body.querySelector('#settings-lang');
+          const logLevelSelect = body.querySelector('#settings-loglevel');
+          // 命令行窗口显示开关: 切换即时生效 (立即隐藏 / 显示服务器控制台窗口)
+          const showConsoleBox = body.querySelector('#settings-showconsole');
+          const consoleStateEl = body.querySelector('#settings-console-state');
+          if (showConsoleBox) {
+            showConsoleBox.addEventListener('change', async () => {
+              const want = showConsoleBox.checked;
+              try {
+                const r = await api('settings', { method: 'PUT', body: { showConsole: want } });
+                const res = r && r.consoleResult;
+                // 平台相关的失败原因给更具体的中文提示, 其余回落到通用文案
+                const reasonKey = (res && res.reason) ? ({
+                  'wayland': 'settings.console-reason-wayland',
+                  'missing-xdotool': 'settings.console-reason-xdotool',
+                  'cannot-detect-terminal': 'settings.console-reason-unknown-terminal',
+                  'cannot-detect-window': 'settings.console-reason-unknown-terminal',
+                }[res.reason] || null) : null;
+                if (res && (res.supported === false || res.ok === false)) {
+                  consoleStateEl.textContent = I18N.t(reasonKey || 'settings.console-unsupported');
+                } else {
+                  consoleStateEl.textContent = want
+                    ? I18N.t('settings.console-on')
+                    : I18N.t('settings.console-off');
+                }
+              } catch (e) {
+                consoleStateEl.textContent = I18N.t('settings.save-failed');
+              }
+            });
+          }
+          // 滚轮兼容模式 (前端本地开关, 即时生效, 无需保存)
+          const wheelKeysBox = body.querySelector('#settings-wheelkeys');
+          const wheelKeysState = body.querySelector('#settings-wheelkeys-state');
+          if (wheelKeysBox) {
+            wheelKeysBox.addEventListener('change', () => {
+              const on = wheelKeysBox.checked;
+              if (window.Console && Console.setWheelKeyCompat) Console.setWheelKeyCompat(on);
+              if (wheelKeysState) {
+                wheelKeysState.textContent = on ? I18N.t('settings.wheel-keys-on') : I18N.t('settings.wheel-keys-off');
+              }
+            });
+          }
+          // 自动更新开关 (写入 settings.json, 下次启动脚本启动时生效)
+          const autoUpdateBox = body.querySelector('#settings-autoupdate');
+          const autoUpdateState = body.querySelector('#settings-autoupdate-state');
+          if (autoUpdateBox) {
+            autoUpdateBox.addEventListener('change', async () => {
+              const on = autoUpdateBox.checked;
+              if (autoUpdateState) {
+                autoUpdateState.textContent = on ? I18N.t('settings.auto-update-on') : I18N.t('settings.auto-update-off');
+              }
+              try {
+                await api('settings', { method: 'PUT', body: { autoUpdate: on } });
+              } catch (e) {
+                if (autoUpdateState) autoUpdateState.textContent = I18N.t('settings.save-failed');
+              }
+            });
+          }
+          // 浏览按钮 (隐藏的 file input)
+          const browseBtn = body.querySelector('#settings-browse');
+          const fileInput = document.createElement('input');
+          fileInput.type = 'file';
+          // 不加 accept 过滤: Lua 可执行文件在 Windows 是 .exe, 在 Linux/macOS 没有扩展名
+          fileInput.style.display = 'none';
+          body.appendChild(fileInput);
+          browseBtn.addEventListener('click', () => fileInput.click());
+          fileInput.addEventListener('change', () => {
+            if (fileInput.files.length > 0) {
+              input.value = fileInput.files[0].name;
+              alert(I18N.getLang() === 'zh'
+                ? '浏览器安全限制无法获取完整路径, 请手动输入 Lua 可执行文件的完整路径。'
+                : 'Browser security prevents getting the full path. Please enter the full path manually.');
+              input.focus();
+              input.select();
+            }
+          });
+          // 保存
+          document.querySelector('#settings-save').addEventListener('click', async () => {
+            const newPath = input.value.trim();
+            if (!newPath) { alert(I18N.t('settings.lua-empty')); return; }
+            // 保存语言
+            const newLang = langSelect.value;
+            I18N.setLang(newLang);
+            // 日志级别
+            const newLogLevel = logLevelSelect.value;
+            try {
+              const r = await api('settings', { method: 'PUT', body: { luaExe: newPath, logLevel: newLogLevel } });
+              if (r && r.ok) {
+                Modal.close();
+                setStatus(I18N.t('settings.saved'));
+                checkLua();
+                applyLanguage();
+              } else {
+                alert(I18N.t('settings.save-failed'));
+              }
+            } catch (e) {
+              alert(I18N.t('settings.save-failed') + ': ' + e.message);
+            }
+          });
+        },
+      });
+    } catch (e) {
+      alert((I18N.getLang() === 'zh' ? '加载设置失败: ' : 'Failed to load settings: ') + e.message);
+    }
+  }
+
+  function escapeAttr(s) {
+    return String(s).replace(/"/g, '&quot;');
+  }
+
+  // ---------- 手机端侧边栏抽屉 ----------
+  // 抽屉开关只在窄屏出现; 宽屏调用也没有副作用 (class 不会被任何样式命中)。
+  function toggleNav(force) {
+    const open = (force === undefined)
+      ? !document.body.classList.contains('nav-open')
+      : !!force;
+    document.body.classList.toggle('nav-open', open);
+  }
+
+  // ---------- 服务级控制 ----------
+  // 重启服务: 服务器先停掉所有 VM, 再以退出码 5 退出, 由 run.bat / run.sh 立即拉起。
+  async function restartServer() {
+    if (!confirm(I18N.t('confirm.restart-server'))) return;
+    try {
+      await api('server/restart', { method: 'POST' });
+    } catch (e) {
+      // 服务器可能已经开始退出, 请求被中断属于正常现象
+    }
+    setStatus(I18N.t('server.restarting'));
+  }
+
+  // 停止服务: 服务器停掉所有 VM 后以退出码 4 退出, 守护脚本不再拉起。
+  async function stopServer() {
+    if (!confirm(I18N.t('confirm.stop-server'))) return;
+    try {
+      await api('server/stop', { method: 'POST' });
+    } catch (e) {
+      // 同上
+    }
+    setStatus(I18N.t('server.stopped'));
+  }
+
+  // ---------- VM 列表 ----------
+  // manual = true 时表示用户点了"刷新"按钮: 除了拉列表, 还会强制重新同步
+  // 当前打开标签页的虚拟机状态与画面 (用于 WebSocket 掉线/丢消息后的手动纠正)。
+  async function refreshVMs(manual) {
+    try {
+      const vms = await api('vms');
+      state.vms = vms || [];
+      renderVMList();
+      // 把服务器状态同步到各 VM 视图: 按钮可用性 + "已停止"的画面表现。
+      // 这是 5 秒一次的兜底轮询, 保证某条 WebSocket 状态消息漏掉时,
+      // 控制菜单也能自动纠正, 而不需要刷新整个页面。
+      if (window.Console && Console.applyServerState) {
+        for (const vm of state.vms) {
+          Console.applyServerState(vm.name, vm.state, vm.exitCode, vm.cleanStop);
+        }
+      }
+      // 手动刷新: 重新订阅 WebSocket 并重新拉取当前 VM 的权威状态与画面
+      if (manual) {
+        const tab = state.tabs.find(t => t.id === state.activeTabId);
+        if (tab && tab.type === 'vm') {
+          wsSubscribe(tab.vm);
+          if (window.Console && Console.reloadView) Console.reloadView(tab.vm);
+        }
+      }
+      setStatus(I18N.t('status.vm-loaded').replace('{count}', state.vms.length));
+    } catch (e) {
+      setStatus(I18N.t('status.vm-load-failed') + ': ' + e.message, 'err');
+    }
+  }
+
+  function renderVMList() {
+    const ul = $('#vm-list');
+    ul.innerHTML = '';
+    $('#vm-count').textContent = state.vms.length;
+
+    // 重建列表会丢掉选中高亮, 这里根据当前激活标签页重新应用,
+    // 否则每 5 秒自动刷新一次就会把"正在查看的虚拟机"的高亮抹掉。
+    const activeTab = state.tabs.find(t => t.id === state.activeTabId);
+    const activeVm = (activeTab && activeTab.type === 'vm') ? activeTab.vm : null;
+
+    if (state.vms.length === 0) {
+      const li = document.createElement('li');
+      li.className = 'vm-empty';
+      li.innerHTML = I18N.t('sidebar.no-vm').replace(/\n/g, '<br>');
+      ul.appendChild(li);
+      return;
+    }
+
+    for (const vm of state.vms) {
+      const li = document.createElement('li');
+      li.className = 'vm-item' + (vm.name === activeVm ? ' active' : '');
+      li.dataset.vmName = vm.name;
+      li.innerHTML = `
+        <span class="vm-icon ${vm.state}"></span>
+        <div class="vm-info">
+          <div class="vm-name"></div>
+          <div class="vm-meta"></div>
+        </div>
+      `;
+      li.querySelector('.vm-name').textContent = vm.name;
+      const metaParts = [];
+      if (vm.config) {
+        if (vm.config.apu) {
+          const tierLabel = vm.config.apu.tier === 'creative'
+            ? I18N.t('vm.meta.creative')
+            : 'T' + vm.config.apu.tier;
+          metaParts.push(I18N.t('vm.meta.apu') + ' ' + tierLabel);
+        }
+        if (Array.isArray(vm.config.memory)) metaParts.push(I18N.t('vm.meta.ram') + ' T' + vm.config.memory.join('/'));
+      }
+      const stateKey = 'vm.state.' + (vm.state || 'unknown');
+      metaParts.push(I18N.t(stateKey));
+      li.querySelector('.vm-meta').textContent = metaParts.join(' · ');
+      li.addEventListener('click', () => openVMTab(vm.name));
+      li.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        showVMContextMenu(vm.name, e.clientX, e.clientY);
+      });
+      ul.appendChild(li);
+    }
+  }
+
+  // ---------- 标签页管理 ----------
+  function openVMTab(vmName) {
+    const id = 'vm-' + vmName;
+    let tab = state.tabs.find(t => t.id === id);
+    if (!tab) {
+      tab = { id, vm: vmName, type: 'vm', title: vmName };
+      state.tabs.push(tab);
+    }
+    activateTab(id);
+    // 高亮 VM 列表项
+    $$('.vm-item').forEach(li => {
+      li.classList.toggle('active', li.dataset.vmName === vmName);
+    });
+  }
+
+  function openTab(tab) {
+    // 不重复创建相同 id 的 tab, 除非调用方明确要求
+    const existing = state.tabs.find(t => t.id === tab.id);
+    if (existing) {
+      Object.assign(existing, tab);
+      activateTab(existing.id);
+      return existing;
+    }
+    state.tabs.push(tab);
+    activateTab(tab.id);
+    return tab;
+  }
+
+  function closeTab(id) {
+    const idx = state.tabs.findIndex(t => t.id === id);
+    if (idx < 0) return;
+    const tab = state.tabs[idx];
+    if (tab.onClose) tab.onClose();
+    state.tabs.splice(idx, 1);
+    // 清理缓存的 pane
+    const cachedPane = state.tabPanes.get(id);
+    if (cachedPane) {
+      cachedPane.remove();
+      state.tabPanes.delete(id);
+    }
+    if (state.activeTabId === id) {
+      const next = state.tabs[idx] || state.tabs[idx - 1];
+      if (next) activateTab(next.id);
+      else { state.activeTabId = null; renderTabs(); renderTabContent(); }
+    } else {
+      renderTabs();
+    }
+  }
+
+  function activateTab(id) {
+    state.activeTabId = id;
+    renderTabs();
+    renderTabContent();
+    // 处理 WS 订阅切换
+    const tab = state.tabs.find(t => t.id === id);
+    const targetVm = (tab && tab.type === 'vm') ? tab.vm : null;
+    if (targetVm !== state.wsSubscribedVm) {
+      wsSubscribe(targetVm);
+    }
+    // 切换后触发一次 resize, 确保 canvas 尺寸正确 (从隐藏→显示时)
+    if (tab && tab.type === 'vm') {
+      requestAnimationFrame(() => {
+        window.dispatchEvent(new Event('resize'));
+      });
+    }
+  }
+
+  function renderTabs() {
+    const bar = $('#tabs-bar');
+    bar.innerHTML = '';
+    for (const tab of state.tabs) {
+      const el = document.createElement('div');
+      el.className = 'tab' + (tab.id === state.activeTabId ? ' active' : '');
+      el.dataset.tabId = tab.id;
+      el.innerHTML = `<span class="tab-title"></span><span class="tab-close" title="关闭">×</span>`;
+      el.querySelector('.tab-title').textContent = tab.title;
+      el.addEventListener('click', (e) => {
+        if (e.target.classList.contains('tab-close')) {
+          e.stopPropagation();
+          closeTab(tab.id);
+        } else {
+          activateTab(tab.id);
+        }
+      });
+      bar.appendChild(el);
+    }
+  }
+
+  function renderTabContent() {
+    const container = $('#tab-content');
+    // 隐藏所有已缓存的 pane
+    state.tabPanes.forEach(pane => { pane.style.display = 'none'; });
+
+    if (!state.activeTabId) {
+      // 显示欢迎页
+      let welcome = container.querySelector('.welcome');
+      if (!welcome) {
+        welcome = document.createElement('div');
+        welcome.className = 'welcome';
+        welcome.innerHTML = `
+          <div class="welcome-logo">⬣</div>
+          <h1>OC Emulator</h1>
+          <p>OpenComputers 模拟器 · Web 控制面板 v2.0</p>
+          <p class="hint">从左侧选择一个虚拟机,或点击「新建虚拟机」开始。</p>`;
+        container.appendChild(welcome);
+      }
+      welcome.style.display = '';
+      return;
+    }
+    // 隐藏欢迎页
+    const welcome = container.querySelector('.welcome');
+    if (welcome) welcome.style.display = 'none';
+
+    const tab = state.tabs.find(t => t.id === state.activeTabId);
+    if (!tab) return;
+
+    // 检查是否已有缓存的 pane
+    let pane = state.tabPanes.get(tab.id);
+    if (!pane) {
+      pane = document.createElement('div');
+      pane.className = 'tab-pane';
+      container.appendChild(pane);
+      state.tabPanes.set(tab.id, pane);
+
+      if (tab.type === 'vm') {
+        Console.renderVMView(pane, tab.vm);
+      } else if (tab.type === 'disk-editor') {
+        DiskEditor.render(pane, tab.diskPath, tab.vm);
+      }
+    }
+    pane.style.display = '';
+  }
+
+  // ---------- WebSocket ----------
+  function wsConnect() {
+    if (state.ws && state.ws.readyState <= 1) return;
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    const url = `${proto}://${location.host}/ws`;
+    setConnStatus('connecting', '');
+    try {
+      state.ws = new WebSocket(url);
+    } catch (e) {
+      setConnStatus('error', 'err');
+      scheduleReconnect();
+      return;
+    }
+    state.ws.onopen = () => {
+      setConnStatus('connected', 'ok');
+      // 重新订阅
+      if (state.wsSubscribedVm) {
+        wsSend({ type: 'c2s.subscribe', vm: state.wsSubscribedVm });
+      }
+    };
+    state.ws.onclose = () => {
+      setConnStatus('disconnected', 'err');
+      // 与服务器断开 (服务端关机 / 重启 / 网络中断): 正在运行的 VM 画面转为灰色
+      try { if (window.Console && Console.onConnectionLost) Console.onConnectionLost(); } catch (e) {}
+      scheduleReconnect();
+    };
+    state.ws.onerror = () => {
+      setConnStatus('error', 'err');
+    };
+    state.ws.onmessage = (ev) => {
+      try {
+        const msg = JSON.parse(ev.data);
+        onServerMessage(msg);
+      } catch (e) {
+        // 非 JSON, 忽略
+      }
+    };
+  }
+
+  function scheduleReconnect() {
+    if (state.wsReconnectTimer) return;
+    state.wsReconnectTimer = setTimeout(() => {
+      state.wsReconnectTimer = null;
+      wsConnect();
+    }, 2000);
+  }
+
+  // 返回 true = 已送出; false = 连接不可用 (调用方应据此提示用户, 而不是静默丢弃)
+  function wsSend(msg) {
+    if (state.ws && state.ws.readyState === 1) {
+      state.ws.send(JSON.stringify(msg));
+      return true;
+    }
+    return false;
+  }
+
+  function wsSubscribe(vmName) {
+    if (state.wsSubscribedVm && state.wsSubscribedVm !== vmName) {
+      wsSend({ type: 'c2s.unsubscribe' });
+    }
+    state.wsSubscribedVm = vmName;
+    if (vmName) {
+      wsSend({ type: 'c2s.subscribe', vm: vmName });
+    }
+  }
+
+  // ---------- 处理服务器消息 ----------
+  function onServerMessage(msg) {
+    // 消息类型 s2c.* 由 Console / DiskEditor 等处理
+    if (!msg.type) return;
+
+    // 路由到对应 VM 的 console 控制器
+    if (msg.vm) {
+      Console.onServerMessage(msg);
+    }
+
+    if (msg.type === 's2c.state') {
+      // VM 状态变化, 刷新侧边栏对应项
+      const vm = state.vms.find(v => v.name === msg.vm);
+      if (vm) {
+        vm.state = msg.state;
+        renderVMList();
+      }
+    } else if (msg.type === 's2c.screen') {
+      // 屏幕更新, Console.onServerMessage 已处理
+    } else if (msg.type === 's2c.log') {
+      // 日志, Console 已处理
+    }
+  }
+
+  // ---------- 上下文菜单 ----------
+  function showVMContextMenu(vmName, x, y) {
+    // 简易菜单: 启动/停止/编辑/导出/导入/删除
+    const items = [
+      { label: '打开', action: () => openVMTab(vmName) },
+      { label: '启动', action: () => api(`vms/${encodeURIComponent(vmName)}/start`, { method: 'POST' }).then(refreshVMs) },
+      { label: '停止', action: () => api(`vms/${encodeURIComponent(vmName)}/stop`, { method: 'POST' }).then(refreshVMs) },
+      { label: '编辑磁盘…', action: () => {
+        // 找到该 VM 的 disk1
+        api(`vms/${encodeURIComponent(vmName)}`).then(cfg => {
+          const hw = cfg && cfg.hardware || {};
+          const diskFile = hw.disk1;
+          if (diskFile) {
+            openTab({
+              id: 'disk-' + vmName + '-disk1',
+              type: 'disk-editor',
+              title: `${vmName} / 磁盘1`,
+              vm: vmName,
+              diskPath: `vms/${vmName}/${diskFile}`,
+            });
+          }
+        });
+      } },
+      { label: '导出虚拟机…', action: () => ExportWizard.open(vmName) },
+      { label: '导入虚拟机…', action: () => ExportWizard.openImport() },
+      { label: '删除', action: async () => {
+        if (confirm(`确定删除虚拟机 "${vmName}" ?`)) {
+          await api(`vms/${encodeURIComponent(vmName)}`, { method: 'DELETE' });
+          // 关闭相关 tab
+          const related = state.tabs.filter(t => t.vm === vmName);
+          for (const t of related) closeTab(t.id);
+          refreshVMs();
+        }
+      } },
+    ];
+    // 简易实现: 用 confirm/prompt 替代
+    const choice = items.map((it, i) => `${i}: ${it.label}`).join('\n');
+    const idx = prompt(`选择操作:\n${choice}`, '0');
+    if (idx !== null) {
+      const i = parseInt(idx, 10);
+      if (items[i]) items[i].action();
+    }
+  }
+
+  // ---------- 菜单事件 ----------
+  function bindMenu() {
+    $$('.menu-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const action = btn.dataset.action;
+        if (action === 'new-vm') Wizard.open(refreshVMs);
+        else if (action === 'refresh') refreshVMs(true);
+        else if (action === 'lua-recheck') checkLua();
+        else if (action === 'import-vm') ExportWizard.openImport();
+        else if (action === 'settings') openSettings();
+        else if (action === 'restart-server') restartServer();
+        else if (action === 'stop-server') stopServer();
+        else if (action === 'toggle-nav') toggleNav();
+      });
+    });
+
+    // 手机端抽屉遮罩: 点击关闭抽屉
+    $$('.nav-scrim').forEach(el => {
+      el.addEventListener('click', () => toggleNav(false));
+    });
+    // 手机上选中某个 VM 后自动收起抽屉
+    const vmListEl = document.getElementById('vm-list');
+    if (vmListEl) vmListEl.addEventListener('click', () => toggleNav(false));
+
+    // 模态关闭
+    $$('.modal-close, .modal-backdrop').forEach(el => {
+      el.addEventListener('click', () => Modal.close());
+    });
+  }
+
+  // ---------- 启动 ----------
+  function init() {
+    // 首次使用: 弹出语言选择
+    if (I18N.isFirstTime()) {
+      showLanguageSelector(true);
+    } else {
+      applyLanguage();
+    }
+    bindMenu();
+    checkLua();
+    refreshVMs();
+    wsConnect();
+    // 周期刷新 VM 状态 (轻量兜底轮询; 手动刷新走 refreshVMs(true))
+    setInterval(() => refreshVMs(false), 5000);
+  }
+
+  // ---------- 语言 ----------
+  function showLanguageSelector(isFirstTime = false) {
+    Modal.open({
+      title: I18N.t('lang.select.title'),
+      size: 'small',
+      bodyHTML: `
+        <div style="text-align:center;padding:12px 0;">
+          <div style="color:var(--fg-muted);margin-bottom:16px;font-size:13px;">
+            ${I18N.t('lang.select.hint')}
+          </div>
+          <div style="display:flex;gap:16px;justify-content:center;">
+            <button class="btn" id="lang-zh" style="min-width:120px;padding:12px;font-size:14px;">
+              简体中文
+            </button>
+            <button class="btn" id="lang-en" style="min-width:120px;padding:12px;font-size:14px;">
+              English
+            </button>
+          </div>
+        </div>
+      `,
+      footerHTML: '',
+      onMount(body) {
+        body.querySelector('#lang-zh').addEventListener('click', () => {
+          I18N.setLang('zh');
+          Modal.close();
+          applyLanguage();
+        });
+        body.querySelector('#lang-en').addEventListener('click', () => {
+          I18N.setLang('en');
+          Modal.close();
+          applyLanguage();
+        });
+      },
+    });
+  }
+
+  function applyLanguage() {
+    const t = I18N.t;
+    // 顶部菜单
+    const set = (id, key) => { const el = document.getElementById(id); if (el) el.textContent = t(key); };
+    set('menu-new-vm', 'menu.new-vm');
+    set('menu-import-vm', 'menu.import-vm');
+    set('menu-refresh', 'menu.refresh');
+    set('menu-lua-recheck', 'menu.lua-recheck');
+    set('menu-settings', 'menu.settings');
+    set('menu-restart-server', 'menu.restart-server');
+    set('menu-stop-server', 'menu.stop-server');
+    // 侧边栏
+    set('vm-list-title', 'sidebar.vm-library');
+    // 欢迎页
+    set('welcome-title', 'welcome.title');
+    set('welcome-subtitle', 'welcome.subtitle');
+    set('welcome-hint', 'welcome.hint');
+    // 刷新 VM 列表文字
+    refreshVMs();
+  }
+
+  return {
+    state, $, $$, api,
+    init, refreshVMs, openVMTab, openTab, closeTab, activateTab,
+    wsSend, wsSubscribe, setStatus, setStatusRight,
+    onServerMessage, showLanguageSelector, applyLanguage,
+  };
+})();
+
+// ---------- 模态对话框 ----------
+const Modal = (() => {
+  function open({ title, bodyHTML, footerHTML, onMount, onClose, size }) {
+    const container = document.getElementById('modal-container');
+    document.getElementById('modal-title').textContent = title || '';
+    const body = document.getElementById('modal-body');
+    const footer = document.getElementById('modal-footer');
+    body.innerHTML = bodyHTML || '';
+    footer.innerHTML = footerHTML || '';
+    if (size === 'large') {
+      container.querySelector('.modal-dialog').style.minWidth = '720px';
+      container.querySelector('.modal-dialog').style.maxWidth = '900px';
+    } else {
+      container.querySelector('.modal-dialog').style.minWidth = '480px';
+      container.querySelector('.modal-dialog').style.maxWidth = '800px';
+    }
+    container.classList.remove('hidden');
+    container.setAttribute('aria-hidden', 'false');
+    if (onMount) onMount(body, footer);
+    container._onClose = onClose;
+  }
+  function close() {
+    const container = document.getElementById('modal-container');
+    container.classList.add('hidden');
+    container.setAttribute('aria-hidden', 'true');
+    if (container._onClose) container._onClose();
+    container._onClose = null;
+  }
+  return { open, close };
+})();
+
+window.App = App;
+window.Modal = Modal;
+
+// 启动
+document.addEventListener('DOMContentLoaded', () => App.init());

@@ -1,0 +1,26 @@
+# 统一换行符, 避免跨平台检出时脚本被破坏
+* text=auto
+
+# 脚本: sh 必须 LF, bat 必须 CRLF
+*.sh   text eol=lf
+*.bat  text eol=crlf
+
+# 源码 / 文本: 一律 LF
+*.js   text eol=lf
+*.lua  text eol=lf
+*.json text eol=lf
+*.md   text eol=lf
+*.css  text eol=lf
+*.html text eol=lf
+*.hex  text eol=lf
+
+# 二进制资源: 不做任何转换
+*.ocd  binary
+*.ocf  binary
+*.ttf  binary
+*.otf  binary
+*.png  binary
+*.jpg  binary
+*.gif  binary
+*.ico  binary
+*.zip  binary
