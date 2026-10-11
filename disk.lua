@@ -152,9 +152,13 @@ local XOR_KEY_V2 = { 0x4F, 0x43, 0x45, 0x4D, 0x75, 0x6C, 0x61, 0x74,
                      0x6F, 0x72, 0x21, 0x39, 0x41, 0x7E, 0xC3, 0x5B }
 
 -- 从磁盘 label 生成 16 字节盐值 (每张盘不同)
+-- 注意: 标签为空时也必须能算出确定性的盐值。空标签下 labelBytes 为空表,
+-- (i - 1) % #labelBytes 就是 % 0, Lua 会直接抛 "attempt to perform 'n%0'",
+-- 表现为"改标签/保存磁盘时报 WARNING: save ... failed"。
 local function deriveLabelSalt(label)
   local salt = {}
   local labelBytes = { string.byte(label, 1, #label) }
+  if #labelBytes == 0 then labelBytes = { 0 } end
   for i = 1, 16 do
     local lb = labelBytes[(i - 1) % #labelBytes + 1] or 0
     -- 简单 hash: 位置相关 + label 字节

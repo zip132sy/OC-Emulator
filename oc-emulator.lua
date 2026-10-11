@@ -2173,7 +2173,7 @@ fsAddr = genAddr()
 local filesystem = { _label = vdisk.label, _address = fsAddr }
 filesystem.getLabel = function() local l = vdisk.label or "Untitled"; dlog("fs.getLabel ->", l); return l end
 filesystem.setLabel = function(label)
-  vdisk.label = label:sub(1, 16)
+  vdisk.label = tostring(label or ""):sub(1, 16)
   -- 立即落盘, 避免 VM 被强制结束时丢掉这次改名
   pcall(saveAllDisks)
   return vdisk.label
@@ -2996,7 +2996,7 @@ local function makeFsProxy(filesTable, label, capacity, readOnly, onLabelSet, on
   fs.getLabel = function() return label end
   fs.setLabel = function(l)
     if readOnly then return nil, "filesystem is read-only" end
-    label = l
+    label = tostring(l or "")
     if onLabelSet then pcall(onLabelSet, label) end
     -- 立即落盘: 这样即使 VM 随后被强制结束, 这次改名也不会丢
     pcall(saveAllDisks)
