@@ -1653,8 +1653,28 @@ function computer.pullSignal(timeout)
 end
 function computer.beep(freq, dur) end
 function computer.getProgramLocations() return {} end
+
+-- 网卡单包最大字节数 (真实 OC 的 modem.maxPacketSize() / DeviceInfo.capacity 默认值)。
+-- MineOS / PixelOS 的网络层 (Libraries/Network.lua) 用它给大消息分片:
+--   旧版 OC 走 modem.maxPacketSize(), 新版走 computer.getDeviceInfo()[addr].capacity。
+-- 两者都缺失时分片长度会算成 nil, 于是 FTP 目录列表之类的大响应发不回去,
+-- 客户端最终报 "Text.lua:98: bad argument #1 (string expected, got nil)"。
+local MODEM_MAX_PACKET_SIZE = 8192
+
 function computer.getDeviceInfo()
-  return { [computer._address] = { description = "OC Emulator", product = "Emulator" } }
+  local result = { [computer._address] = { description = "OC Emulator", product = "Emulator" } }
+  -- 真实 OC 还会为每个组件返回一条信息 (含 modem 的 capacity)
+  for addr, reg in pairs(componentRegistry or {}) do
+    result[addr] = {
+      type = reg.type,
+      address = addr,
+      description = reg.type,
+      product = "OC Emulator",
+      vendor = "OC Emulator",
+      capacity = (reg.type == "modem") and MODEM_MAX_PACKET_SIZE or nil,
+    }
+  end
+  return result
 end
 
 -- ============================================================
@@ -3251,6 +3271,12 @@ for i = 1, 3 do
           ports[#ports + 1] = p
         end
         return ports
+      end
+      -- OC 旧版 API: 单包最大字节数。MineOS / PixelOS 的网络层优先检测这个方法,
+      -- 缺失时才会退回 getDeviceInfo()[addr].capacity (见上面的 MODEM_MAX_PACKET_SIZE)。
+      -- 用不了就会导致大消息分片长度算成 nil, 大响应发不回去。
+      modem.maxPacketSize = function()
+        return MODEM_MAX_PACKET_SIZE
       end
       modem.send = function(dest, port, ...)
         checkArg(1, dest, "string")
