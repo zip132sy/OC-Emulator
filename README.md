@@ -31,7 +31,7 @@
 | 依赖 | 版本 | 说明 |
 |------|------|------|
 | Node.js | 18+ | 启动脚本会在缺失时尝试自动安装 |
-| Lua | 5.1 或更高 | 可执行文件需在 PATH 中（`lua5.1` 或 `lua`） |
+| Lua | 5.3（固定版本） | 需在 PATH 中（`lua5.3` / `lua53` / `lua`）；缺失或版本不符时自动安装 Lua 5.3.6 |
 | LuaFileSystem (lfs) | 可选 | 缺失时自动回退到 shell 命令，功能一致、性能略低 |
 | npm 依赖 | `ws` | 首次启动自动安装 |
 
@@ -99,7 +99,7 @@ OC-Emulator/
 │   ├── modemHub.js               # 网卡 / 调制解调器信号路由
 │   ├── internetProxy.js          # Internet 组件 HTTP/HTTPS 代理
 │   ├── floppyTemplates.js        # 软盘模板读取
-│   ├── setupLua.js               # 跨平台 Lua 自动安装
+│   ├── setupLua.js               # 跨平台 Lua 5.3 自动安装
 │   ├── sysInfo.js                # 宿主机内存 / 电量采集
 │   ├── crypto-helper.js          # 数据卡加解密桥接
 │   └── ensureDeps.js             # 启动前依赖检查（npm 依赖 + Lua）
