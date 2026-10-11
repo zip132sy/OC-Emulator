@@ -269,8 +269,8 @@ const App = (() => {
 
   // ---------- 服务级控制 ----------
   // 重启服务: 服务器先停掉所有 VM, 再以退出码 5 退出, 由 run.bat / run.sh 立即拉起。
-  async function restartServer() {
-    if (!confirm(I18N.t('confirm.restart-server'))) return;
+  async function restartServer(skipConfirm) {
+    if (!skipConfirm && !confirm(I18N.t('confirm.restart-server'))) return;
     try {
       await api('server/restart', { method: 'POST' });
     } catch (e) {
@@ -288,6 +288,86 @@ const App = (() => {
       // 同上
     }
     setStatus(I18N.t('server.stopped'));
+  }
+
+  // 检查更新: 检查 -> 有更新则询问是否更新 -> 更新后询问是否重启后端
+  // (不自动重启, 避免正在运行虚拟机时被迫中断)
+  async function checkUpdate() {
+    const zh = I18N.getLang() === 'zh';
+    const tr = (z, e) => (zh ? z : e);
+    setStatus(I18N.t('update.checking'));
+
+    let r;
+    try {
+      r = await api('update/check');
+    } catch (e) {
+      setStatus(I18N.t('update.failed'));
+      alert(tr('检查更新失败: ', 'Update check failed: ') + e.message);
+      return;
+    }
+
+    if (!r || !r.ok) {
+      setStatus(I18N.t('update.failed'));
+      const map = {
+        'not-a-repo': tr('当前目录不是 git 仓库，无法检查更新。', 'Not a git repository; cannot check for updates.'),
+        'fetch-failed': tr('无法连接远端仓库，请检查网络或 git 配置。', 'Cannot reach the remote repository. Check your network or git settings.'),
+        'no-upstream': tr('未找到远端跟踪分支，无法比较版本。', 'No remote tracking branch found; cannot compare versions.'),
+      };
+      alert(map[r && r.error] || (tr('检查更新失败: ', 'Update check failed: ') + ((r && (r.detail || r.error)) || '')));
+      return;
+    }
+
+    if (!r.available) {
+      setStatus(I18N.t('update.up-to-date'));
+      alert(tr(`已是最新版本（${r.current}）。`, `Already up to date (${r.current}).`));
+      return;
+    }
+
+    setStatus(I18N.t('update.available'));
+    const info = tr(
+      `发现新版本：\n\n本地版本：${r.current}\n远端版本：${r.latest}\n落后提交：${r.behind} 个\n最新提交：${r.subject}`,
+      `Update available:\n\nlocal: ${r.current}\nremote: ${r.latest}\nbehind: ${r.behind} commit(s)\nlatest: ${r.subject}`
+    );
+    if (!confirm(info + tr('\n\n是否立即更新？', '\n\nUpdate now?'))) return;
+
+    setStatus(I18N.t('update.applying'));
+    let a;
+    try {
+      a = await api('update/apply', { method: 'POST' });
+    } catch (e) {
+      setStatus(I18N.t('update.failed'));
+      alert(tr('更新失败: ', 'Update failed: ') + e.message);
+      return;
+    }
+    if (!a || !a.ok) {
+      setStatus(I18N.t('update.failed'));
+      alert(tr('更新失败: ', 'Update failed: ') + ((a && (a.output || a.error)) || ''));
+      return;
+    }
+    if (!a.changed) {
+      setStatus(I18N.t('update.up-to-date'));
+      alert(tr('已是最新版本，无需重启。', 'Already up to date; no restart needed.'));
+      return;
+    }
+
+    setStatus(I18N.t('update.done'));
+    let running = 0;
+    try {
+      running = (state.vms || []).filter((v) => v.state === 'running' || v.state === 'paused' || v.state === 'starting').length;
+    } catch (e) { running = 0; }
+    const warn = running > 0
+      ? tr(`\n\n注意：当前有 ${running} 台虚拟机正在运行，重启会中断它们。`, `\n\nNote: ${running} VM(s) are running; restarting will interrupt them.`)
+      : '';
+    const ask = tr(
+      `更新完成（${a.before} → ${a.after}）。\n\n是否立即重启后端使更新生效？`,
+      `Update complete (${a.before} -> ${a.after}).\n\nRestart the backend now to apply the update?`
+    ) + warn;
+
+    if (confirm(ask)) {
+      await restartServer(true);
+    } else {
+      setStatus(I18N.t('update.done'));
+    }
   }
 
   // ---------- VM 列表 ----------
@@ -646,6 +726,7 @@ const App = (() => {
         const action = btn.dataset.action;
         if (action === 'new-vm') Wizard.open(refreshVMs);
         else if (action === 'refresh') refreshVMs(true);
+        else if (action === 'check-update') checkUpdate();
         else if (action === 'lua-recheck') checkLua();
         else if (action === 'import-vm') ExportWizard.openImport();
         else if (action === 'settings') openSettings();
@@ -728,6 +809,7 @@ const App = (() => {
     set('menu-new-vm', 'menu.new-vm');
     set('menu-import-vm', 'menu.import-vm');
     set('menu-refresh', 'menu.refresh');
+    set('menu-check-update', 'menu.check-update');
     set('menu-lua-recheck', 'menu.lua-recheck');
     set('menu-settings', 'menu.settings');
     set('menu-restart-server', 'menu.restart-server');

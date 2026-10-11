@@ -99,6 +99,91 @@ function shutDownForGuardian(code) {
   setTimeout(() => process.exit(code), 1200);
 }
 
+// ---------- 检查更新 (git) ----------
+// 运行一次 git 命令; 不抛异常, 统一返回 { ok, stdout, stderr, err }
+function gitRun(args, timeout = 90000) {
+  return new Promise((resolve) => {
+    execFile('git', args, { cwd: PROJECT_DIR, timeout, windowsHide: true, maxBuffer: 4 * 1024 * 1024 },
+      (err, stdout, stderr) => resolve({
+        ok: !err,
+        stdout: String(stdout || ''),
+        stderr: String(stderr || ''),
+        err: err ? String(err.message || err) : null,
+      }));
+  });
+}
+
+// 当前分支的上游 ref (如 origin/main); 没有上游时回退到常见远端分支
+async function resolveUpstreamRef() {
+  const up = await gitRun(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}'], 15000);
+  const name = up.ok ? up.stdout.trim() : '';
+  if (name && name.indexOf('/') >= 0) return name;
+  for (const ref of ['origin/main', 'origin/master', 'github/main']) {
+    const r = await gitRun(['rev-parse', '--verify', ref], 15000);
+    if (r.ok && r.stdout.trim()) return ref;
+  }
+  return null;
+}
+
+// 检查是否存在可用更新
+async function checkForUpdate() {
+  const out = { ok: false, available: false, behind: 0, current: null, latest: null, subject: '', error: null, detail: '' };
+  if (!fs.existsSync(path.join(PROJECT_DIR, '.git'))) { out.error = 'not-a-repo'; return out; }
+
+  const fetch = await gitRun(['fetch', '--quiet']);
+  if (!fetch.ok) {
+    out.error = 'fetch-failed';
+    out.detail = (fetch.stderr || fetch.err || '').trim().slice(0, 500);
+    return out;
+  }
+
+  const cur = await gitRun(['rev-parse', 'HEAD'], 15000);
+  out.current = cur.ok ? cur.stdout.trim().slice(0, 7) : null;
+
+  const ref = await resolveUpstreamRef();
+  if (!ref) { out.error = 'no-upstream'; return out; }
+
+  const cnt = await gitRun(['rev-list', '--count', `HEAD..${ref}`], 15000);
+  out.behind = cnt.ok ? (parseInt(cnt.stdout.trim(), 10) || 0) : 0;
+
+  const lat = await gitRun(['rev-parse', ref], 15000);
+  out.latest = lat.ok ? lat.stdout.trim().slice(0, 7) : null;
+
+  const sub = await gitRun(['log', '-1', '--pretty=%s', ref], 15000);
+  out.subject = sub.ok ? sub.stdout.trim() : '';
+
+  out.available = out.behind > 0;
+  out.ok = true;
+  return out;
+}
+
+// 执行更新 (git pull --ff-only); 仅拉取, 不重启, 由前端决定是否重启
+async function applyUpdate() {
+  const out = { ok: false, changed: false, before: null, after: null, output: '', error: null };
+  if (!fs.existsSync(path.join(PROJECT_DIR, '.git'))) { out.error = 'not-a-repo'; return out; }
+
+  const before = await gitRun(['rev-parse', 'HEAD'], 15000);
+  out.before = before.ok ? before.stdout.trim().slice(0, 7) : null;
+
+  let pull = await gitRun(['pull', '--ff-only'], 180000);
+  if (!pull.ok) {
+    const ref = await resolveUpstreamRef();
+    if (ref && ref.indexOf('/') > 0) {
+      const remote = ref.slice(0, ref.indexOf('/'));
+      const branch = ref.slice(ref.indexOf('/') + 1);
+      pull = await gitRun(['pull', '--ff-only', remote, branch], 180000);
+    }
+  }
+  out.output = ((pull.stdout || '') + (pull.stderr || '')).trim().slice(0, 2000);
+  if (!pull.ok) { out.error = 'pull-failed'; return out; }
+
+  const after = await gitRun(['rev-parse', 'HEAD'], 15000);
+  out.after = after.ok ? after.stdout.trim().slice(0, 7) : null;
+  out.changed = !!(out.before && out.after && out.before !== out.after);
+  out.ok = true;
+  return out;
+}
+
 // ---------- 控制台窗口显示 / 隐藏 ----------
 // 三个平台各有一套机制, 都做不到时会安全跳过并回报原因, 绝不误隐藏别的窗口。
 //   Windows : PowerShell 调 Win32 ShowWindow
@@ -332,6 +417,17 @@ async function handleApi(req, res, body) {
         json(res, { ok: true, action: 'stop' });
         setTimeout(() => shutDownForGuardian(EXIT_STOP), 200);
         return;
+      }
+    }
+
+    // /api/update/check 与 /api/update/apply: 前端"检查更新"按钮
+    if (parts[1] === 'update') {
+      if (parts[2] === 'check') {
+        return json(res, await checkForUpdate());
+      }
+      if (parts[2] === 'apply' && method === 'POST') {
+        logger.log('[server] 前端请求拉取更新');
+        return json(res, await applyUpdate());
       }
     }
 
