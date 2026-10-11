@@ -47,6 +47,22 @@ local FLAG_LOCKED = 2          -- v4: 磁盘锁定
 local FLAG_TIER = 4            -- v4: tier 字段有效
 local FLAG_ENCRYPT_V2 = 8      -- v4: 16 字节滚动密钥加密
 
+-- ============================================================
+-- 宿主文件系统访问 (必须在模块加载时锁定)
+--
+-- 客户机 OS 启动后, 模拟器会把全局 io / os 就地替换成客户机自己的虚拟实现
+-- (见 oc-emulator.lua 末尾对 _G.os.remove / _G.os.rename / _G.io 的覆盖)。
+-- 宿主与客户机共用同一套全局环境, 所以这里若继续直接用全局 io.open /
+-- os.remove / os.rename, 写盘会落到"客户机内部的文件系统"里, 宿主机上的
+-- .ocd / .ocf 文件根本不会更新 —— 现象就是"虚拟机里改标签或写文件, 重启后
+-- 又变回原样", 并伴随 "WARNING: save disk1 failed: ..." 警告。
+-- 因此加载时先把宿主机真实实现拷贝出来, 并在本文件内遮蔽全局。
+-- ============================================================
+local real_io, real_os = {}, {}
+for k, v in pairs(io) do real_io[k] = v end
+for k, v in pairs(os) do real_os[k] = v end
+local io, os = real_io, real_os
+
 -- tier 容量上限 (OC 模组标准)
 local TIER_LIMITS = {
   [1] = 1 * 1024 * 1024,   -- T1: 1MB
