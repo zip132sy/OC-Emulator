@@ -44,8 +44,8 @@
 下载后直接双击 `run.bat`。脚本会自动完成：
 
 1. 检查 / 安装 Node.js；
-2. 安装 npm 依赖（`ws`）；
-3. 检测 Lua 解释器；
+2. 检查 npm 依赖与 Lua（缺失自动安装；Lua 固定为 5.3.x）；
+3. 校验强依赖文件，缺失时**联网下载修复**（GitHub 优先，Gitee 回退）；
 4. **检查并拉取仓库更新**（可在设置中关闭）；
 5. 带看门狗启动服务器（崩溃 / 卡死自动重启，端口被占用自动切换）。
 
@@ -102,7 +102,8 @@ OC-Emulator/
 │   ├── setupLua.js               # 跨平台 Lua 5.3 自动安装
 │   ├── sysInfo.js                # 宿主机内存 / 电量采集
 │   ├── crypto-helper.js          # 数据卡加解密桥接
-│   └── ensureDeps.js             # 启动前依赖检查（npm 依赖 + Lua）
+│   ├── ensureDeps.js             # 启动前依赖检查（npm 依赖 + Lua）
+│   └── repair.js                 # 依赖文件缺失时的联网修复
 │
 ├── web/                      # 浏览器前端（控制面板）
 │   ├── index.html                # 页面骨架与脚本入口

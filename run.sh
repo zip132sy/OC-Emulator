@@ -144,7 +144,20 @@ fi
 echo ""
 
 # ============================================================
-# 3. Auto update (enabled by default; toggle in the web settings panel)
+# 3. Verify required files, repair missing ones from the remote
+#    (GitHub raw first, Gitee raw as fallback)
+# ============================================================
+echo ""
+echo "[INFO] Checking required files..."
+if ! node lib/repair.js; then
+    echo ""
+    echo "[ERROR] Some required files are missing and could not be repaired."
+    echo "        Check your network and retry, or re-clone the repository."
+    exit 1
+fi
+
+# ============================================================
+# 4. Auto update (enabled by default; toggle in the web settings panel)
 #    Pull the latest version from the remote before starting.
 # ============================================================
 AUTO_UPDATE="on"
@@ -171,7 +184,7 @@ else
 fi
 
 # ============================================================
-# 4. Start server with process guardian
+# 5. Start server with process guardian
 #    - Auto-restart on crash
 #    - Auto-restart on hang (health check timeout)
 #    - Exponential backoff on repeated failures
