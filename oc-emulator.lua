@@ -1642,14 +1642,22 @@ function computer.users() return "admin" end
 function computer.addUser() return true end
 function computer.removeUser() return true end
 function computer.pushSignal(name, ...) pushSignal(name, ...) end
+-- 信号转发辅助: 必须原样转发全部返回值。
+-- 之前 computer.pullSignal 固定只取 8 个返回值 (e1..e8), 而 modem_message 信号是
+--   name, 接收方地址, 发送方地址, 端口, 距离, payload[1], payload[2], payload[3], payload[4]...
+-- 第 9 个及之后的值会被截断。MineOS 的网络层正是发 ("network","response",方法,数据),
+-- 于是数据永远落在第 9 位被丢掉, 客户端拿到 nil 后调用 text.deserialize(nil) 崩溃
+-- ("Text.lua:98: bad argument #1 (string expected, got nil)")。
+local _packArgs = table.pack or function(...) return { n = select("#", ...), ... } end
+local _unpackArgs = table.unpack or unpack
 function computer.pullSignal(timeout)
-  local e1, e2, e3, e4, e5, e6, e7, e8 = pullSignal(timeout)
-  if e1 then
-    dlog("computer.pullSignal ->", e1, "char:", tostring(e3), "code:", tostring(e4))
+  local r = _packArgs(pullSignal(timeout))
+  if r[1] then
+    dlog("computer.pullSignal ->", r[1], "char:", tostring(r[3]), "code:", tostring(r[4]))
   else
     dlog("computer.pullSignal -> nil (timeout)")
   end
-  return e1, e2, e3, e4, e5, e6, e7, e8
+  return _unpackArgs(r, 1, r.n)
 end
 function computer.beep(freq, dur) end
 function computer.getProgramLocations() return {} end
