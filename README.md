@@ -99,7 +99,8 @@ OC-Emulator/
 │   ├── sysInfo.js                # 宿主机内存 / 电量采集
 │   ├── crypto-helper.js          # 数据卡加解密桥接
 │   ├── ensureDeps.js             # 启动前依赖检查（npm 依赖 + Lua）
-│   └── repair.js                 # 依赖文件缺失时的联网修复
+│   ├── repair.js                 # 依赖文件缺失时的联网修复
+│   └── gen-checksums.js          # 生成 / 校验 SHA256SUMS
 │
 ├── web/                      # 浏览器前端（控制面板）
 │   ├── index.html                # 页面骨架与脚本入口
@@ -120,6 +121,7 @@ OC-Emulator/
 │
 ├── run.bat                   # Windows 启动脚本（看门狗 + 自动更新）
 ├── run.sh                    # Linux / macOS 启动脚本（看门狗 + 自动更新）
+├── SHA256SUMS                # 各文件的 SHA-256 清单（用于校验下载是否完整）
 ├── .gitignore                # 忽略规则
 ├── LICENSE                   # MIT 开源协议
 └── README.md                 # 本文件
@@ -136,6 +138,36 @@ OC-Emulator/
 - 点击 **⟳ 检查更新** 手动检查：结果在弹窗中展示并附带更新日志（发现新版本时显示本次更新内容，已是最新时显示当前版本更新日志）。
 - 更新完成后会询问是否重启后端，不会自动重启（避免中断正在运行的虚拟机）。
 - 在 **⚙ Settings → 版本回退** 中可选择回退到历史版本（回退同样由你确认是否重启后端）。
+
+---
+
+## 🔐 文件校验
+
+仓库根目录的 `SHA256SUMS` 记录了每个文件的 SHA-256，可用来确认下载是否完整、内容是否被改动。
+
+**校验**（在仓库根目录执行其一即可）：
+
+```bash
+# Linux / macOS
+sha256sum -c SHA256SUMS
+
+# Windows：在 Git Bash 中执行同一条命令（Git 自带 sha256sum）
+sha256sum -c SHA256SUMS
+```
+
+或者用仓库自带脚本校验：
+
+```bash
+node lib/gen-checksums.js --check
+```
+
+全部显示 `OK`（脚本输出「不一致 0, 缺失 0」）即为通过。若出现 `FAILED` / `不一致`，说明对应文件损坏或被改动，建议重新克隆仓库。
+
+**重新生成**（修改过仓库文件后需要更新清单，否则校验会失败）：
+
+```bash
+node lib/gen-checksums.js
+```
 
 ---
 

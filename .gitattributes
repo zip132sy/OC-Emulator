@@ -14,6 +14,14 @@
 *.html text eol=lf
 *.hex  text eol=lf
 
+# 无扩展名的文本文件: 同样固定为 LF。
+# 所有文本文件都显式指定换行符后, 各平台检出的内容才完全一致,
+# SHA256SUMS 里的哈希才能跨平台通用。
+/.gitattributes text eol=lf
+/.gitignore     text eol=lf
+/LICENSE        text eol=lf
+/SHA256SUMS     text eol=lf
+
 # 二进制资源: 不做任何转换
 *.ocd  binary
 *.ocf  binary
