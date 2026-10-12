@@ -191,13 +191,30 @@ local function encodeString(s)
     elseif b < 128 then
       result[#result+1] = s:sub(i, i); i = i + 1
     else
-      -- UTF-8 多字节: 直接保留
+      -- 多字节 UTF-8 字符: 只有当后续字节都是合法续接字节 (0x80-0xBF) 时才原样保留,
+      -- 否则按 Latin-1 单字节转义为 \u00XX。
+      -- 原因: Node 端用 data.toString('utf8') 读取 stdout, 非法 UTF-8 字节会被替换成
+      -- U+FFFD, 从而损坏二进制数据 (例如通过网络挂载读取 .pic 图片时数据被破坏,
+      -- 客户机的图片解析器就会卡死/报错)。转义后的 \u00XX 在接收端会还原成同一个
+      -- 字节, 因此二进制内容可以逐字节无损地穿过 Lua -> Node -> Lua。
       local charLen = 1
       if b >= 0xF0 then charLen = 4
       elseif b >= 0xE0 then charLen = 3
       elseif b >= 0xC0 then charLen = 2 end
-      result[#result+1] = s:sub(i, i + charLen - 1)
-      i = i + charLen
+      local valid = charLen > 1 and (i + charLen - 1 <= len)
+      if valid then
+        for k = 1, charLen - 1 do
+          local cb = s:byte(i + k)
+          if not cb or cb < 0x80 or cb > 0xBF then valid = false; break end
+        end
+      end
+      if valid then
+        result[#result+1] = s:sub(i, i + charLen - 1)
+        i = i + charLen
+      else
+        result[#result+1] = string.format('\\u%04x', b)
+        i = i + 1
+      end
     end
   end
   result[#result+1] = '"'
