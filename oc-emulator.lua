@@ -233,18 +233,24 @@ local function isArray(t)
     end
   end
   if count == 0 then return false end  -- 空表 → 对象
-  return max == count
+  -- 允许空洞: 例如 modem 响应 (nil, "invalid handle") 会让 payload 表在第 4 位出现 nil。
+  -- 原来要求 max == count, 这种表会被当成对象编码成 {"1":..,"5":..}; Node 端展开对象
+  -- 会失败 → 消息无法路由 → 客户端 request 死循环 → 虚拟机卡住。
+  -- 改成「键都是正整数即按数组编码」, 空洞位置补 null; 稀疏上限防止极端稀疏表生成巨大数组。
+  return max <= count + 64
 end
 
 local jsonEncodeVal  -- 前向声明
 
 local function encodeTable(t)
   if isArray(t) then
-    local n = 0
-    for _ in pairs(t) do n = n + 1 end
-    if n == 0 then return "[]" end
+    local max = 0
+    for k in pairs(t) do
+      if k > max then max = k end
+    end
+    if max == 0 then return "[]" end
     local parts = {}
-    for i = 1, n do parts[i] = jsonEncodeVal(t[i]) end
+    for i = 1, max do parts[i] = jsonEncodeVal(t[i]) end  -- 空洞 → "null"
     return "[" .. table.concat(parts, ",") .. "]"
   else
     local parts = {}
@@ -1431,7 +1437,16 @@ local function dispatchServerMessage(msg)
     local unpackFn = table.unpack or unpack
     local payload = msg.data
     if type(payload) ~= "table" then payload = { payload } end
-    local n = msg.n or #payload
+    local n = msg.n
+    if not n then
+      -- 用最大整数键作为长度: JSON 数组中的 null 在 Lua 表里会形成空洞, #payload 不可靠,
+      -- 会把空洞之后的返回值截掉 (例如 ("network","response","read",null,"invalid handle")
+      -- 里的 "invalid handle" 会被丢掉, 客户机拿到错误的返回值)。
+      n = 0
+      for k in pairs(payload) do
+        if type(k) == "number" and k == math.floor(k) and k > n then n = k end
+      end
+    end
     pushSignal("modem_message", modemAddr, msg.from or "", msg.port or 0, msg.distance or 0, unpackFn(payload, 1, n))
   elseif t == "net_response" then
     -- 网络请求响应 (异步)
