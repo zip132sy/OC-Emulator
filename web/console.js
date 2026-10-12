@@ -241,7 +241,7 @@ const Console = (() => {
     });
 
     // 标签页重建后立即按当前已知状态刷新一次: 按钮可用性, 以及"已停止"的
-    // 画面表现 (画布是刚创建的, 之前记录的黑屏/灰屏要在这里补画上去)。
+    // 画面表现: 画布是刚创建的, 需要在这里补画黑屏/灰屏。
     updateStateBadge(vmName);
     applyStoppedVisual(vmName);
 
@@ -291,10 +291,9 @@ const Console = (() => {
     view.canvas.addEventListener('contextmenu', (e) => e.preventDefault());
     // 滚轮事件: 绑定在【整个虚拟机面板】上 (工具栏 / 屏幕 / 画布四周留白都算), 只排除日志面板。
     //
-    // 早先只绑在 .console-canvas-wrap 上: 用脚本 dispatchEvent 直接命中画布时是好的,
-    // 但真机滚轮由浏览器做命中测试, 鼠标只要稍微偏到画布留白或工具栏上, 事件就不落在
-    // 监听元素里 —— 表现为"滚轮完全没反应", 极容易被误判成鼠标或模拟器坏了。
-    // 现在放大到整个面板, 并把日志面板排除在外 (否则没法用滚轮翻日志)。
+    // 真机滚轮由浏览器做命中测试: 若只绑在 .console-canvas-wrap 上, 鼠标稍微偏到画布留白
+    // 或工具栏上, 事件就不落在监听元素里 —— 表现为"滚轮完全没反应", 容易被误判成鼠标或
+    // 模拟器坏了。因此放大到整个面板, 并把日志面板排除在外 (否则没法用滚轮翻日志)。
     // 只绑定一次: renderVMView 可能被多次调用, 重复绑会让一次滚轮发出多条 scroll 信号。
     if (!pane.dataset.ocWheelBound) {
       pane.dataset.ocWheelBound = '1';
@@ -362,7 +361,7 @@ const Console = (() => {
       view.state = s.state || 'stopped';
       updateStateBadge(vmName);
       const isStopped = (view.state === 'stopped' || view.state === 'error');
-      // 已停止的 VM 不再把服务端残留的最后一帧画回来 (否则会盖掉黑屏/灰屏表现)
+      // 已停止的 VM 不要画回服务端残留的最后一帧 (否则会盖掉黑屏/灰屏表现)
       if (!isStopped && s.screen && s.screen.cells && s.screen.cells.length > 0) {
         view.w = s.screen.width;
         view.h = s.screen.height;
@@ -406,7 +405,7 @@ const Console = (() => {
     if (overlay) {
       overlay.style.display = (view.state === 'paused') ? 'flex' : 'none';
     }
-    // 重启遮罩: state === 'starting' 时显示, 并清空画布 (旧画面不再代表当前系统状态)
+    // 重启遮罩: state === 'starting' 时显示, 并清空画布 (旧画面与当前系统状态不符)
     const restartingOverlay = document.getElementById(`restarting-overlay-${cssEsc(vmName)}`);
     if (restartingOverlay) {
       const showRestarting = (view.state === 'starting');
@@ -706,7 +705,7 @@ const Console = (() => {
         sizeCustomRow.style.display = sizeSelect.value === 'custom' ? 'flex' : 'none';
       });
 
-      // 浏览文件夹（暂用 prompt，后续可改为文件选择器）
+      // 浏览文件夹: 用 prompt 输入路径
       document.getElementById('btn-mirror-folder').addEventListener('click', () => {
         const current = document.getElementById('new-disk-mirror').value;
         const p = prompt(t('hw.disk-mirror-browse-prompt'), current);
@@ -799,7 +798,7 @@ const Console = (() => {
       { value: 'wireless_t1', label: t('hw.option-wireless-t1') },
       { value: 'wireless_t2', label: t('hw.option-wireless-t2') },
     ];
-    // 无线信号强度 (原"格数限制"): 1 = 隔离(无法发现其他虚拟机), >=2 = 可互通
+    // 无线信号强度: 1 = 隔离(无法发现其他虚拟机), >=2 = 可互通
     const strengthOpts = (() => {
       const arr = [
         { value: '', label: t('hw.strength-auto') },
@@ -1692,7 +1691,7 @@ const Console = (() => {
   function _doPaint(vmName, info) {
     const view = getView(vmName);
     if (!view.ctx || !view.cells || !view.w || !view.h) return;
-    // 正常关闭后画面固定为黑色, 不再重绘 (否则离屏缓冲会把旧画面刷回来)
+    // 正常关闭后画面固定为黑色, 不重绘 (否则离屏缓冲会把旧画面刷回来)
     if (view.stoppedAppearance === 'black') return;
     const cw = view.charW, ch = view.charH;
     const cells = view.cells;
@@ -1775,7 +1774,7 @@ const Console = (() => {
         }
       }
 
-      // 回退: TTF fillText
+      // 备用渲染: TTF fillText
       target.fillStyle = colorToCSS(fg);
       target.textBaseline = 'middle';
       target.textAlign = 'center';
@@ -1838,7 +1837,7 @@ const Console = (() => {
   //          'gray'  异常停止 (进程崩溃、被意外杀掉、服务端断开、状态未知)
   //          null    恢复正常显示
   // 正常关闭时整个画面清黑; 异常停止时保留最后一帧并整体置灰, 这样一眼就能
-  // 分辨"系统是正常关了"还是"运行中突然没了", 而不会像现在这样停在彩色画面上。
+  // 分辨"系统是正常关了"还是"运行中突然没了"。
   function setStoppedAppearance(vmName, mode) {
     const view = getView(vmName);
     if (!view) return;
@@ -1970,7 +1969,7 @@ const Console = (() => {
       }
     }
 
-    // 回退: TTF fillText
+    // 备用渲染: TTF fillText
     ctx.fillStyle = fgCSS;
     ctx.textBaseline = 'middle';
     ctx.textAlign = 'center';
@@ -1989,7 +1988,7 @@ const Console = (() => {
   // ---------- 输入事件 ----------
   function sendInput(vmName, ev) {
     // wsSend 在连接不可用时返回 false。输入 (键盘/鼠标/滚轮) 全部走这条通道,
-    // 之前是静默丢弃 —— 表现为"键盘/滚轮完全没反应"却看不出原因, 这里显式告警一次。
+    // 显式告警一次: 静默丢弃会让"键盘/滚轮无反应"难以定位。
     const ok = App.wsSend({ type: 'c2s.input', ...ev });
     if (ok === false) {
       diag.inputDropped++;
@@ -2008,7 +2007,7 @@ const Console = (() => {
   // (实测: 服务端只收到 {"event":"key_down","code":209}, 页面里根本收不到 wheel)。
   // 这种情况下模拟器永远拿不到 scroll 信号, 客户机自然"滚不动"。
   // 打开本开关后, 当 PageUp/PageDown 落在虚拟机屏幕上时转成 scroll 信号
-  // (与真滚轮完全一致), 不再把这两个键原样发给客户机。
+  // (与真滚轮完全一致), 不把这两个键原样发给客户机。
   // ============================================================
   const WHEEL_KEY_COMPAT_KEY = 'oc-wheel-key-compat';
   function isWheelKeyCompat() {

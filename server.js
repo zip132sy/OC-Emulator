@@ -337,7 +337,7 @@ function setConsoleVisibleWindows(visible) {
   ].join('; ');
 
   return new Promise((resolve) => {
-    // 注意: 这里不能用 windowsHide: true。它会以 CREATE_NO_WINDOW 启动子进程,
+    // 这里不能用 windowsHide: true。它会以 CREATE_NO_WINDOW 启动子进程,
     // 使 PowerShell 拿不到控制台窗口句柄 (GetConsoleWindow() 返回 0)。
     // 不加该选项时子进程会直接继承服务器所在的控制台, 不会额外弹窗。
     execFile(psExe, ['-NoProfile', '-NonInteractive', '-Command', script],
@@ -1602,7 +1602,7 @@ async function main() {
   const CONFIG_PORT = settings.port || 8080;
 
   // ---- 单实例保护 ----
-  // 端口被占用时, 旧逻辑会自动 +1 再起一个实例。但这会导致:
+  // 端口被占用时不能自动 +1 另起实例, 因为:
   //   - 同一个 VM 被两个实例各自 spawn 一份 -> 不同端口看到的画面不一致;
   //   - 两个实例同时读写同一个磁盘镜像 -> 可能损坏数据。
   // 因此: 只要配置端口上已有本程序实例在服务, 就不再启动第二个, 直接退出。
@@ -1681,7 +1681,7 @@ async function main() {
       logger.log(`  Local:   http://${HOST}:${actualPort}`);
       const localIPs = getLocalIPs();
       if (localIPs.length > 0) {
-        // 注意: 输出到控制台的一行不要过长, 尤其含中文(双宽字符)时。
+        // 输出到控制台的一行不要过长, 尤其含中文(双宽字符)时。
         // Windows 控制台在窗口宽度不足时会把这类行「直接截断」而不是换行,
         // 表现为中文显示不全。所以这里拆成两行短句。
         logger.log(`  本机IP:  http://${localIPs[0]}:${actualPort}`);

@@ -83,13 +83,9 @@ http://127.0.0.1:8080
 OC-Emulator/
 ├── server.js                 # 主服务端入口 (HTTP + WebSocket, 端口探测, 静态资源)
 ├── oc-emulator.lua           # 核心 VM 运行时 (OpenComputers 组件 / 屏幕 / 事件模型)
-├── gui.lua                   # Lua 侧 GUI 组件（窗口 / 输入控件）
 ├── disk.lua                  # .ocd 磁盘格式读写模块
 ├── json.lua                  # Lua JSON 编解码
 ├── lua_check.lua             # Lua 环境检测脚本
-├── config.lua                # 运行时可调参数
-├── settings.lua              # 模拟器默认设置
-├── vm.lua                    # 单个 VM 的 Lua 侧封装
 ├── package.json              # npm 配置（依赖: ws）
 │
 ├── lib/                      # Node.js 服务端模块

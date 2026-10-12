@@ -68,7 +68,7 @@ const Wizard = (() => {
       { value: 'wireless_t1',   label: '无线网卡 T1 (信号强度 1 · 无法发现其他虚拟机)' },
       { value: 'wireless_t2',   label: '无线网卡 T2 (信号强度 2 · 可与其他虚拟机互通)' },
     ],
-    // 无线信号强度 (原"格数限制"): 1 = 隔离, >=2 = 可与其他虚拟机互通
+    // 无线信号强度: 1 = 隔离, >=2 = 可与其他虚拟机互通
     modemStrength: (() => {
       const arr = [
         { value: '',  label: '自动 (跟随网卡等级)' },

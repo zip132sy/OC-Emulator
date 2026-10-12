@@ -41,7 +41,7 @@ local disk = {}
 local MAGIC = "OCDISK"
 local VERSION = 4              -- v4: 支持 lock/unlock + tier + 加密
 local HEADER_SIZE = 36         -- v3 header
-local HEADER_SIZE_V4 = 40     -- v4 header (新增 tier+unlockToken)
+local HEADER_SIZE_V4 = 40     -- v4 header (含 tier + unlockToken)
 local FLAG_COMPRESSED = 1
 local FLAG_LOCKED = 2          -- v4: 磁盘锁定
 local FLAG_TIER = 4            -- v4: tier 字段有效
@@ -159,10 +159,10 @@ end
 -- LZW 压缩/解压 (固定 16-bit 码字) + 加密
 -- ============================================================
 
--- 旧版 XOR 密钥 (兼容 v3/旧 v4 磁盘, 不可删除)
+-- 单字节 XOR 密钥 (兼容 v3 及早期 v4 磁盘, 不可删除)
 local XOR_KEY_V1 = 0xA5
 
--- 新版 16 字节滚动密钥 (让加密后数据呈现随机分布, 无法直接阅读)
+-- 16 字节滚动密钥 (让加密后数据呈现随机分布, 无法直接阅读)
 -- 密钥选择不可预测的常量, 加上磁盘 label 混入, 每张盘密钥不同
 local XOR_KEY_V2 = { 0x4F, 0x43, 0x45, 0x4D, 0x75, 0x6C, 0x61, 0x74,
                      0x6F, 0x72, 0x21, 0x39, 0x41, 0x7E, 0xC3, 0x5B }
@@ -183,7 +183,7 @@ local function deriveLabelSalt(label)
   return salt
 end
 
--- 旧版加密: 单字节 XOR (兼容旧磁盘)
+-- 单字节 XOR 加密 (兼容 v3 及早期 v4 磁盘)
 local function xorTransformV1(data)
   local result = {}
   for i = 1, #data do
@@ -192,7 +192,7 @@ local function xorTransformV1(data)
   return table.concat(result)
 end
 
--- 新版加密: 16 字节滚动密钥 + label 盐值
+-- V2 加密: 16 字节滚动密钥 + label 盐值
 -- data: 要加密/解密的字符串
 -- label: 磁盘标签 (用于生成盐值)
 local function xorTransformV2(data, label)
@@ -284,12 +284,12 @@ local function lzwDecompressRaw(input)
   return table.concat(result)
 end
 
--- 兼容接口: 旧版 LZW 压缩 + 单字节 XOR (用于 saveV3)
+-- LZW 压缩 + 单字节 XOR (saveV3 用的兼容接口)
 local function lzwCompress(input)
   return xorTransformV1(lzwCompressRaw(input))
 end
 
--- 兼容接口: 旧版 LZW 解压 + 单字节 XOR (用于加载旧磁盘)
+-- LZW 解压 + 单字节 XOR (加载早期磁盘用的兼容接口)
 local function lzwDecompress(input)
   if #input == 0 then return "" end
   return lzwDecompressRaw(xorTransformV1(input))
@@ -441,7 +441,7 @@ function disk.save(path, label, files, size, tier, locked)
   return writeFileAtomic(path, header .. compressed)
 end
 
--- v4 兼容旧调用: disk.save(path, label, files, size) 不传 tier/locked 时默认 tier=3, locked=false
+-- disk.save(path, label, files, size) 省略 tier/locked 时默认 tier=3, locked=false
 -- (Lua 函数参数可选, 上方已处理)
 
 -- v3 保存 (用于向后兼容导出)
@@ -509,7 +509,7 @@ function disk.load(path)
       }
     end
 
-    -- 判断加密版本 (V2 加密使用 16 字节滚动密钥, V1 是旧版单字节 XOR)
+    -- 判断加密版本 (V2 使用 16 字节滚动密钥, V1 为单字节 XOR)
     local useEncryptV2 = band(flags, FLAG_ENCRYPT_V2) ~= 0
     local useCompressed = band(flags, FLAG_COMPRESSED) ~= 0
 
@@ -520,11 +520,11 @@ function disk.load(path)
         body = lzwDecompressRaw(body)
       end
     else
-      -- V1 兼容模式: 旧版 XOR_V1 内嵌于 lzwDecompress, 仅在压缩时生效
+      -- V1 兼容模式: XOR_V1 内嵌于 lzwDecompress, 仅在压缩时生效
       if useCompressed then
         body = lzwDecompress(body)  -- 包含 XOR_V1 解密 + LZW 解压
       end
-      -- 未压缩的旧 v4 磁盘: body 是原始数据, 无需处理
+      -- 未压缩的 v4 磁盘: body 是原始数据, 无需处理
     end
 
     local files = deserializeFSBinary(body)

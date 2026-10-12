@@ -48,7 +48,7 @@ end
 if not table.unpack then
   table.unpack = unpack  -- Lua 5.1 的全局 unpack
 end
-local dbg = nil  -- 不再写 debug.log 文件
+local dbg = nil  -- 调试日志当前关闭
 
 -- 日志级别: "error" = 仅错误 (默认), "full" = 常规信息, "off" = 全部关闭
 -- 注意: 高频调试日志 (component.invoke / filesystem / pullSignal) 由 verboseLog
@@ -234,9 +234,9 @@ local function isArray(t)
   end
   if count == 0 then return false end  -- 空表 → 对象
   -- 允许空洞: 例如 modem 响应 (nil, "invalid handle") 会让 payload 表在第 4 位出现 nil。
-  -- 原来要求 max == count, 这种表会被当成对象编码成 {"1":..,"5":..}; Node 端展开对象
+  -- 判据取「键都是正整数即按数组编码」, 空洞位置补 null; 稀疏上限防止极端稀疏表生成巨大数组。
+  -- 若改用 max == count 判定, 这类表会被当成对象编码成 {"1":..,"5":..}; Node 端展开对象
   -- 会失败 → 消息无法路由 → 客户端 request 死循环 → 虚拟机卡住。
-  -- 改成「键都是正整数即按数组编码」, 空洞位置补 null; 稀疏上限防止极端稀疏表生成巨大数组。
   return max <= count + 64
 end
 
@@ -763,8 +763,8 @@ local function genAddr()
       t[i] = "-"
     else
       -- 取"单个"十六进制字符: 必须 sub(p, p)。
-      -- 原来写成 hex:sub(math.random(1,16), math.random(1,16)), 起止下标各自随机,
-      -- 经常一次取出好几个字符, 结果地址长度飘忽不定、格式完全不像 UUID。
+      -- 若起止下标各自随机 (如 hex:sub(math.random(1,16), math.random(1,16))),
+      -- 经常一次取出好几个字符, 地址长度飘忽不定、格式不像 UUID。
       local p = math.random(1, 16)
       t[i] = hex:sub(p, p)
     end
@@ -896,8 +896,8 @@ local function saveDisk(path)
   if projectPath then return true end  -- 项目模式不保存磁盘
   local size = vdisk.size or config.hddSize or (4 * 1024 * 1024)
   local tier = vdisk.tier or 3
-  -- 用磁盘自身记录的 size/tier 写回 (之前固定用 config.hddSize, 会把小容量磁盘
-  -- 撑成 4MB, 且 tier 恒为 3, 与磁盘实际声明不符)。
+  -- 用磁盘自身记录的 size/tier 写回。若固定用 config.hddSize, 会把小容量磁盘
+  -- 撑成 4MB, 且 tier 恒为 3, 与磁盘实际声明不符。
   local ok, err = disk.save(path, vdisk.label, vdisk.files, size, tier, false)
   if not ok then
     -- 兜底: 若磁盘声明的 tier 小于其实际容量 (手工制作的镜像可能出现),
@@ -977,11 +977,11 @@ end
 
 -- ============================================================
 -- 磁盘自动落盘 (write-through)
--- 之前磁盘只在"正常关机"(computer.shutdown / 进程跑到结尾)时才写回文件,
--- 一旦 VM 在安装过程中被强制结束(用户在界面上点停止 -> 3 秒超时 SIGTERM,
--- 或服务被关闭), 内存里的安装结果就整个丢掉, 下次启动又从头装一遍。
--- 这里改成: 任何磁盘写入都打脏标记, 之后周期性(默认 1 秒)把磁盘写回文件,
--- 并在收到 shutdown / flush 命令时立即落盘。这样安装进度不会再丢。
+-- 任何磁盘写入都打脏标记, 之后周期性(默认 1 秒)把磁盘写回文件,
+-- 并在收到 shutdown / flush 命令时立即落盘。
+-- 若只在"正常关机"(computer.shutdown / 进程跑到结尾)时才写回文件, VM 在安装过程中
+-- 被强制结束(用户在界面上点停止 -> 3 秒超时 SIGTERM, 或服务被关闭)就会丢掉内存里的
+-- 安装结果, 下次启动又从头装一遍。
 -- ============================================================
 local diskPersist = { dirty = false, lastFlush = 0, interval = 1 }
 
@@ -1412,7 +1412,7 @@ local function dispatchServerMessage(msg)
           if loadedF.label then
             pcall(function() floppy.setLabel(loadedF.label) end)
           end
-          -- 如果之前没有注册软盘组件, 现在注册
+          -- 软盘组件尚未注册时, 在此注册
           if not componentRegistry[floppyAddr] then
             componentRegistry[floppyAddr] = { type = "filesystem", proxy = floppy }
             pushSignal("component_added", floppyAddr, "filesystem")
@@ -1432,8 +1432,8 @@ local function dispatchServerMessage(msg)
   elseif t == "modem_message" then
     -- 收到其他虚拟机的 modem 消息
     -- OC 官方信号签名: modem_message(receiverAddress, senderAddress, port, distance, ...payload)
-    -- 之前把 data 表当成 distance 传、payload 又写死成 1,1, 客户机收到的消息体完全错位,
-    -- 表现为"能收到信号但内容不对/收不到"。
+    -- 必须按此顺序组装: 若把 data 表当成 distance 传、payload 又写死成 1,1,
+    -- 客户机收到的消息体完全错位, 表现为"能收到信号但内容不对/收不到"。
     local unpackFn = table.unpack or unpack
     local payload = msg.data
     if type(payload) ~= "table" then payload = { payload } end
@@ -1548,7 +1548,7 @@ local function pullSignal(timeout)
   end
 
   -- 文件模式 (legacy, 仅在没有 --json-io 时使用)
-  -- (基本不再使用, 保留以兼容)
+  -- (旧路径, 保留以兼容)
   if not config.inputFile then return nil end
   local startTime = os.clock()
   local maxWait = timeout or math.huge
@@ -1675,7 +1675,7 @@ function computer.addUser() return true end
 function computer.removeUser() return true end
 function computer.pushSignal(name, ...) pushSignal(name, ...) end
 -- 信号转发辅助: 必须原样转发全部返回值。
--- 之前 computer.pullSignal 固定只取 8 个返回值 (e1..e8), 而 modem_message 信号是
+-- computer.pullSignal 若固定只取 8 个返回值 (e1..e8), 而 modem_message 信号是
 --   name, 接收方地址, 发送方地址, 端口, 距离, payload[1], payload[2], payload[3], payload[4]...
 -- 第 9 个及之后的值会被截断。MineOS 的网络层正是发 ("network","response",方法,数据),
 -- 于是数据永远落在第 9 位被丢掉, 客户端拿到 nil 后调用 text.deserialize(nil) 崩溃
@@ -1696,7 +1696,7 @@ function computer.getProgramLocations() return {} end
 
 -- 网卡单包最大字节数 (真实 OC 的 modem.maxPacketSize() / DeviceInfo.capacity 默认值)。
 -- MineOS / PixelOS 的网络层 (Libraries/Network.lua) 用它给大消息分片:
---   旧版 OC 走 modem.maxPacketSize(), 新版走 computer.getDeviceInfo()[addr].capacity。
+--   可通过 modem.maxPacketSize() 或 computer.getDeviceInfo()[addr].capacity 获取。
 -- 两者都缺失时分片长度会算成 nil, 于是 FTP 目录列表之类的大响应发不回去,
 -- 客户端最终报 "Text.lua:98: bad argument #1 (string expected, got nil)"。
 local MODEM_MAX_PACKET_SIZE = 8192
@@ -3256,7 +3256,7 @@ for i = 1, 3 do
     elseif card:match("^modem") or card:match("^wireless") then
       -- 无线网卡 (modem)
       --
-      -- 信号强度 (原"格数限制"): 现实 OC 里无线范围按"格"(方块) 计算, 模拟器没有
+      -- 信号强度 (对应现实 OC 的"格数限制"): 现实 OC 里无线范围按"格"(方块) 计算, 模拟器没有
       -- 空间概念, 因此把范围改造成一个离散的"信号强度":
       --   strength = 1  -> 本机自成一网, 无法发现/连接这台工具里的其他虚拟机
       --   strength >= 2 -> 可以与其他虚拟机互相发现并收发 modem 消息
@@ -3312,7 +3312,7 @@ for i = 1, 3 do
         end
         return ports
       end
-      -- OC 旧版 API: 单包最大字节数。MineOS / PixelOS 的网络层优先检测这个方法,
+      -- 单包最大字节数 (modem.maxPacketSize)。MineOS / PixelOS 的网络层优先检测这个方法,
       -- 缺失时才会退回 getDeviceInfo()[addr].capacity (见上面的 MODEM_MAX_PACKET_SIZE)。
       -- 用不了就会导致大消息分片长度算成 nil, 大响应发不回去。
       modem.maxPacketSize = function()
@@ -3323,8 +3323,8 @@ for i = 1, 3 do
         checkArg(2, port, "number")
         -- 通过 server 路由到其他 VM。
         -- 关键: 必须带上自己的 modem 地址 (from) 和目标地址 (to)。
-        -- 之前只发了 dest 且没有 from, server 端按 msg.from/msg.to 读取全是 nil,
-        -- 于是所有跨 VM 消息都被判定为"没有目标地址"直接丢掉 —— 这就是"网卡不能互通"。
+        -- 若只发 dest 而没有 from, server 端按 msg.from/msg.to 读取全是 nil,
+        -- 所有跨 VM 消息都会被判定为"没有目标地址"直接丢掉。
         sendToServer({
           type = "modem_send",
           from = modemAddr,

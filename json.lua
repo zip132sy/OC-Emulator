@@ -402,8 +402,7 @@ function json.decode(s)
   if d.pos <= d.len then
     return nil, "unexpected trailing content at position " .. d.pos
   end
-  -- 把 json.null 转成 nil? 不, 保留 json.null 以便区分
-  -- 但如果用户期望 null → nil, 可以后处理
+  -- 保留 json.null, 以便区分 "键不存在" 与 "键值为 null"
   return result
 end
 
