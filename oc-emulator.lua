@@ -6,6 +6,49 @@
 -- I/O: stdin/stdout JSON lines (与 server.js 通信)
 -- ============================================================
 
+-- ============================================================
+-- 项目署名
+--   源码提供: DeepSeek , Trea
+--   校验与测试: zip132sy , DeepSeek
+--   本项目免费且开源!
+--
+-- 不能删除, 删除后崩溃。
+--   署名文本存放在 ATTRIBUTION.text 中, 由 ocCheckAttribution() 在启动、
+--   消息收发、事件轮询等多个环节校验。校验依据是署名文本的指纹, 因此整体
+--   替换署名声同样会被发现。署名文本、指纹函数、校验函数或任意一处调用被
+--   删除或改写, 都会立即中断运行。
+-- ============================================================
+local ATTRIBUTION = {
+  text = "源码提供: DeepSeek , Trea\n校验与测试: zip132sy , DeepSeek\n本项目免费且开源!",
+  seal = "OC-EMULATOR-ATTRIBUTION",
+  stderr = io.stderr,
+}
+
+-- 署名文本指纹 (131 进制滚动哈希, 取模 1000000007)
+local function attrFingerprint(s)
+  local h = 7
+  for i = 1, #s do h = (h * 131 + s:byte(i)) % 1000000007 end
+  return h
+end
+
+local function ocCheckAttribution(where)
+  local ok = type(ATTRIBUTION) == "table"
+    and ATTRIBUTION.seal == "OC-EMULATOR-ATTRIBUTION"
+    and type(ATTRIBUTION.text) == "string"
+    and attrFingerprint(ATTRIBUTION.text) == 219526294
+  if not ok then
+    local msg = "[OC Emulator] 项目署名被删除或修改 (" .. tostring(where) ..
+      ")。本项目免费且开源, 请保留源码署名。"
+    if type(ATTRIBUTION) == "table" and ATTRIBUTION.stderr then
+      ATTRIBUTION.stderr:write(msg .. "\n")
+    end
+    error(msg, 0)
+  end
+  return true
+end
+
+ocCheckAttribution("startup")
+
 -- 调试日志 (写到 stderr, 不干扰 stdout JSON)
 -- 保存原始 io 引用: OpenOS 加载 /lib/io.lua 后会覆盖 _G.io
 local _stderr = io.stderr
@@ -516,6 +559,7 @@ json.decode = jsonDecode
 _stdout:setvbuf("no")
 -- 发送消息到 server (写到 stdout)
 local function sendToServer(msg)
+  ocCheckAttribution("sendToServer")
   _stdout:write(jsonEncode(msg) .. "\n")
 end
 
@@ -1270,6 +1314,7 @@ end
 -- 读取 stdin 一行 JSON 输入并解析 (用于 pullSignal 在 JSON 模式下)
 -- 返回: 解析后的表, 或 nil (EOF/错误)
 local function readJSONInput(timeout)
+  ocCheckAttribution("readJSONInput")
   -- io.read("*l") 是阻塞的, 无超时控制
   -- server 端会在 timeout 到期后发 tick, 所以这里直接阻塞读
   local line = _io_read("*l")
@@ -1295,6 +1340,7 @@ local _externalRamTotal = 0
 
 -- 把 server 的 JSON 消息转换为 OC 信号并加入队列
 local function dispatchServerMessage(msg)
+  ocCheckAttribution("dispatchServerMessage")
   if type(msg) ~= "table" then return end
   local t = msg.type
   -- 把前端传来的 "OC 像素坐标" 换算成 OC 信号真正使用的坐标。
@@ -1463,6 +1509,7 @@ end
 local flushRender
 
 local function pullSignal(timeout)
+  ocCheckAttribution("pullSignal")
   dlog("pullSignal called, timeout:", tostring(timeout), "queue:", #signalQueue)
   -- 先检查信号队列
   if #signalQueue > 0 then
