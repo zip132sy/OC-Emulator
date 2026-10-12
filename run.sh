@@ -238,12 +238,49 @@ find_pid_on_port() {
     echo ""
 }
 
+# HTTP 探测: 优先 curl, 退回 wget。
+# 两者都没有时由 start_watchdog 直接禁用卡死检测 —— 否则健康检查永远失败,
+# 会把本来正常的服务反复杀掉。
+http_probe() {
+    _url="$1"
+    _timeout="$2"
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsS --max-time "$_timeout" "$_url" >/dev/null 2>&1
+        return $?
+    fi
+    if command -v wget >/dev/null 2>&1; then
+        wget -q -T "$_timeout" -O /dev/null "$_url" >/dev/null 2>&1
+        return $?
+    fi
+    return 1
+}
+
+http_post() {
+    _url="$1"
+    _timeout="$2"
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsS --max-time "$_timeout" -X POST "$_url" >/dev/null 2>&1
+        return $?
+    fi
+    if command -v wget >/dev/null 2>&1; then
+        wget -q -T "$_timeout" --method=POST -O /dev/null "$_url" >/dev/null 2>&1
+        return $?
+    fi
+    return 1
+}
+
 # Background watchdog: health-check the server periodically and force-kill it
 # if it stops responding (the main loop is responsible for restarting it).
 # It exits by itself once the sentinel file is removed.
 start_watchdog() {
+    if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
+        echo "[WARNING] 未找到 curl / wget, 本次不启用\"卡死自动重启\"；崩溃仍会自动重启。"
+        glog "no curl/wget available, hang-detection disabled"
+        return
+    fi
     WATCHDOG_SENTINEL="$(mktemp -t oc_watchdog.XXXXXX 2>/dev/null || echo "/tmp/oc_watchdog.$$")"
     (
+        _wf=0
         while true; do
             sleep "$WATCHDOG_INTERVAL"
             # Main loop finished -> watchdog stops too
@@ -259,15 +296,21 @@ start_watchdog() {
                 esac
             fi
 
-            if curl -fsS --max-time "$WATCHDOG_TIMEOUT" \
-                 "http://127.0.0.1:${_wd_port}/api/version" >/dev/null 2>&1; then
+            if http_probe "http://127.0.0.1:${_wd_port}/api/version" "$WATCHDOG_TIMEOUT"; then
+                _wf=0
+                continue
+            fi
+
+            # 连续两次失败才动手: 服务可能只是短暂繁忙(磁盘操作会阻塞事件循环数十秒),
+            # 一次失败就杀掉会误伤正常运行中的服务。
+            _wf=$((_wf + 1))
+            if [ "$_wf" -lt 2 ]; then
                 continue
             fi
 
             # 无响应: 先请求优雅重启(服务会先停掉所有虚拟机再退出, 退出码 5),
             # 该请求也失败时才强杀进程。
-            if curl -fsS --max-time 8 -X POST \
-                 "http://127.0.0.1:${_wd_port}/api/server/restart" >/dev/null 2>&1; then
+            if http_post "http://127.0.0.1:${_wd_port}/api/server/restart" 5; then
                 echo "[watchdog] server on port ${_wd_port} unresponsive; graceful restart requested"
                 echo "[$(date '+%Y-%m-%d %H:%M:%S')] watchdog: server on port ${_wd_port} unresponsive; graceful restart requested" >> "$GUARD_LOG" 2>/dev/null
                 sleep 5

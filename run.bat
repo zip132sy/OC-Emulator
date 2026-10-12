@@ -10,8 +10,12 @@ REM ============================================================
 set "PATH=%SystemRoot%\System32;%SystemRoot%;%SystemRoot%\System32\Wbem;%SystemRoot%\System32\WindowsPowerShell\v1.0;%PATH%"
 
 REM ============================================================
-REM 守护日志: 记录每次启动 / 崩溃退出 / 卡死重启。
-REM   即使命令行窗口被关闭或输出被滚动掉, 也能事后查看发生了什么。
+REM Guardian log: records every start / crash exit / hung restart.
+REM   Keeps a record even when the console window is closed or the
+REM   output has already scrolled away.
+REM   NOTE: keep lines added here ASCII-only. run.bat is UTF-8 but cmd
+REM   reads batch files with the OEM code page, and a Chinese character
+REM   can swallow the next ASCII byte (^ | etc.) when parsed as DBCS.
 REM ============================================================
 set "GUARD_LOG=%~dp0logs\guardian.log"
 if not exist "%~dp0logs" mkdir "%~dp0logs" >nul 2>nul
@@ -128,24 +132,55 @@ set /a RESTART_COUNT+=1
 echo [%DATE% %TIME%] Starting server (attempt #!RESTART_COUNT!)...
 call :glog "starting server (attempt !RESTART_COUNT!/!MAX_RESTARTS!)"
 
-REM Start watchdog in background to detect hangs.
-REM   看门狗本体在 lib\watchdog.ps1。这里只创建一个"哨兵文件": 守护脚本结束时删掉它,
-REM   看门狗发现哨兵消失就会自行退出。
-REM   端口由 -PortFile 传入 (服务器启动时会把实际端口写进 cache\.server-port),
-REM   因此即使服务器因 8080 被占用换到别的端口, 看门狗也能找到它。
+REM Start a background watchdog that detects a HUNG (not exited) server.
+REM   All logic is inlined here on purpose: shipping a separate .ps1 file is
+REM   unreliable across machines (it can be missing or blocked by policy).
+REM   This writes the watchdog to a temp file and starts a hidden PowerShell.
+REM   1) The port is read from cache\.server-port (written by the server at
+REM      startup), falling back to WATCHDOG_PORT. A hardcoded port silently
+REM      breaks detection once the server auto-switches away from a busy port.
+REM   2) When unresponsive it first asks /api/server/restart for a graceful
+REM      restart (the server stops all VMs first), then force-kills instead.
+REM   3) This script file itself is the sentinel: the guardian deletes it when
+REM      the server exits, so the watchdog quits on its next round.
+REM   REMINDER: cmd eats a single caret in echo lines, so a regex caret must be
+REM   written doubled, and a pipe must be escaped with a caret.
 set "PS_WD=%TEMP%\oc_watchdog.ps1"
-> "%PS_WD%" echo stop
+> "%PS_WD%" echo $dp = %WATCHDOG_PORT%
+>> "%PS_WD%" echo $pf = '%~dp0cache\.server-port'
+>> "%PS_WD%" echo $iv = %WATCHDOG_INTERVAL%
+>> "%PS_WD%" echo $to = %WATCHDOG_TIMEOUT%
+>> "%PS_WD%" echo $sf = '%PS_WD%'
+>> "%PS_WD%" echo $lg = '%~dp0logs\guardian.log'
+>> "%PS_WD%" echo $f = 0
+>> "%PS_WD%" echo while ($true) {
+>> "%PS_WD%" echo   Start-Sleep -Seconds $iv
+>> "%PS_WD%" echo   if (-not (Test-Path $sf)) { break }
+>> "%PS_WD%" echo   $p = $dp
+>> "%PS_WD%" echo   if (Test-Path $pf) { try { $x = (Get-Content $pf -Raw).Trim(); if ($x -match '^^[0-9]+$') { $p = [int]$x } } catch {} }
+>> "%PS_WD%" echo   $h = $false
+>> "%PS_WD%" echo   try { if ((Invoke-WebRequest "http://127.0.0.1:$p/api/version" -UseBasicParsing -TimeoutSec $to).StatusCode -eq 200) { $h = $true } } catch {}
+>> "%PS_WD%" echo   if ($h) { $f = 0; continue }
+>> "%PS_WD%" echo   $f = $f + 1
+>> "%PS_WD%" echo   if ($f -lt 2) { continue }
+>> "%PS_WD%" echo   $g = $false
+>> "%PS_WD%" echo   try { if ((Invoke-WebRequest "http://127.0.0.1:$p/api/server/restart" -Method POST -UseBasicParsing -TimeoutSec 5).StatusCode -eq 200) { $g = $true } } catch {}
+>> "%PS_WD%" echo   if ($g) { Add-Content $lg "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] watchdog: port $p unresponsive, graceful restart requested"; Start-Sleep -Seconds 5; continue }
+>> "%PS_WD%" echo   $o = $null
+>> "%PS_WD%" echo   try { foreach ($l in (netstat -ano ^| Select-String 'LISTENING')) { if ("$l" -match ":$p\s+\S+\s+LISTENING\s+(\d+)") { $o = [int]$Matches[1]; break } } } catch {}
+>> "%PS_WD%" echo   if ($o) { Add-Content $lg "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] watchdog: port $p unresponsive, killed PID $o"; Stop-Process -Id $o -Force -ErrorAction SilentlyContinue } else { Add-Content $lg "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] watchdog: port $p unresponsive (no listening process)" }
+>> "%PS_WD%" echo   Start-Sleep -Seconds 3
+>> "%PS_WD%" echo }
 
-if not exist "%~dp0lib\watchdog.ps1" (
-    echo [WARNING] lib\watchdog.ps1 缺失, 本次不启用"卡死自动重启"；崩溃仍会自动重启。
-    echo           可运行: node lib\repair.js  恢复该文件。
-    call :glog "watchdog script missing, hang-detection disabled"
-    goto :wd_started
+REM Validate the generated script first. A generation failure would fail
+REM silently -- no output and no hang protection -- so make it visible.
+"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -Command "$e = $null; [void][System.Management.Automation.Language.Parser]::ParseFile('%PS_WD%', [ref]$null, [ref]$e); if ($e -and $e.Count) { exit 1 } else { exit 0 }" >nul 2>&1
+if !ERRORLEVEL! neq 0 (
+    echo [WARNING] watchdog script generation failed. Hang auto-restart is disabled for this run.
+    call :glog "watchdog script generation/parse failed"
+) else (
+    start /b "" "%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "%PS_WD%" >nul 2>&1
 )
-
-start /b "" "%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "%~dp0lib\watchdog.ps1" -Port %WATCHDOG_PORT% -PortFile "%~dp0cache\.server-port" -Interval %WATCHDOG_INTERVAL% -Timeout %WATCHDOG_TIMEOUT% -Sentinel "%PS_WD%" -LogFile "%~dp0logs\guardian.log" >nul 2>&1
-
-:wd_started
 
 REM Uptime marker: the server creates this file once it has been up for 60s.
 REM The guardian uses its presence to tell "the last run was healthy" and reset
@@ -171,8 +206,8 @@ echo.
 echo [%DATE% %TIME%] Server exited with code !EXIT_CODE!.
 call :glog "server exited with code !EXIT_CODE!"
 if "!EXIT_CODE!" neq "0" if "!EXIT_CODE!" neq "3" if "!EXIT_CODE!" neq "4" if "!EXIT_CODE!" neq "5" (
-    echo [WARNING] 服务异常退出: 崩溃, 或被看门狗判定为卡死后重启。
-    echo           详细记录: logs\guardian.log
+    echo [WARNING] server exited abnormally. It crashed, or the watchdog restarted it after a hang.
+    echo           details: logs\guardian.log
     call :glog "abnormal exit detected (code !EXIT_CODE!)"
 )
 
@@ -216,8 +251,8 @@ if "!RAN_LONG!"=="1" (
 if !RESTART_COUNT! geq !MAX_RESTARTS! (
     echo [ERROR] Max restarts reached: %MAX_RESTARTS%. Giving up.
     call :glog "max restarts (%MAX_RESTARTS%) reached, giving up"
-    echo 服务反复启动失败, 已放弃自动重启。
-    echo 请查看 logs\guardian.log, 处理完之后再重新运行本脚本。
+    echo server kept failing to start; auto-restart gave up.
+    echo see logs\guardian.log, then run this script again.
     call :ocsleep 20
     goto :end
 )
@@ -363,10 +398,10 @@ if exist "%_dl_part%" del "%_dl_part%" >nul 2>nul
 exit /b 1
 
 REM ------------------------------------------------------------
-REM 子程序: 写守护日志 (logs\guardian.log)
-REM   用法: call :glog "message"
-REM   注意 %~1 后面的空格: 避免消息以数字结尾时被 cmd 当成
-REM   文件描述符重定向 (例如 "code 2>> file" 会把输出写到 stderr)。
+REM Subroutine: append a line to the guardian log (logs\guardian.log)
+REM   Usage: call :glog "message"
+REM   Keep the space after %~1: without it a message that ends in a digit
+REM   becomes a file-descriptor redirect (e.g. "code 2>> file").
 REM ------------------------------------------------------------
 :glog
 if defined GUARD_LOG echo [%DATE% %TIME%] %~1 >> "%GUARD_LOG%" 2>nul
