@@ -1695,6 +1695,17 @@ async function main() {
     logger.log(`  Press Ctrl+C to stop.`);
     logger.log(`===============================================\n`);
 
+    // 把实际监听端口写入固定文件, 供 run.bat / run.sh 的外部看门狗读取。
+    // 看门狗若把端口写死: 当配置端口被占用导致服务器自动换到 8081 时, 它仍监视 8080,
+    // 检查失败后直接退出 —— 结果就是服务真的卡死时既不会被杀掉也不会被重启,
+    // 命令行上也不会有任何提示。写入实际端口后看门狗总能找到正确的服务。
+    try {
+      const portFile = path.join(PROJECT_DIR, 'cache', '.server-port');
+      fs.mkdirSync(path.dirname(portFile), { recursive: true });
+      fs.writeFileSync(portFile, String(actualPort), 'utf8');
+      process.on('exit', () => { try { fs.unlinkSync(portFile); } catch (e) { /* 忽略 */ } });
+    } catch (e) { /* 端口文件写入失败不影响服务运行 */ }
+
     // 应用"命令行窗口显示"设置 (关闭时启动即隐藏; 可在前端设置里重新打开)
     if (settings.showConsole === false) {
       setConsoleVisible(false).catch(() => {});

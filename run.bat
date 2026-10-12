@@ -9,6 +9,13 @@ REM    On some systems (Server Core, minimal installs), these may be missing.
 REM ============================================================
 set "PATH=%SystemRoot%\System32;%SystemRoot%;%SystemRoot%\System32\Wbem;%SystemRoot%\System32\WindowsPowerShell\v1.0;%PATH%"
 
+REM ============================================================
+REM 守护日志: 记录每次启动 / 崩溃退出 / 卡死重启。
+REM   即使命令行窗口被关闭或输出被滚动掉, 也能事后查看发生了什么。
+REM ============================================================
+set "GUARD_LOG=%~dp0logs\guardian.log"
+if not exist "%~dp0logs" mkdir "%~dp0logs" >nul 2>nul
+
 echo ===============================================
 echo   OC Emulator - Web Control Panel v2.0
 echo ===============================================
@@ -119,32 +126,26 @@ echo.
 :guardian_loop
 set /a RESTART_COUNT+=1
 echo [%DATE% %TIME%] Starting server (attempt #!RESTART_COUNT!)...
+call :glog "starting server (attempt !RESTART_COUNT!/!MAX_RESTARTS!)"
 
-REM Start watchdog in background to detect hangs
+REM Start watchdog in background to detect hangs.
+REM   看门狗本体在 lib\watchdog.ps1。这里只创建一个"哨兵文件": 守护脚本结束时删掉它,
+REM   看门狗发现哨兵消失就会自行退出。
+REM   端口由 -PortFile 传入 (服务器启动时会把实际端口写进 cache\.server-port),
+REM   因此即使服务器因 8080 被占用换到别的端口, 看门狗也能找到它。
 set "PS_WD=%TEMP%\oc_watchdog.ps1"
-echo $port = %WATCHDOG_PORT% > "%PS_WD%"
-echo $interval = %WATCHDOG_INTERVAL% >> "%PS_WD%"
-echo $timeout = %WATCHDOG_TIMEOUT% >> "%PS_WD%"
-echo while ($true) { >> "%PS_WD%"
-echo   Start-Sleep -Seconds $interval >> "%PS_WD%"
-echo   if (-not (Test-Path '%PS_WD%')) { break } >> "%PS_WD%"
-echo   try { >> "%PS_WD%"
-echo     $r = Invoke-WebRequest -Uri "http://127.0.0.1:$port/api/version" -UseBasicParsing -TimeoutSec $timeout >> "%PS_WD%"
-echo     if ($r.StatusCode -ne 200) { throw "bad status" } >> "%PS_WD%"
-echo   } catch { >> "%PS_WD%"
-echo     $netstat = netstat -ano ^| Select-String "LISTENING" >> "%PS_WD%"
-echo     foreach ($line in $netstat) { >> "%PS_WD%"
-echo       if ($line -match ":$port\s+.*LISTENING\s+(\d+)") { >> "%PS_WD%"
-echo         Stop-Process -Id $Matches[1] -Force -ErrorAction SilentlyContinue >> "%PS_WD%"
-echo         break >> "%PS_WD%"
-echo       } >> "%PS_WD%"
-echo     } >> "%PS_WD%"
-echo     break >> "%PS_WD%"
-echo   } >> "%PS_WD%"
-echo } >> "%PS_WD%"
+> "%PS_WD%" echo stop
 
-REM Start watchdog in background
-start /b "" "%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "%PS_WD%" >nul 2>&1
+if not exist "%~dp0lib\watchdog.ps1" (
+    echo [WARNING] lib\watchdog.ps1 缺失, 本次不启用"卡死自动重启"；崩溃仍会自动重启。
+    echo           可运行: node lib\repair.js  恢复该文件。
+    call :glog "watchdog script missing, hang-detection disabled"
+    goto :wd_started
+)
+
+start /b "" "%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "%~dp0lib\watchdog.ps1" -Port %WATCHDOG_PORT% -PortFile "%~dp0cache\.server-port" -Interval %WATCHDOG_INTERVAL% -Timeout %WATCHDOG_TIMEOUT% -Sentinel "%PS_WD%" -LogFile "%~dp0logs\guardian.log" >nul 2>&1
+
+:wd_started
 
 REM Uptime marker: the server creates this file once it has been up for 60s.
 REM The guardian uses its presence to tell "the last run was healthy" and reset
@@ -168,6 +169,12 @@ del "%PS_WD%" >nul 2>nul
 REM Server exited (crash or normal stop or killed by watchdog)
 echo.
 echo [%DATE% %TIME%] Server exited with code !EXIT_CODE!.
+call :glog "server exited with code !EXIT_CODE!"
+if "!EXIT_CODE!" neq "0" if "!EXIT_CODE!" neq "3" if "!EXIT_CODE!" neq "4" if "!EXIT_CODE!" neq "5" (
+    echo [WARNING] 服务异常退出: 崩溃, 或被看门狗判定为卡死后重启。
+    echo           详细记录: logs\guardian.log
+    call :glog "abnormal exit detected (code !EXIT_CODE!)"
+)
 
 REM Exit code 3 = another instance already running.
 REM Do NOT restart: otherwise we keep spawning a duplicate instance.
@@ -175,7 +182,8 @@ if "!EXIT_CODE!"=="3" (
     echo.
     echo [INFO] An OC Emulator instance is already running.
     echo        Closing this window; please use that instance page.
-    call :ocsleep 5
+    call :glog "another instance already running, exiting"
+    call :ocsleep 10
     goto :end
 )
 
@@ -207,12 +215,15 @@ if "!RAN_LONG!"=="1" (
 
 if !RESTART_COUNT! geq !MAX_RESTARTS! (
     echo [ERROR] Max restarts reached: %MAX_RESTARTS%. Giving up.
-    echo Press any key to close this window...
-    call :ocsleep 15
+    call :glog "max restarts (%MAX_RESTARTS%) reached, giving up"
+    echo 服务反复启动失败, 已放弃自动重启。
+    echo 请查看 logs\guardian.log, 处理完之后再重新运行本脚本。
+    call :ocsleep 20
     goto :end
 )
 
 echo [%DATE% %TIME%] Restarting in !BACKOFF_SECONDS!s (attempt !RESTART_COUNT!/!MAX_RESTARTS!)...
+call :glog "restarting in !BACKOFF_SECONDS!s (attempt !RESTART_COUNT!/!MAX_RESTARTS!)"
 echo.
 call :ocsleep !BACKOFF_SECONDS!
 
@@ -350,6 +361,16 @@ if "!_dl_ok!"=="1" (
 )
 if exist "%_dl_part%" del "%_dl_part%" >nul 2>nul
 exit /b 1
+
+REM ------------------------------------------------------------
+REM 子程序: 写守护日志 (logs\guardian.log)
+REM   用法: call :glog "message"
+REM   注意 %~1 后面的空格: 避免消息以数字结尾时被 cmd 当成
+REM   文件描述符重定向 (例如 "code 2>> file" 会把输出写到 stderr)。
+REM ------------------------------------------------------------
+:glog
+if defined GUARD_LOG echo [%DATE% %TIME%] %~1 >> "%GUARD_LOG%" 2>nul
+goto :eof
 
 REM ------------------------------------------------------------
 REM Robust delay helper (seconds). Works even when stdin is not

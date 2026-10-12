@@ -6,6 +6,14 @@ echo "  OC Emulator - Web Control Panel v2.0"
 echo "==============================================="
 echo ""
 
+# ------------------------------------------------------------
+# 守护日志: 记录每次启动 / 崩溃退出 / 卡死重启。
+#   即使终端输出被滚动掉或窗口被关闭, 也能事后查看发生了什么。
+# ------------------------------------------------------------
+GUARD_LOG="$(pwd)/logs/guardian.log"
+mkdir -p "$(dirname "$GUARD_LOG")" 2>/dev/null
+glog() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$GUARD_LOG" 2>/dev/null || true; }
+
 # ============================================================
 # 1. Dependencies: Node.js
 #    - not installed        -> install automatically
@@ -202,6 +210,10 @@ RESTART_COUNT=0
 MAX_RESTARTS=10
 BACKOFF_SECONDS=2
 WATCHDOG_PORT=8080
+# 服务器启动时会把"实际监听端口"写到这个文件; 配置端口(8080)被占用时服务器会自动
+# 换到 8081 等端口, 看门狗若只认 8080 就会监视错误端口、检查失败后直接退出 ——
+# 结果是服务真的卡死时反而没人管。这里始终以文件里的实际端口为准。
+WATCHDOG_PORT_FILE="$(pwd)/cache/.server-port"
 WATCHDOG_INTERVAL=30
 WATCHDOG_TIMEOUT=10
 
@@ -236,15 +248,41 @@ start_watchdog() {
             sleep "$WATCHDOG_INTERVAL"
             # Main loop finished -> watchdog stops too
             [ -f "$WATCHDOG_SENTINEL" ] || exit 0
-            if ! curl -fsS --max-time "$WATCHDOG_TIMEOUT" \
-                 "http://127.0.0.1:${WATCHDOG_PORT}/api/version" >/dev/null 2>&1; then
-                _hung_pid="$(find_pid_on_port "$WATCHDOG_PORT")"
-                if [ -n "$_hung_pid" ]; then
-                    echo "[watchdog] server not responding, killing PID ${_hung_pid}"
-                    kill -9 "$_hung_pid" 2>/dev/null
-                fi
-                exit 0
+
+            # 端口以服务器写入的实际端口为准, 读不到才回退到配置端口
+            _wd_port="$WATCHDOG_PORT"
+            if [ -f "$WATCHDOG_PORT_FILE" ]; then
+                _p="$(tr -d '[:space:]' < "$WATCHDOG_PORT_FILE" 2>/dev/null)"
+                case "$_p" in
+                    ''|*[!0-9]*) : ;;
+                    *) _wd_port="$_p" ;;
+                esac
             fi
+
+            if curl -fsS --max-time "$WATCHDOG_TIMEOUT" \
+                 "http://127.0.0.1:${_wd_port}/api/version" >/dev/null 2>&1; then
+                continue
+            fi
+
+            # 无响应: 先请求优雅重启(服务会先停掉所有虚拟机再退出, 退出码 5),
+            # 该请求也失败时才强杀进程。
+            if curl -fsS --max-time 8 -X POST \
+                 "http://127.0.0.1:${_wd_port}/api/server/restart" >/dev/null 2>&1; then
+                echo "[watchdog] server on port ${_wd_port} unresponsive; graceful restart requested"
+                echo "[$(date '+%Y-%m-%d %H:%M:%S')] watchdog: server on port ${_wd_port} unresponsive; graceful restart requested" >> "$GUARD_LOG" 2>/dev/null
+                sleep 5
+                continue
+            fi
+
+            _hung_pid="$(find_pid_on_port "$_wd_port")"
+            if [ -n "$_hung_pid" ]; then
+                echo "[watchdog] server not responding, killing PID ${_hung_pid}"
+                echo "[$(date '+%Y-%m-%d %H:%M:%S')] watchdog: server on port ${_wd_port} unresponsive, killed PID ${_hung_pid}" >> "$GUARD_LOG" 2>/dev/null
+                kill -9 "$_hung_pid" 2>/dev/null
+            else
+                echo "[$(date '+%Y-%m-%d %H:%M:%S')] watchdog: server on port ${_wd_port} unresponsive (no listening process found)" >> "$GUARD_LOG" 2>/dev/null
+            fi
+            sleep 3
         done
     ) &
     WATCHDOG_PID=$!
@@ -268,6 +306,7 @@ trap 'echo ""; echo "[INFO] Interrupted, stopping."; stop_watchdog; exit 130' IN
 while true; do
     RESTART_COUNT=$((RESTART_COUNT + 1))
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting server (attempt #${RESTART_COUNT})..."
+    glog "starting server (attempt ${RESTART_COUNT}/${MAX_RESTARTS})"
     start_watchdog
 
     # 稳定运行标记: 服务器启动满 60 秒后会创建该文件, 守护脚本据此判断
@@ -288,6 +327,15 @@ while true; do
 
     echo ""
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] Server exited with code ${EXIT_CODE}."
+    glog "server exited with code ${EXIT_CODE}"
+    case "$EXIT_CODE" in
+        0|3|4|5) : ;;
+        *)
+            echo "[WARNING] 服务异常退出 (崩溃, 或被看门狗判定为卡死后重启)。"
+            echo "          详细记录: logs/guardian.log"
+            glog "abnormal exit detected (code ${EXIT_CODE})"
+            ;;
+    esac
 
     # Exit code 3 = another instance is already running (single-instance guard).
     # Do NOT restart: otherwise we keep spawning a duplicate instance and the
@@ -295,6 +343,7 @@ while true; do
     if [ "$EXIT_CODE" -eq 3 ]; then
         echo "[INFO] An OC Emulator instance is already running. Exiting."
         echo "       Please use the browser page of that instance."
+        glog "another instance already running, exiting"
         exit 0
     fi
 
@@ -328,6 +377,8 @@ while true; do
 
     if [ "$RESTART_COUNT" -ge "$MAX_RESTARTS" ]; then
         echo "[ERROR] Max restarts (${MAX_RESTARTS}) reached. Giving up."
+        glog "max restarts (${MAX_RESTARTS}) reached, giving up"
+        echo "服务反复启动失败, 已放弃自动重启。请查看 logs/guardian.log 后手动重新运行本脚本。"
         exit 1
     fi
 
