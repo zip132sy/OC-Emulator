@@ -1717,6 +1717,13 @@ end
 function computer.getBootAddress() return computer._bootAddr end
 function computer.setBootAddress(addr) dlog("setBootAddress:", tostring(addr):sub(1,8)); computer._bootAddr = addr end
 function computer.runlevel() return computer._runlevel end
+-- CPU 架构: 模拟器只提供 Lua 5.3 一种。
+-- MineOS 的"设置 → 系统"用 getArchitectures() 列出可选架构、用 getArchitecture()
+-- 高亮当前架构, 缺失时该模块会以 "attempt to call a nil value" 报错。
+local ARCHITECTURE_NAME = "Lua 5.3"
+function computer.getArchitectures() return { ARCHITECTURE_NAME } end
+function computer.getArchitecture() return ARCHITECTURE_NAME end
+function computer.setArchitecture(arch) return arch == ARCHITECTURE_NAME end
 function computer.users() return "admin" end
 function computer.addUser() return true end
 function computer.removeUser() return true end
