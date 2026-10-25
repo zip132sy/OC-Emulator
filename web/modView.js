@@ -188,6 +188,7 @@ const ModView = (() => {
       efiEl: $('[data-role="efi"]', pane),
       raf: 0,
       timer: null,
+      reactorTimer: null,
       resizeObserver: null,
       addrFlashTimer: null,
     };
@@ -692,17 +693,73 @@ const ModView = (() => {
       $$('.mod-pane', view.pane).forEach(p => p.classList.toggle('active', p.dataset.pane === 'reactor'));
     }
 
-    if (!isReactor || !window.ReactorView) return;
+    if (!isReactor) {
+      stopReactorPolling(view);
+      return;
+    }
+
+    // 运行中每秒拉一次运行时数据, 让热量 / 发电等数值实时变化
+    ensureReactorPolling(view, view.runtimeState === 'running');
+
+    if (!window.ReactorView) return;
     const data = view.meta && view.meta.reactor;
     const infoRoot = $('[data-role="reactor-info"]', view.pane);
     if (!data || !infoRoot) return;
 
-    // 布局没变时不重建 DOM, 避免轮询打断格位选择
+    // 布局或运行块结构变化时重建面板; 仅数值变化时原地更新
     const cfg = data.config || {};
-    const sig = JSON.stringify([cfg.columns, cfg.active, cfg.grid]);
-    if (infoRoot.dataset.sig === sig) return;
-    infoRoot.dataset.sig = sig;
-    ReactorView.renderInfo(infoRoot, data);
+    const runtime = data.runtime || null;
+    const layoutSig = JSON.stringify([cfg.columns, cfg.active, cfg.grid, !!runtime]);
+    if (infoRoot.dataset.layoutSig !== layoutSig) {
+      infoRoot.dataset.layoutSig = layoutSig;
+      ReactorView.renderInfo(infoRoot, data);
+      infoRoot.dataset.runtimeSig = runtimeSig(runtime);
+      bindReactorActions(infoRoot, view);
+      return;
+    }
+    const sig = runtimeSig(runtime);
+    if (infoRoot.dataset.runtimeSig !== sig) {
+      infoRoot.dataset.runtimeSig = sig;
+      ReactorView.updateInfo(infoRoot, data);
+    }
+  }
+
+  function runtimeSig(runtime) {
+    if (!runtime) return '';
+    return [runtime.running ? 1 : 0, runtime.elapsed, Math.round(runtime.hullHeat),
+      Math.round(runtime.remainingCapacity || 0), Math.round(runtime.generatedEu || 0), runtime.status].join('|');
+  }
+
+  // 复位堆芯: 相当于更换冷却单元并把堆芯热量清零
+  function bindReactorActions(infoRoot, view) {
+    const btn = infoRoot.querySelector('[data-role="reset-core"]');
+    if (!btn) return;
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      try {
+        const r = await App.api(`mods/${encodeURIComponent(view.name)}/reactor`, { method: 'POST' });
+        if (r && r.error) throw new Error(r.error);
+        if (window.App && App.setStatus) App.setStatus(T('reactor.info.reset-done', '堆芯已复位'));
+        reload(view.name);
+      } catch (e) {
+        appendLog(view.name, { ts: Date.now(), level: 'error', msg: `${T('reactor.info.reset-failed', '复位堆芯失败')}: ${e.message}` });
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  }
+
+  function ensureReactorPolling(view, active) {
+    if (!active) return stopReactorPolling(view);
+    if (view.reactorTimer) return;
+    view.reactorTimer = setInterval(() => reload(view.name), 1000);
+  }
+
+  function stopReactorPolling(view) {
+    if (view.reactorTimer) {
+      clearInterval(view.reactorTimer);
+      view.reactorTimer = null;
+    }
   }
 
   function updateToolbar(view) {
@@ -1255,6 +1312,7 @@ const ModView = (() => {
     const view = views.get(modName);
     if (!view) return;
     if (view.timer) clearInterval(view.timer);
+    stopReactorPolling(view);
     if (view.addrFlashTimer) clearTimeout(view.addrFlashTimer);
     if (view.resizeObserver) view.resizeObserver.disconnect();
     views.delete(modName);

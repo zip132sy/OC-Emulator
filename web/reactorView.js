@@ -225,6 +225,21 @@ const ReactorView = (() => {
     return `${s}s`;
   }
 
+  function formatDuration(seconds) {
+    const total = Math.max(0, Math.floor(Number(seconds) || 0));
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const s = total % 60;
+    const mm = String(m).padStart(2, '0');
+    const ss = String(s).padStart(2, '0');
+    return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+  }
+
+  // 运行状态优先于布局推算的状态
+  function effectiveStatus(stats, runtime) {
+    return runtime && runtime.running ? runtime.status : stats.status;
+  }
+
   // 单个格子的信息文本 (配置 GUI 的 tooltip 与 2D 面板的明细共用)
   function cellSummary(parts, cell) {
     if (!cell) return T('reactor.cell-empty', '空槽');
@@ -588,11 +603,82 @@ const ReactorView = (() => {
   // ============================================================
   // 只读 2D 面板: 每个格子的详细信息 (设备页「反应堆」标签)
   // ============================================================
+  // 运行中才显示: 堆芯热量 / 剩余吸热 / 累计发电 / 运行时长
+  function runtimeBlockHTML(runtime) {
+    if (!runtime) return '';
+    const hullPct = Math.round(Math.max(0, Math.min(1, runtime.hullRatio || 0)) * 100);
+    const capPct = Math.round(Math.max(0, Math.min(1, runtime.capacityRatio || 0)) * 100);
+    return `
+      <div class="ic2-runtime" data-role="runtime">
+        <div class="ic2-rt-row">
+          <span>${escapeHTML(T('reactor.info.hull-heat', '堆芯热量'))}</span>
+          <div class="ic2-bar"><i data-info="hull-bar" style="width:${hullPct}%"></i></div>
+          <b data-info="hull-text">${fmtNum(Math.round(runtime.hullHeat))} / ${fmtNum(runtime.hullHeatCapacity)}</b>
+        </div>
+        <div class="ic2-rt-row">
+          <span>${escapeHTML(T('reactor.info.remaining', '剩余吸热'))}</span>
+          <div class="ic2-bar ok"><i data-info="cap-bar" style="width:${capPct}%"></i></div>
+          <b data-info="cap-text">${fmtNum(runtime.remainingCapacity)} / ${fmtNum(runtime.totalCapacity)}</b>
+        </div>
+        <div class="ic2-rt-row ic2-rt-stats">
+          <span>${escapeHTML(T('reactor.info.generated', '累计发电'))}</span><b data-info="generated">${fmtNum(Math.round(runtime.generatedEu))} EU</b>
+          <span>${escapeHTML(T('reactor.info.elapsed', '运行时长'))}</span><b data-info="elapsed">${formatDuration(runtime.elapsed)}</b>
+          <span>${escapeHTML(T('reactor.info.absorbed-total', '已吸收热量'))}</span><b data-info="absorbed">${fmtNum(Math.round(runtime.absorbed))}</b>
+        </div>
+      </div>`;
+  }
+
+  // 只更新随运行变化的数值, 不重建 DOM (保留格位选择与滚动位置)
+  function updateInfo(root, data) {
+    if (!root) return null;
+    const parts = partsFrom(data && data.components);
+    const config = normalizeConfig(data && data.config, parts);
+    const stats = computeStats(config, parts);
+    const runtime = (data && data.runtime) || null;
+    const status = effectiveStatus(stats, runtime);
+
+    const statusEl = root.querySelector('[data-role="status"]');
+    if (statusEl) {
+      statusEl.className = `ic2-status ${status}`;
+      statusEl.textContent = T('reactor.status.' + status, status);
+    }
+
+    const set = (key, value) => {
+      const el = root.querySelector(`[data-info="${key}"]`);
+      if (el) el.textContent = value;
+    };
+    const setBar = (key, ratio) => {
+      const el = root.querySelector(`[data-info="${key}"]`);
+      if (!el) return;
+      const pct = Math.max(0, Math.min(1, Number(ratio) || 0)) * 100;
+      el.style.width = pct.toFixed(1) + '%';
+    };
+
+    set('eu', String(stats.euPerTick));
+    set('heat', String(stats.heatPerTick));
+    set('capacity', fmtNum(stats.effectiveHeatCapacity));
+    set('safe', formatSafeTime(runtime && runtime.running ? runtime.safeSeconds : stats.safeSeconds));
+    set('running', runtime && runtime.running ? T('reactor.info.on', '是') : T('reactor.info.off', '否'));
+
+    if (runtime) {
+      set('hull-text', `${fmtNum(Math.round(runtime.hullHeat))} / ${fmtNum(runtime.hullHeatCapacity)}`);
+      set('cap-text', `${fmtNum(runtime.remainingCapacity)} / ${fmtNum(runtime.totalCapacity)}`);
+      set('generated', `${fmtNum(Math.round(runtime.generatedEu))} EU`);
+      set('elapsed', formatDuration(runtime.elapsed));
+      set('absorbed', fmtNum(Math.round(runtime.absorbed)));
+      setBar('hull-bar', runtime.hullRatio);
+      setBar('cap-bar', runtime.capacityRatio);
+    }
+    return stats;
+  }
+
   function renderInfo(root, data) {
     if (!root) return null;
     const parts = partsFrom(data && data.components);
     const config = normalizeConfig(data && data.config, parts);
     const stats = computeStats(config, parts);
+    const runtime = (data && data.runtime) || null;
+    const status = effectiveStatus(stats, runtime);
     const byPos = new Map(stats.cells.map(cell => [`${cell.r}:${cell.c}`, cell]));
 
     const prevSel = root.__ic2Sel || null;
@@ -604,17 +690,21 @@ const ReactorView = (() => {
         <div class="ic2-info-head">
           <div class="ic2-title">☢ ${escapeHTML(T('reactor.info.title', '反应堆状态'))}</div>
           <div class="ic2-sub">${escapeHTML(T('reactor.subtitle', 'IC2 反应堆'))} · ${stats.columns} × ${stats.rows}</div>
-          <div class="ic2-status ${stats.status}">${escapeHTML(T('reactor.status.' + stats.status, stats.status))}</div>
+          <div class="ic2-status ${status}" data-role="status">${escapeHTML(T('reactor.status.' + status, status))}</div>
         </div>
         <div class="ic2-info-gauges">
-          <div class="ic2-info-gauge"><span>${escapeHTML(T('reactor.eu', 'EU/t'))}</span><b>${stats.euPerTick}</b></div>
-          <div class="ic2-info-gauge"><span>${escapeHTML(T('reactor.heat', '热量/t'))}</span><b>${stats.heatPerTick}</b></div>
-          <div class="ic2-info-gauge"><span>${escapeHTML(T('reactor.heat-capacity', '吸热容量'))}</span><b>${fmtNum(stats.effectiveHeatCapacity)}</b></div>
-          <div class="ic2-info-gauge"><span>${escapeHTML(T('reactor.safe-time', '安全时间'))}</span><b>${formatSafeTime(stats.safeSeconds)}</b></div>
+          <div class="ic2-info-gauge"><span>${escapeHTML(T('reactor.eu', 'EU/t'))}</span><b data-info="eu">${stats.euPerTick}</b></div>
+          <div class="ic2-info-gauge"><span>${escapeHTML(T('reactor.heat', '热量/t'))}</span><b data-info="heat">${stats.heatPerTick}</b></div>
+          <div class="ic2-info-gauge"><span>${escapeHTML(T('reactor.heat-capacity', '吸热容量'))}</span><b data-info="capacity">${fmtNum(stats.effectiveHeatCapacity)}</b></div>
+          <div class="ic2-info-gauge"><span>${escapeHTML(T('reactor.safe-time', '安全时间'))}</span><b data-info="safe">${formatSafeTime(runtime && runtime.running ? runtime.safeSeconds : stats.safeSeconds)}</b></div>
           <div class="ic2-info-gauge"><span>${escapeHTML(T('reactor.info.fuel-rods', '燃料棒'))}</span><b>${stats.fuelRods}</b></div>
           <div class="ic2-info-gauge"><span>${escapeHTML(T('reactor.info.used', '占用'))}</span><b>${stats.usedSlots} / ${stats.totalSlots}</b></div>
           <div class="ic2-info-gauge"><span>${escapeHTML(T('reactor.info.hull', '外壳热量'))}</span><b>${fmtNum(stats.hullHeatCapacity)}</b></div>
-          <div class="ic2-info-gauge"><span>${escapeHTML(T('reactor.active', '反应堆运行'))}</span><b>${stats.active ? T('reactor.info.on', '是') : T('reactor.info.off', '否')}</b></div>
+          <div class="ic2-info-gauge"><span>${escapeHTML(T('reactor.active', '反应堆运行'))}</span><b data-info="running">${runtime && runtime.running ? T('reactor.info.on', '是') : T('reactor.info.off', '否')}</b></div>
+        </div>
+        ${runtimeBlockHTML(runtime)}
+        <div class="ic2-info-actions">
+          <button type="button" class="ic2-tool-btn" data-role="reset-core">${escapeHTML(T('reactor.info.reset-core', '复位堆芯'))}</button>
         </div>
         <div class="ic2-info-body">
           <div class="ic2-info-grid-wrap">
@@ -762,7 +852,7 @@ const ReactorView = (() => {
     return id || null;
   }
 
-  return { render, renderInfo, partsFrom, computeStats, formatSafeTime };
+  return { render, renderInfo, updateInfo, partsFrom, computeStats, formatSafeTime };
 })();
 
 window.ReactorView = ReactorView;

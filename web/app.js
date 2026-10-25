@@ -12,6 +12,7 @@ const App = (() => {
     wsReconnectTimer: null,
     wsSubscribedVm: null,
     wsSubscribedMod: null,
+    logLevel: 'error',   // full | error | off, 与服务端设置同步
     sidebarMode: 'vm',  // 'vm' | 'mod'
     _modsSig: '',       // Mods 列表签名, 避免轮询时无意义重建 DOM
     tabPanes: new Map(), // tabId -> HTMLElement (缓存 pane 避免切换时重建)
@@ -70,6 +71,17 @@ const App = (() => {
       badge.textContent = 'Lua: 错误';
       badge.className = 'brand-sub err';
       setStatus('Lua 检测请求失败: ' + e.message, 'err');
+    }
+  }
+
+  // ---------- 日志级别 ----------
+  // 前端日志与虚拟机日志共用同一个设置: full / error / off
+  async function loadLogLevel() {
+    try {
+      const s = await api('settings');
+      if (s && s.logLevel) state.logLevel = s.logLevel;
+    } catch {
+      /* 读取失败时保持默认 error */
     }
   }
 
@@ -250,6 +262,7 @@ const App = (() => {
             try {
               const r = await api('settings', { method: 'PUT', body: { luaExe: newPath, logLevel: newLogLevel } });
               if (r && r.ok) {
+                state.logLevel = newLogLevel;
                 Modal.close();
                 setStatus(I18N.t('settings.saved'));
                 checkLua();
@@ -1200,6 +1213,7 @@ const App = (() => {
     }
     bindMenu();
     checkLua();
+    loadLogLevel();
     refreshVMs();
     refreshMods();
     wsConnect();

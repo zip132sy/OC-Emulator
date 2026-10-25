@@ -1809,6 +1809,46 @@ html, body {
   border: 1px solid #777;
 }
 .ic2-info-gauge b { color: #111; font-family: var(--font-mono); }
+.ic2-runtime {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 8px;
+  padding: 6px 8px;
+  background: rgba(0, 0, 0, 0.06);
+  border: 1px solid #8f8f8f;
+}
+.ic2-rt-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: #333;
+}
+.ic2-rt-row > b { font-family: var(--font-mono); color: #111; }
+.ic2-rt-stats { flex-wrap: wrap; gap: 10px; }
+.ic2-bar {
+  flex: 1 1 auto;
+  min-width: 60px;
+  height: 8px;
+  background: #8a8a8a;
+  border: 1px solid #5a5a5a;
+  overflow: hidden;
+}
+.ic2-bar > i {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: #c05a5a;
+  transition: width 0.2s linear;
+}
+.ic2-bar.ok > i { background: #5f9e5f; }
+.ic2-info-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 8px;
+}
 .ic2-info-body {
   display: flex;
   align-items: flex-start;

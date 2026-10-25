@@ -671,6 +671,8 @@ async function handleApi(req, res, body) {
               const patch = JSON.parse(body || '{}');
               return json(res, modsManager.saveReactor(modName, patch));
             }
+            // POST = 复位堆芯 (更换冷却单元, 清空堆芯热量)
+            if (method === 'POST') return json(res, modsManager.resetReactor(modName));
           } catch (e) {
             return json(res, { error: e.message }, 400);
           }

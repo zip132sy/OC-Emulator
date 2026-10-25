@@ -121,6 +121,12 @@ local function elog(msg)
   _stderr:write("[emulator] " .. msg .. "\n")
 end
 
+-- 常规信息日志 (仅 full 级别输出): 渲染帧、输入事件等排查用信息
+local function ilog(msg)
+  if logLevel ~= "full" then return end
+  _stderr:write("[emulator] " .. msg .. "\n")
+end
+
 -- Lua 5.5 移除了 bit32
 if not _G.bit32 then
   bit32 = {}
@@ -1329,7 +1335,7 @@ local modemAddr = nil
 local function pushSignal(name, ...)
   table.insert(signalQueue, {name, ...})
   if name == "scroll" then
-    elog("pushSignal: scroll queueSize=" .. #signalQueue .. " x=" .. tostring(select(2, ...)) .. " y=" .. tostring(select(3, ...)) .. " delta=" .. tostring(select(4, ...)))
+    ilog("pushSignal: scroll queueSize=" .. #signalQueue .. " x=" .. tostring(select(2, ...)) .. " y=" .. tostring(select(3, ...)) .. " delta=" .. tostring(select(4, ...)))
   end
 end
 
@@ -1410,12 +1416,17 @@ local function dispatchServerMessage(msg)
       pushSignal(ev, screenAddr, mx, my, msg.btn or 0, "player")
     elseif ev == "scroll" then
       -- OC scroll 信号: scroll(address, x, y, direction, playerName)
-      if not screen then return end
+      if not screen then
+        ilog("INPUT: scroll ignored (screen not ready)")
+        return
+      end
       local sx, sy = tonumber(msg.x) or 1, tonumber(msg.y) or 1
       -- 滚轮只需要"光标落在哪个字符格", 不需要亚格精度; 而且不论精确模式是否
       -- 开启, 传整数格坐标都能被正确命中 (MineOS 用 math.ceil 换算回格)。
       -- 因此这里有意不走 screenInputCoords, 避免精确模式下的坐标空间差异
       -- 使命中判定失败。
+      ilog("INPUT: scroll x=" .. tostring(sx) .. " y=" .. tostring(sy)
+        .. " delta=" .. tostring(msg.delta or 1) .. " precise=" .. tostring(screen._precise))
       pushSignal("scroll", screenAddr, sx, sy, msg.delta or 1, "player")
     elseif ev == "clipboard" then
       pushSignal("clipboard", keyboardAddr, msg.text or "")
@@ -1541,7 +1552,7 @@ local function pullSignal(timeout)
     local sig = table.remove(signalQueue, 1)
     dlog("pullSignal: from queue:", sig[1], "code:", tostring(sig[4]))
     if sig[1] == "scroll" then
-      elog("pullSignal: scroll x=" .. tostring(sig[3]) .. " y=" .. tostring(sig[4]) .. " delta=" .. tostring(sig[5]) .. " queueSize=" .. #signalQueue)
+      ilog("pullSignal: scroll x=" .. tostring(sig[3]) .. " y=" .. tostring(sig[4]) .. " delta=" .. tostring(sig[5]) .. " queueSize=" .. #signalQueue)
     end
     return table.unpack(sig)
   end
@@ -1604,7 +1615,7 @@ local function pullSignal(timeout)
         flushRender()
         local sig = table.remove(signalQueue, 1)
         if sig[1] == "scroll" then
-          elog("pullSignal(loop): scroll x=" .. tostring(sig[3]) .. " y=" .. tostring(sig[4]) .. " delta=" .. tostring(sig[5]) .. " queueSize=" .. #signalQueue)
+          ilog("pullSignal(loop): scroll x=" .. tostring(sig[3]) .. " y=" .. tostring(sig[4]) .. " delta=" .. tostring(sig[5]) .. " queueSize=" .. #signalQueue)
         end
         return table.unpack(sig)
       end
@@ -1858,6 +1869,7 @@ local function sendScreenUpdate()
     dirtyMap = {}
     dirtyCount = 0
     renderScheduled = false
+    ilog("render: full " .. Screen.width .. "x" .. Screen.height)
   elseif dirtyCount > 0 then
     -- 收集所有脏单元格
     local dirty = {}
@@ -1875,6 +1887,7 @@ local function sendScreenUpdate()
       dirty = dirty,
       cursor = { x = screen._cursorX, y = screen._cursorY, blink = screen._cursorBlink },
     })
+    ilog("render: dirty=" .. (idx - 1) .. " " .. Screen.width .. "x" .. Screen.height)
     dirtyMap = {}
     dirtyCount = 0
     renderScheduled = false

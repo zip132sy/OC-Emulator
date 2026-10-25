@@ -115,6 +115,28 @@ const Console = (() => {
   // WebSocket 不可用时只提示一次, 避免日志刷屏
   let inputDropWarned = false;
 
+  // ---------- 前端日志 ----------
+  // 与设置里的「日志级别」共用开关:
+  //   full  -> 渲染帧统计 / 滚轮与输入等调试信息
+  //   error -> 只输出错误 (默认)
+  //   off   -> 全部关闭
+  const LOG_RANK = { off: 0, error: 1, full: 2 };
+  const diag = { wheelSeen: 0, wheelSent: 0, wheelSkipped: 0, wheelInside: false, inputDropped: 0 };
+  let _renderStats = { since: Date.now(), frames: 0, cells: 0, full: 0 };
+
+  function logRank() {
+    const lv = (window.App && App.state && App.state.logLevel) || 'error';
+    const rank = LOG_RANK[lv];
+    return rank == null ? 1 : rank;
+  }
+
+  function flog(level, ...args) {
+    const rank = logRank();
+    if (rank === 0) return;
+    if (level === 'debug' && rank < 2) return;
+    console.log('[oc]', ...args);
+  }
+
   function getView(vmName) {
     if (!views.has(vmName)) {
       views.set(vmName, {
@@ -140,6 +162,7 @@ const Console = (() => {
   function renderVMView(pane, vmName) {
     const view = getView(vmName);
     const t = I18N.t;
+    flog('debug', 'render view:', vmName);
     pane.innerHTML = `
       <div class="console-wrap">
         <div class="vm-toolbar">
@@ -1786,6 +1809,17 @@ const Console = (() => {
         flushScreen(view);
       }
     }
+
+    // 渲染统计 (仅 full 级别输出, 每 5 秒一行)
+    _renderStats.frames++;
+    _renderStats.cells += repaint.size;
+    if (info.full) _renderStats.full++;
+    const now = Date.now();
+    if (now - _renderStats.since >= 5000) {
+      const sec = ((now - _renderStats.since) / 1000).toFixed(1);
+      flog('debug', `render: ${_renderStats.frames} 帧 / ${_renderStats.cells} 格 / ${_renderStats.full} 次全屏 (${sec}s)`);
+      _renderStats = { since: now, frames: 0, cells: 0, full: 0 };
+    }
   }
 
   function paintScreen(vmName, msg) {
@@ -1984,9 +2018,12 @@ const Console = (() => {
     // wsSend 在连接不可用时返回 false。输入 (键盘/鼠标/滚轮) 全部走这条通道,
     // 提示一次: 静默丢弃会让"键盘/滚轮无反应"难以定位。
     const ok = App.wsSend({ type: 'c2s.input', ...ev });
-    if (ok === false && !inputDropWarned) {
-      inputDropWarned = true;
-      appendLog(vmName, '[frontend] 输入未发送: WebSocket 未连接, 请等待重连后再试', 'warn');
+    if (ok === false) {
+      diag.inputDropped++;
+      if (!inputDropWarned) {
+        inputDropWarned = true;
+        appendLog(vmName, '[frontend] 输入未发送: WebSocket 未连接, 请等待重连后再试', 'warn');
+      }
     }
     return ok;
   }
@@ -2013,7 +2050,12 @@ const Console = (() => {
 
   // 真 wheel 与"滚轮被映射成按键"两条路共用的发送逻辑
   function sendScroll(vmName, x, y, px, py, delta) {
-    return sendInput(vmName, { event: 'scroll', x, y, px, py, delta });
+    diag.wheelSent++;
+    const sent = sendInput(vmName, { event: 'scroll', x, y, px, py, delta });
+    if (diag.wheelSent <= 10 || diag.wheelSent % 50 === 0) {
+      flog('debug', `scroll #${diag.wheelSent} x=${x} y=${y} delta=${delta} sent=${sent !== false}`);
+    }
+    return sent;
   }
 
   function onKey(e, vmName) {
@@ -2076,7 +2118,11 @@ const Console = (() => {
 
   function onWheel(e, vmName) {
     const view = getView(vmName);
-    if (!view.canvas || !view.w || !view.h) return;
+    if (!view.canvas || !view.w || !view.h) {
+      diag.wheelSkipped++;
+      flog('debug', 'wheel ignored: canvas not ready');
+      return;
+    }
     const rect = view.canvas.getBoundingClientRect();
     const realCharW = rect.width / view.w;
     const realCharH = rect.height / view.h;
@@ -2200,10 +2246,20 @@ const Console = (() => {
     return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
 
+  // 文档级滚轮统计 (仅 full 级别输出): 区分"浏览器没投递事件"与"落点不在虚拟机区域"
+  document.addEventListener('wheel', (e) => {
+    diag.wheelSeen++;
+    const tgt = e.target;
+    diag.wheelInside = !!(tgt && tgt.closest && tgt.closest('.console-wrap'));
+    if (diag.wheelSeen === 1) {
+      flog('debug', 'wheel event received, inside console area=', diag.wheelInside);
+    }
+  }, { capture: true, passive: true });
+
   // 页面加载时异步加载 hexfont, 加载完成后自动重绘
   loadHexFont();
 
-  return { renderVMView, onServerMessage, loadHexFont, onConnectionLost, applyServerState, reloadView, isWheelKeyCompat, setWheelKeyCompat };
+  return { renderVMView, onServerMessage, loadHexFont, onConnectionLost, applyServerState, reloadView, diag, isWheelKeyCompat, setWheelKeyCompat };
 })();
 
 window.Console = Console;
