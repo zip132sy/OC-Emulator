@@ -214,6 +214,9 @@ local function resetState()
 
     energy = 100,
     maxEnergy = 100,
+
+    -- 控制面板里双击设备面板是否进入全屏
+    doubleClickFullscreen = true,
   }
 end
 
@@ -768,6 +771,20 @@ function mods.getProfile()
 end
 
 -- ============================================================
+-- 界面行为
+-- ============================================================
+-- 是否允许在控制面板里双击设备面板进入全屏。
+-- 关闭后双击可用于程序自己的交互, 不会再切换到全屏。
+function mods.setDoubleClickFullscreen(enabled)
+  state.doubleClickFullscreen = enabled ~= false
+  return state.doubleClickFullscreen
+end
+
+function mods.getDoubleClickFullscreen()
+  return state.doubleClickFullscreen == true
+end
+
+-- ============================================================
 -- 物品栏 API
 -- ============================================================
 function mods.inventorySize()
@@ -1283,6 +1300,7 @@ function mods.getState()
     selectedTank = state.selectedTank,
     energy = state.energy,
     maxEnergy = state.maxEnergy,
+    doubleClickFullscreen = state.doubleClickFullscreen == true,
   }
 end
 
@@ -1800,6 +1818,8 @@ local EXTENSION_ROWS = {
   { "mods.getOffhand()", "", "返回副手工具名称与耐久。" },
   { "mods.getProfile()", "", "返回控制面板配置的设备专属参数。" },
   { "mods.setProfile(profile)", "", "套用设备专属参数（主手/副手工具、物品栏格数、储罐数量、速度等）。" },
+  { "mods.setDoubleClickFullscreen(enabled)", "", "设置双击控制面板中的设备面板是否进入全屏（默认开启）。" },
+  { "mods.getDoubleClickFullscreen()", "", "返回是否允许双击进入全屏。" },
   { "mods.addTank([capacity])", "", "安装一个储罐。" },
   { "mods.getTank([tank])", "", "返回储罐液体、液位、容量。" },
   { "mods.setTank([tank],fluid,amount)", "", "直接设置储罐内容。" },

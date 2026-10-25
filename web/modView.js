@@ -191,6 +191,9 @@ const ModView = (() => {
       reactorTimer: null,
       resizeObserver: null,
       addrFlashTimer: null,
+      fullscreen: false,
+      viewRoot: null,
+      escHandler: null,
     };
     views.set(modName, view);
 
@@ -198,6 +201,7 @@ const ModView = (() => {
     bindTabs(view);
     bindScene(view);
     bindAddrCopy(view);
+    bindFullscreen(view);
     setupCanvas(view);
 
     // WebSocket 断开时用低频轮询兜底
@@ -280,6 +284,54 @@ const ModView = (() => {
       } else {
         flashAddr(view, '复制失败，请手动选择', true);
       }
+    });
+  }
+
+  // ---------- 双击全屏 ----------
+  // 机器类设备 (核电站) 始终允许; 计算机类设备由程序通过
+  // mods.setDoubleClickFullscreen(false) 关闭。
+  function isFullscreenAllowed(view) {
+    if (view.meta && view.meta.computer === false) return true;
+    return !(view.state && view.state.doubleClickFullscreen === false);
+  }
+
+  function toggleFullscreen(view) {
+    if (!view.viewRoot) return;
+    view.fullscreen = !view.fullscreen;
+    view.viewRoot.classList.toggle('mod-fullscreen', view.fullscreen);
+    document.body.classList.toggle('mod-fullscreen-open', view.fullscreen);
+
+    if (view.fullscreen) {
+      view.escHandler = (e) => {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          e.stopPropagation();
+          toggleFullscreen(view);
+        }
+      };
+      document.addEventListener('keydown', view.escHandler, true);
+    } else if (view.escHandler) {
+      document.removeEventListener('keydown', view.escHandler, true);
+      view.escHandler = null;
+    }
+
+    if (window.App && App.setStatus) {
+      App.setStatus(view.fullscreen ? '已进入全屏，按 Esc 退出' : '已退出全屏');
+    }
+    // 画布尺寸会随布局变化
+    resizeCanvas(view);
+    scheduleDraw(view);
+  }
+
+  function bindFullscreen(view) {
+    view.viewRoot = view.pane.querySelector('.mod-view');
+    if (!view.viewRoot) return;
+    view.viewRoot.addEventListener('dblclick', (e) => {
+      const target = e.target;
+      // 交互控件与地址标签保留自己的双击行为
+      if (target.closest('button, input, textarea, select, a, .mod-addr')) return;
+      if (!isFullscreenAllowed(view)) return;
+      toggleFullscreen(view);
     });
   }
 
@@ -1376,6 +1428,11 @@ const ModView = (() => {
     stopReactorPolling(view);
     if (view.addrFlashTimer) clearTimeout(view.addrFlashTimer);
     if (view.resizeObserver) view.resizeObserver.disconnect();
+    if (view.fullscreen) {
+      if (view.viewRoot) view.viewRoot.classList.remove('mod-fullscreen');
+      document.body.classList.remove('mod-fullscreen-open');
+      if (view.escHandler) document.removeEventListener('keydown', view.escHandler, true);
+    }
     views.delete(modName);
   }
 

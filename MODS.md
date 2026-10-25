@@ -264,6 +264,8 @@ print(mods.help())
 | `mods.getOffhand()` | - | `mods.getOffhand()` | - | 副手工具名称与耐久 |
 | `mods.getProfile()` | - | `mods.getProfile()` | - | 控制面板里的设备专属参数 |
 | `mods.setProfile(profile)` | - | `mods.setProfile(profile)` | - | 套用设备专属参数 |
+| `mods.setDoubleClickFullscreen(enabled)` | - | `mods.setDoubleClickFullscreen(enabled)` | - | 是否允许双击设备面板进入全屏 |
+| `mods.getDoubleClickFullscreen()` | - | `mods.getDoubleClickFullscreen()` | - | 返回是否允许双击全屏 |
 | `mods.addTank([capacity])` | - | `mods.addTank([capacity])` | - | - |
 | `mods.getTank([tank])` | - | `mods.getTank([tank])` | - | - |
 | `mods.setTank([tank],fluid,amount)` | - | `mods.setTank([tank],fluid,amount)` | - | - |
@@ -474,6 +476,7 @@ end
   - **控制台 / EFI**：内置 EFI 启动日志、无线连接信息、每条控制命令的执行结果。
 - 打开机器类设备只有 **☢ 反应堆** 与 **物品 / 状态** 两个标签页。
 - 计算机类设备的工具栏提供「启动 / 停止 / 重启 / 刷新」，显示无线地址和「内置 EFI」状态；**双击地址即可复制**。
+- **双击设备面板可进入全屏，按 Esc 退出**。程序可以用 `mods.setDoubleClickFullscreen(false)` 关掉这个行为，把双击留给自己的界面。
 - 「⚙ 配置」：计算机类设备可编辑 EFI 程序与硬件；机器类设备只有设备本身的配置。
 
 ## 9. Mods 文件夹与内置 EFI
@@ -561,6 +564,7 @@ Mods/
 
 - 配置弹窗显示 IC2 原版风格的灰色反应堆 GUI。
 - 设备页第一个标签页是 **☢ 反应堆**：只读 2D 面板，展示每个格子的组件、等级、脉冲、产电、发热、吸热与生效状态，点击格子可查看该位置的完整信息；下方还有一张全部组件的明细表。
+- 该面板支持**双击进入全屏（Esc 退出）**，内容较长时可用**鼠标滚轮上下滚动**。
 - 网格尺寸与原版一致：**固定 6 行，3 ~ 9 列**；每增加一列相当于增加一个 Reactor Chamber，可用格子从 18 格增加到 54 格。
 - 点击组件后点击格子放置，右键清除；缩小列数时会提示将移除超出范围的组件。
 - 组件按等级区分：
