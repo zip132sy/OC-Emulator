@@ -41,40 +41,40 @@ const DiskEditor = (() => {
         <div class="disk-tree">
           <div class="disk-tree-header">
             <div class="disk-tree-actions">
-              <button class="btn btn-icon" title="新建文件夹" data-action="new-folder" id="disk-newfolder-${cssEsc(diskPath)}">📁</button>
-              <button class="btn btn-icon" title="新建文件" data-action="new-file" id="disk-newfile-${cssEsc(diskPath)}">📄</button>
-              <button class="btn btn-icon" title="上传文件" data-action="upload" id="disk-upload-${cssEsc(diskPath)}">⬆</button>
+              <button class="btn btn-icon" title="${I18N.t('disk.new-folder')}" data-action="new-folder" id="disk-newfolder-${cssEsc(diskPath)}">📁</button>
+              <button class="btn btn-icon" title="${I18N.t('disk.new-file')}" data-action="new-file" id="disk-newfile-${cssEsc(diskPath)}">📄</button>
+              <button class="btn btn-icon" title="${I18N.t('disk.upload-file')}" data-action="upload" id="disk-upload-${cssEsc(diskPath)}">⬆</button>
               <div class="disk-tree-divider"></div>
-              <button class="btn btn-icon" title="全部展开" data-action="expand-all" id="disk-expand-all-${cssEsc(diskPath)}">⊞</button>
-              <button class="btn btn-icon" title="全部折叠" data-action="collapse-all" id="disk-collapse-all-${cssEsc(diskPath)}">⊟</button>
+              <button class="btn btn-icon" title="${I18N.t('disk.expand-all')}" data-action="expand-all" id="disk-expand-all-${cssEsc(diskPath)}">⊞</button>
+              <button class="btn btn-icon" title="${I18N.t('disk.collapse-all')}" data-action="collapse-all" id="disk-collapse-all-${cssEsc(diskPath)}">⊟</button>
             </div>
             <div class="disk-search-box">
-              <input type="text" id="disk-search-${cssEsc(diskPath)}" placeholder="🔍 搜索文件…" value="${escapeHTML(session.searchQuery)}">
+              <input type="text" id="disk-search-${cssEsc(diskPath)}" placeholder="🔍 ${I18N.t('disk.search')}" value="${escapeHTML(session.searchQuery)}">
             </div>
           </div>
           <div class="disk-tree-body" id="disk-tree-${cssEsc(diskPath)}">
-            <div class="disk-tree-row">加载中…</div>
+            <div class="disk-tree-row">${I18N.t('disk.loading')}</div>
           </div>
         </div>
         <div class="disk-file-viewer">
           <div class="disk-file-toolbar">
-            <span id="disk-label-${cssEsc(diskPath)}">磁盘: ${escapeHTML(diskPath)}</span>
+            <span id="disk-label-${cssEsc(diskPath)}">${I18N.t('disk.label-prefix')}${escapeHTML(diskPath)}</span>
             <div class="spacer"></div>
-            <button class="btn" data-action="mirror" id="disk-mirror-${cssEsc(diskPath)}">🪞 镜像模式</button>
-            <button class="btn btn-primary" data-action="unlock" id="disk-unlock-${cssEsc(diskPath)}">🔓 解锁</button>
-            <button class="btn" data-action="lock" id="disk-lock-${cssEsc(diskPath)}">🔒 锁定</button>
-            <button class="btn btn-warn" data-action="format" id="disk-format-${cssEsc(diskPath)}">⚠ 格式化</button>
+            <button class="btn" data-action="mirror" id="disk-mirror-${cssEsc(diskPath)}">${I18N.t('disk.mirror')}</button>
+            <button class="btn btn-primary" data-action="unlock" id="disk-unlock-${cssEsc(diskPath)}">${I18N.t('disk.unlock')}</button>
+            <button class="btn" data-action="lock" id="disk-lock-${cssEsc(diskPath)}">${I18N.t('disk.lock')}</button>
+            <button class="btn btn-warn" data-action="format" id="disk-format-${cssEsc(diskPath)}">${I18N.t('disk.format')}</button>
           </div>
           <div class="disk-mirror-status" id="disk-mirror-status-${cssEsc(diskPath)}" style="display:none"></div>
           <div class="disk-file-toolbar" id="disk-file-info-${cssEsc(diskPath)}">
-            <span>未选择文件</span>
+            <span>${I18N.t('disk.no-file')}</span>
           </div>
           <pre class="disk-file-content" id="disk-content-${cssEsc(diskPath)}" contenteditable="false" spellcheck="false">
-            <span style="color:#606060">选择左侧文件查看内容,或点击「解锁」启用编辑</span>
+            <span style="color:#606060">${I18N.t('disk.select-file')}</span>
           </pre>
           <div class="disk-file-toolbar" id="disk-file-actions-${cssEsc(diskPath)}" style="display:none">
-            <button class="btn btn-primary" data-action="save">💾 保存</button>
-            <button class="btn" data-action="delete">🗑 删除</button>
+            <button class="btn btn-primary" data-action="save">${I18N.t('disk.save')}</button>
+            <button class="btn" data-action="delete">${I18N.t('disk.delete')}</button>
           </div>
         </div>
       </div>
@@ -146,7 +146,7 @@ const DiskEditor = (() => {
         loadTree(diskPath);
       }
     } catch (e) {
-      setStatus(diskPath, '加载失败: ' + e.message);
+      setStatus(diskPath, I18N.t('disk.load-failed') + e.message);
     }
   }
 
@@ -154,8 +154,8 @@ const DiskEditor = (() => {
     const treeEl = document.getElementById(`disk-tree-${cssEsc(diskPath)}`);
     treeEl.innerHTML = `
       <div style="padding: 12px; text-align: center; color: var(--fg-muted);">
-        🔒 磁盘已锁定<br>
-        <span style="color: var(--fg-dim)">默认情况下磁盘不可读,需要在控制面板中解锁</span>
+        🔒 ${I18N.t('disk.locked-title')}<br>
+        <span style="color: var(--fg-dim)">${I18N.t('disk.locked-hint')}</span>
       </div>
     `;
     document.getElementById(`disk-unlock-${cssEsc(diskPath)}`).disabled = false;
@@ -176,7 +176,7 @@ const DiskEditor = (() => {
       session.tree = tree;
       renderTree(diskPath);
     } catch (e) {
-      setStatus(diskPath, '加载文件树失败: ' + e.message);
+      setStatus(diskPath, I18N.t('disk.tree-failed') + e.message);
     }
   }
 
@@ -185,7 +185,7 @@ const DiskEditor = (() => {
     const treeEl = document.getElementById(`disk-tree-${cssEsc(diskPath)}`);
     treeEl.innerHTML = '';
     if (!session.tree) {
-      treeEl.innerHTML = '<div class="disk-tree-row">空磁盘</div>';
+      treeEl.innerHTML = `<div class="disk-tree-row">${I18N.t('disk.empty')}</div>`;
       return;
     }
     const query = session.searchQuery.trim().toLowerCase();
@@ -194,7 +194,7 @@ const DiskEditor = (() => {
       const matches = [];
       collectMatches(session.tree, '', query, matches);
       if (matches.length === 0) {
-        treeEl.innerHTML = '<div class="disk-tree-row" style="color:var(--fg-dim)">没有找到匹配的文件</div>';
+        treeEl.innerHTML = `<div class="disk-tree-row" style="color:var(--fg-dim)">${I18N.t('disk.no-match')}</div>`;
         return;
       }
       // 按路径排序显示
@@ -362,7 +362,7 @@ const DiskEditor = (() => {
     // 标记 active
     document.querySelectorAll(`#disk-tree-${cssEsc(diskPath)} .disk-tree-row`).forEach(r => r.classList.remove('active'));
     rowEl.classList.add('active');
-    document.getElementById(`disk-file-info-${cssEsc(diskPath)}`).innerHTML = `<span>${escapeHTML(innerPath)} - 加载中…</span>`;
+    document.getElementById(`disk-file-info-${cssEsc(diskPath)}`).innerHTML = `<span>${escapeHTML(innerPath)}${I18N.t('disk.loading-file')}</span>`;
     try {
       const result = await App.api(`disks/${diskApiPath(diskPath)}/read?path=${encodeURIComponent(innerPath)}`);
       const contentEl = document.getElementById(`disk-content-${cssEsc(diskPath)}`);
@@ -461,7 +461,7 @@ const DiskEditor = (() => {
   function newItemDialog(diskPath, type) {
     const session = getSession(diskPath);
     if (session.info?.locked) {
-      alert('磁盘已锁定,请先解锁');
+      alert(I18N.t('disk.locked-alert'));
       return;
     }
     // 默认父目录: 当前选中的目录, 或根目录
@@ -479,8 +479,8 @@ const DiskEditor = (() => {
     }
 
     const isFolder = type === 'folder';
-    const title = isFolder ? '新建文件夹' : '新建文件';
-    const placeholder = isFolder ? '文件夹名称' : '文件名 (如 test.lua)';
+    const title = isFolder ? I18N.t('disk.new-folder') : I18N.t('disk.new-file');
+    const placeholder = isFolder ? I18N.t('disk.folder-name') : I18N.t('disk.file-name-placeholder');
 
     const modal = document.createElement('div');
     modal.className = 'modal';
@@ -493,18 +493,18 @@ const DiskEditor = (() => {
         </div>
         <div class="modal-body">
           <div class="form-row">
-            <label>父目录</label>
+            <label>${I18N.t('disk.parent-dir')}</label>
             <input type="text" id="new-item-parent" value="${escapeHTML(parentDir)}" readonly style="background: var(--bg-top);">
           </div>
           <div class="form-row">
-            <label>${isFolder ? '名称' : '文件名'}</label>
+            <label>${isFolder ? I18N.t('disk.name') : I18N.t('disk.file-name')}</label>
             <input type="text" id="new-item-name" placeholder="${placeholder}" autofocus>
           </div>
           <div class="form-warning" id="new-item-warning" style="display:none; color: var(--warn); font-size: 13px; margin-top: 8px;"></div>
         </div>
         <div class="modal-footer">
-          <button class="btn" data-action="cancel">取消</button>
-          <button class="btn btn-primary" data-action="create">创建</button>
+          <button class="btn" data-action="cancel">${I18N.t('disk.cancel')}</button>
+          <button class="btn btn-primary" data-action="create">${I18N.t('disk.create')}</button>
         </div>
       </div>
     `;
@@ -530,12 +530,12 @@ const DiskEditor = (() => {
       const name = nameInput.value.trim();
       const parent = parentInput.value.trim() || '/';
       if (!name) {
-        warningEl.textContent = '请输入名称';
+        warningEl.textContent = I18N.t('disk.name-empty');
         warningEl.style.display = '';
         return;
       }
       if (name.includes('/') || name.includes('\\')) {
-        warningEl.textContent = '名称不能包含 / 或 \\';
+        warningEl.textContent = I18N.t('disk.name-invalid');
         warningEl.style.display = '';
         return;
       }
@@ -558,10 +558,10 @@ const DiskEditor = (() => {
           expandDirParents(diskPath, parent);
         }
         await loadTree(diskPath);
-        App.setStatus((isFolder ? '文件夹' : '文件') + '已创建: ' + fullPath);
+        App.setStatus((isFolder ? I18N.t('disk.created-folder') : I18N.t('disk.created-file')) + fullPath);
         close();
       } catch (e) {
-        warningEl.textContent = e.message || '创建失败';
+        warningEl.textContent = e.message || I18N.t('disk.create-failed');
         warningEl.style.display = '';
       }
     }
@@ -574,7 +574,7 @@ const DiskEditor = (() => {
   async function handleFileUpload(diskPath, files) {
     const session = getSession(diskPath);
     if (session.info?.locked) {
-      alert('磁盘已锁定,请先解锁');
+      alert(I18N.t('disk.locked-alert'));
       return;
     }
     if (!files || files.length === 0) return;
@@ -621,11 +621,11 @@ const DiskEditor = (() => {
     await loadTree(diskPath);
 
     if (failCount === 0) {
-      App.setStatus(`已上传 ${successCount} 个文件`);
+      App.setStatus(I18N.t('disk.uploaded', { n: successCount }));
     } else {
-      App.setStatus(`上传完成: ${successCount} 成功, ${failCount} 失败`);
+      App.setStatus(I18N.t('disk.upload-summary', { ok: successCount, fail: failCount }));
       if (errors.length > 0) {
-        console.warn('上传错误:', errors);
+        console.warn('upload errors:', errors);
       }
     }
   }
@@ -667,7 +667,7 @@ const DiskEditor = (() => {
     if (!statusEl || !session.mirror) return;
     if (session.mirror.enabled) {
       statusEl.style.display = '';
-      statusEl.innerHTML = `<span style="color: var(--ok)">🪞 镜像模式已启用</span> <span style="color: var(--fg-dim); font-size: 12px;">${escapeHTML(session.mirror.path)}</span>`;
+      statusEl.innerHTML = `<span style="color: var(--ok)">${I18N.t('disk.mirror-enabled')}</span> <span style="color: var(--fg-dim); font-size: 12px;">${escapeHTML(session.mirror.path)}</span>`;
     } else {
       statusEl.style.display = 'none';
     }
@@ -684,32 +684,31 @@ const DiskEditor = (() => {
       <div class="modal-backdrop"></div>
       <div class="modal-dialog">
         <div class="modal-header">
-          <h3>镜像模式设置</h3>
+          <h3>${I18N.t('disk.mirror-title')}</h3>
           <button class="modal-close" data-action="close">×</button>
         </div>
         <div class="modal-body">
           <div class="form-row">
-            <label>启用镜像模式</label>
+            <label>${I18N.t('disk.mirror-toggle')}</label>
             <label class="switch">
               <input type="checkbox" id="mirror-enabled" ${enabled ? 'checked' : ''}>
               <span class="slider"></span>
             </label>
           </div>
           <div class="form-row" id="mirror-path-row" style="${enabled ? '' : 'display:none'}">
-            <label>镜像文件夹路径</label>
+            <label>${I18N.t('disk.mirror-path')}</label>
             <div style="display:flex; flex-direction:column; gap:4px;">
-              <input type="text" id="mirror-path-input" value="${escapeHTML(currentPath)}" placeholder="如: cache/openos-download 或绝对路径">
+              <input type="text" id="mirror-path-input" value="${escapeHTML(currentPath)}" placeholder="${escapeHTML(I18N.t('disk.mirror-path-placeholder'))}">
               <div class="hint">
-                镜像模式下，VM 启动前会将文件夹内容同步到磁盘，关闭后反向同步。<br>
-                路径可以是相对路径（相对于项目根目录）或绝对路径。
+                ${I18N.t('disk.mirror-hint')}
               </div>
             </div>
           </div>
           <div class="form-warning" id="mirror-warning" style="display:none; color: var(--warn); font-size: 13px; margin-top: 8px;"></div>
         </div>
         <div class="modal-footer">
-          <button class="btn" data-action="cancel">取消</button>
-          <button class="btn btn-primary" data-action="save">保存</button>
+          <button class="btn" data-action="cancel">${I18N.t('disk.cancel')}</button>
+          <button class="btn btn-primary" data-action="save">${I18N.t('hw.save')}</button>
         </div>
       </div>
     `;
@@ -735,7 +734,7 @@ const DiskEditor = (() => {
       const isEnabled = enabledEl.checked;
       const path = pathInput.value.trim();
       if (isEnabled && !path) {
-        warningEl.textContent = '请输入镜像文件夹路径';
+        warningEl.textContent = I18N.t('disk.mirror-path-empty');
         warningEl.style.display = '';
         return;
       }
@@ -747,10 +746,10 @@ const DiskEditor = (() => {
         session.mirror = result;
         renderMirrorStatus(diskPath);
         loadTree(diskPath);
-        App.setStatus('镜像模式设置已保存');
+        App.setStatus(I18N.t('disk.mirror-saved'));
         close();
       } catch (e) {
-        warningEl.textContent = e.message || '保存失败';
+        warningEl.textContent = e.message || I18N.t('disk.save-failed');
         warningEl.style.display = '';
       }
     });

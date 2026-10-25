@@ -32,15 +32,15 @@
   // ---------- 详情文本 ----------
   function buildDetail(summary, stack, source) {
     const lines = [
-      '【OC Emulator 错误报告】',
-      '时间: ' + new Date().toLocaleString(),
-      '版本: ' + VERSION,
-      '页面: ' + location.href,
-      '浏览器: ' + navigator.userAgent,
-      '错误: ' + summary,
+      tr('【OC Emulator 错误报告】', '[OC Emulator Error Report]'),
+      tr('时间: ', 'Time: ') + new Date().toLocaleString(),
+      tr('版本: ', 'Version: ') + VERSION,
+      tr('页面: ', 'Page: ') + location.href,
+      tr('浏览器: ', 'Browser: ') + navigator.userAgent,
+      tr('错误: ', 'Error: ') + summary,
     ];
-    if (source) lines.push('来源: ' + source);
-    if (stack) lines.push('调用栈:\n' + stack);
+    if (source) lines.push(tr('来源: ', 'Source: ') + source);
+    if (stack) lines.push(tr('调用栈:\n', 'Stack trace:\n') + stack);
     return lines.join('\n');
   }
 
@@ -192,14 +192,14 @@
       gh.href = issueUrl('github', summary, detail);
       gh.target = '_blank';
       gh.rel = 'noopener';
-      gh.textContent = 'GitHub 反馈';
+      gh.textContent = tr('GitHub 反馈', 'GitHub Feedback');
 
       const gitee = document.createElement('a');
       gitee.className = 'er-btn';
       gitee.href = issueUrl('gitee', summary, detail);
       gitee.target = '_blank';
       gitee.rel = 'noopener';
-      gitee.textContent = 'Gitee 反馈';
+      gitee.textContent = tr('Gitee 反馈', 'Gitee Feedback');
 
       const hint = document.createElement('span');
       hint.className = 'er-hint';
@@ -221,7 +221,7 @@
 
   // ---------- 对外接口 ----------
   function report(err) {
-    let summary = '未知错误';
+    let summary = tr('未知错误', 'Unknown error');
     let stack = '';
     let source = '';
     if (err && err.__ocReport) {

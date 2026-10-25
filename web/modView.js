@@ -65,21 +65,21 @@ const ModView = (() => {
         <div class="mod-toolbar">
           <span class="mod-badge ${info.cls}" data-role="badge">${info.icon} ${info.label}</span>
           <span class="mod-title">${escapeHTML(modName)}</span>
-          <span class="mod-state stopped" data-role="state">已停止</span>
-          <span class="mod-addr" data-role="addr" title="双击复制无线地址">无线地址: (启动后分配)</span>
-          <span class="mod-badge" data-role="efi">内置 EFI</span>
+          <span class="mod-state stopped" data-role="state">${T('vm.state.stopped')}</span>
+          <span class="mod-addr" data-role="addr" title="${T('mods.addr.copy-title')}">${T('mods.addr.placeholder')}</span>
+          <span class="mod-badge" data-role="efi">${T('mods.efi.builtin')}</span>
           <div class="spacer"></div>
           <button class="btn btn-primary" data-act="start">${T('vm.start', '▶ 启动')}</button>
           <button class="btn btn-danger" data-act="stop">${T('vm.stop', '■ 停止')}</button>
           <button class="btn btn-warn" data-act="restart">${T('vm.restart', '⟳ 重启')}</button>
           <button class="btn" data-act="config">⚙ ${T('mods.config.title', '配置')}</button>
-          <button class="btn" data-act="reload">⟳ 刷新</button>
+          <button class="btn" data-act="reload">${T('mods.refresh')}</button>
         </div>
         <div class="mod-tabs">
-          <button class="mod-tab active" data-tab="scene">🧊 3D 场景</button>
+          <button class="mod-tab active" data-tab="scene">${T('mods.tab.scene')}</button>
           <button class="mod-tab" data-tab="reactor" style="display:none">☢ ${T('reactor.tab', '反应堆')}</button>
-          <button class="mod-tab" data-tab="items">📦 物品 / 状态</button>
-          <button class="mod-tab" data-tab="console">💻 控制台 / EFI</button>
+          <button class="mod-tab" data-tab="items">${T('mods.tab.items')}</button>
+          <button class="mod-tab" data-tab="console">${T('mods.tab.console')}</button>
         </div>
         <div class="mod-panes">
           <div class="mod-pane active" data-pane="scene">
@@ -87,30 +87,30 @@ const ModView = (() => {
               <div class="scene-canvas-wrap" data-role="canvas-wrap">
                 <canvas data-role="canvas"></canvas>
                 <div class="scene-legend">
-                  <span class="ax-x">X 轴</span>
-                  <span class="ax-y">Y 轴</span>
-                  <span class="ax-z">Z 轴</span>
+                  <span class="ax-x">X</span>
+                  <span class="ax-y">Y</span>
+                  <span class="ax-z">Z</span>
                 </div>
-                <div class="scene-hud" data-role="hud">等待设备启动…</div>
-                <div class="scene-help">拖动旋转 · 滚轮缩放 · 双击重置视角</div>
+                <div class="scene-hud" data-role="hud">${T('mods.scene.waiting')}</div>
+                <div class="scene-help">${T('mods.scene.help')}</div>
               </div>
               <div class="scene-side">
                 <div>
-                  <div class="scene-section-title">机器人控制</div>
+                  <div class="scene-section-title">${T('mods.scene.robot-controls')}</div>
                   <div class="scene-btn-grid" data-role="robot-controls">
-                    <button class="btn" data-cmd="move" data-dir="3">↑ 前</button>
-                    <button class="btn" data-cmd="move" data-dir="1">⤒ 上</button>
-                    <button class="btn" data-cmd="move" data-dir="2">↓ 后</button>
-                    <button class="btn" data-cmd="move" data-dir="0">⤓ 下</button>
-                    <button class="btn" data-cmd="turn" data-dir="0">↺ 左转</button>
-                    <button class="btn" data-cmd="turn" data-dir="1">↻ 右转</button>
-                    <button class="btn" data-cmd="swing">⛏ 挖掘</button>
-                    <button class="btn" data-cmd="place">📦 放置</button>
-                    <button class="btn" data-cmd="detect">🔍 检测</button>
+                    <button class="btn" data-cmd="move" data-dir="3">${T('mods.cmd.forward')}</button>
+                    <button class="btn" data-cmd="move" data-dir="1">${T('mods.cmd.up')}</button>
+                    <button class="btn" data-cmd="move" data-dir="2">${T('mods.cmd.back')}</button>
+                    <button class="btn" data-cmd="move" data-dir="0">${T('mods.cmd.down')}</button>
+                    <button class="btn" data-cmd="turn" data-dir="0">${T('mods.cmd.turn-left')}</button>
+                    <button class="btn" data-cmd="turn" data-dir="1">${T('mods.cmd.turn-right')}</button>
+                    <button class="btn" data-cmd="swing">${T('mods.cmd.dig')}</button>
+                    <button class="btn" data-cmd="place">${T('mods.cmd.place')}</button>
+                    <button class="btn" data-cmd="detect">${T('mods.cmd.detect')}</button>
                   </div>
                 </div>
                 <div>
-                  <div class="scene-section-title">无人机偏移</div>
+                  <div class="scene-section-title">${T('mods.scene.drone-offset')}</div>
                   <div class="scene-btn-grid">
                     <button class="btn" data-cmd="dmove" data-dx="0" data-dy="0" data-dz="1">Z+</button>
                     <button class="btn" data-cmd="dmove" data-dx="0" data-dy="1" data-dz="0">Y+</button>
@@ -121,24 +121,24 @@ const ModView = (() => {
                   </div>
                 </div>
                 <div>
-                  <div class="scene-section-title">移动到坐标</div>
+                  <div class="scene-section-title">${T('mods.scene.move-to')}</div>
                   <div class="scene-coord-row">
                     <input type="number" step="1" placeholder="X" data-role="coord-x">
                     <input type="number" step="1" placeholder="Y" data-role="coord-y">
                     <input type="number" step="1" placeholder="Z" data-role="coord-z">
                   </div>
                   <div class="scene-coord-row" style="margin-top:4px;">
-                    <button class="btn" data-cmd="teleport" style="flex:1;">传送</button>
-                    <button class="btn" data-cmd="origin" style="flex:1;">回原点</button>
+                    <button class="btn" data-cmd="teleport" style="flex:1;">${T('mods.scene.teleport')}</button>
+                    <button class="btn" data-cmd="origin" style="flex:1;">${T('mods.scene.origin')}</button>
                   </div>
-                  <div class="scene-note">传送会直接修改坐标，主要用于调试与摆放标记点。</div>
+                  <div class="scene-note">${T('mods.scene.teleport-note')}</div>
                 </div>
                 <div>
-                  <div class="scene-section-title">视角</div>
+                  <div class="scene-section-title">${T('mods.scene.view')}</div>
                   <div class="scene-btn-grid">
-                    <button class="btn" data-cmd="view-reset">重置视角</button>
-                    <button class="btn" data-cmd="view-top">俯视</button>
-                    <button class="btn" data-cmd="view-front">正视</button>
+                    <button class="btn" data-cmd="view-reset">${T('mods.scene.view-reset')}</button>
+                    <button class="btn" data-cmd="view-top">${T('mods.scene.view-top')}</button>
+                    <button class="btn" data-cmd="view-front">${T('mods.scene.view-front')}</button>
                   </div>
                 </div>
               </div>
@@ -152,7 +152,7 @@ const ModView = (() => {
           </div>
           <div class="mod-pane" data-pane="console">
             <div class="mod-console" data-role="console">
-              <div class="mod-console-empty">等待 EFI 输出…</div>
+              <div class="mod-console-empty">${T('mods.console.empty')}</div>
             </div>
           </div>
         </div>
@@ -226,7 +226,7 @@ const ModView = (() => {
           if (act === 'start') setTimeout(() => reload(view.name), 400);
           if (window.App && App.refreshMods) App.refreshMods();
         } catch (e) {
-          appendLog(view.name, { ts: Date.now(), level: 'error', msg: `请求失败: ${e.message}` });
+          appendLog(view.name, { ts: Date.now(), level: 'error', msg: `${T('mods.request-failed', '请求失败: ')}${e.message}` });
         }
       });
     });
@@ -274,15 +274,15 @@ const ModView = (() => {
     view.addrEl.addEventListener('dblclick', async () => {
       const addr = view.address;
       if (!addr) {
-        flashAddr(view, '启动后再复制', true);
+        flashAddr(view, T('mods.copy.after-start'), true);
         return;
       }
       const ok = await copyText(addr);
       if (ok) {
-        flashAddr(view, '已复制: ' + addr);
-        if (window.App && App.setStatus) App.setStatus('已复制无线地址: ' + addr);
+        flashAddr(view, T('mods.copy.done') + addr);
+        if (window.App && App.setStatus) App.setStatus(T('mods.copy.done-status') + addr);
       } else {
-        flashAddr(view, '复制失败，请手动选择', true);
+        flashAddr(view, T('mods.copy.failed'), true);
       }
     });
   }
@@ -316,7 +316,7 @@ const ModView = (() => {
     }
 
     if (window.App && App.setStatus) {
-      App.setStatus(view.fullscreen ? '已进入全屏，按 Esc 退出' : '已退出全屏');
+      App.setStatus(view.fullscreen ? T('mods.fullscreen.enter') : T('mods.fullscreen.exit'));
     }
     // 画布尺寸会随布局变化
     resizeCanvas(view);
@@ -412,7 +412,7 @@ const ModView = (() => {
     try {
       await App.api(`mods/${encodeURIComponent(view.name)}/command`, { method: 'POST', body: command });
     } catch (e) {
-      appendLog(view.name, { ts: Date.now(), level: 'error', msg: `命令失败: ${e.message}` });
+      appendLog(view.name, { ts: Date.now(), level: 'error', msg: `${T('mods.command-failed', '命令失败: ')}${e.message}` });
     }
   }
 
@@ -626,7 +626,7 @@ const ModView = (() => {
       ctx.fillStyle = '#7e93a8';
       ctx.font = '13px "Segoe UI", sans-serif';
       ctx.textAlign = 'center';
-      ctx.fillText('等待设备启动…', w / 2, h / 2 + 40);
+      ctx.fillText(T('mods.scene.waiting'), w / 2, h / 2 + 40);
       ctx.restore();
       return;
     }
@@ -642,7 +642,7 @@ const ModView = (() => {
       ctx.arc(tp.x, tp.y, 7, 0, Math.PI * 2);
       ctx.stroke();
       ctx.restore();
-      drawLabel(ctx, `目标 (${fmt(target.x, 1)}, ${fmt(target.y, 1)}, ${fmt(target.z, 1)})`, tp.x + 10, tp.y - 8, '#cfe2f5');
+      drawLabel(ctx, `${T('mods.scene.target-label', '目标')} (${fmt(target.x, 1)}, ${fmt(target.y, 1)}, ${fmt(target.z, 1)})`, tp.x + 10, tp.y - 8, '#cfe2f5');
     }
 
     // 设备位置
@@ -838,12 +838,12 @@ const ModView = (() => {
     if (!view.addrFlashTimer) {
       if (view.address) {
         view.addrEl.textContent = `${addrLabel}: ${view.address}`;
-        view.addrEl.title = '双击复制';
+        view.addrEl.title = T('mods.addr.copy-title');
       } else {
         view.addrEl.textContent = isMachine
           ? `${addrLabel}: -`
-          : `${addrLabel}: (启动后分配)`;
-        view.addrEl.title = isMachine ? '' : '启动设备后由无线网卡分配';
+          : `${addrLabel}: ${T('mods.addr.placeholder')}`;
+        view.addrEl.title = isMachine ? '' : T('mods.addr.after-start');
       }
     }
 
@@ -852,7 +852,7 @@ const ModView = (() => {
       view.efiEl.style.display = 'none';
     } else {
       view.efiEl.style.display = '';
-      view.efiEl.textContent = efi === 'missing' ? 'EFI 缺失' : '内置 EFI';
+      view.efiEl.textContent = efi === 'missing' ? T('mods.efi.missing') : T('mods.efi.builtin');
       view.efiEl.style.color = efi === 'missing' ? 'var(--err)' : '';
     }
 
@@ -888,7 +888,7 @@ const ModView = (() => {
   function updateHUD(view) {
     const st = view.state;
     if (!st) {
-      view.hud.innerHTML = `<span>状态: ${escapeHTML(stateLabel(view.runtimeState))}</span><span>等待设备上报状态…</span>`;
+      view.hud.innerHTML = `<span>${T('mods.hud.status')}: ${escapeHTML(stateLabel(view.runtimeState))}</span><span>${T('mods.hud.waiting')}</span>`;
       return;
     }
     const pos = st.position || {};
@@ -901,11 +901,11 @@ const ModView = (() => {
     );
     const speed = Math.sqrt((vel.x || 0) ** 2 + (vel.y || 0) ** 2 + (vel.z || 0) ** 2);
     view.hud.innerHTML = `
-      <span>位置 <b>${escapeHTML(vec(pos))}</b></span>
-      <span>朝向 <b>${escapeHTML(st.facingName || st.facing || '-')}</b></span>
-      <span>目标 <b>${escapeHTML(vec(target))}</b> · 距离 <b>${escapeHTML(fmt(off))}</b></span>
-      <span>速度 <b>${escapeHTML(fmt(speed))}</b> · 能量 <b>${escapeHTML(fmt(st.energy, 0))}</b></span>
-      <span>标记点 <b>${(view.markers || []).length}</b> · 运行 <b>${st.running ? '是' : '否'}</b></span>
+      <span>${T('mods.hud.position')} <b>${escapeHTML(vec(pos))}</b></span>
+      <span>${T('mods.hud.facing')} <b>${escapeHTML(st.facingName || st.facing || '-')}</b></span>
+      <span>${T('mods.hud.target')} <b>${escapeHTML(vec(target))}</b> · ${T('mods.hud.distance')} <b>${escapeHTML(fmt(off))}</b></span>
+      <span>${T('mods.hud.speed')} <b>${escapeHTML(fmt(speed))}</b> · ${T('mods.hud.energy')} <b>${escapeHTML(fmt(st.energy, 0))}</b></span>
+      <span>${T('mods.hud.markers')} <b>${(view.markers || []).length}</b> · ${T('mods.hud.running')} <b>${st.running ? T('common.yes') : T('common.no')}</b></span>
     `;
   }
 
@@ -918,21 +918,21 @@ const ModView = (() => {
       return;
     }
     if (!st) {
-      view.itemsEl.innerHTML = `<div class="mod-empty">设备尚未上报状态。启动设备后会显示物品栏、工具与储罐。</div>`;
+      view.itemsEl.innerHTML = `<div class="mod-empty">${T('mods.items.no-state')}</div>`;
       return;
     }
 
     const cards = [
-      { k: '设备类型', v: typeInfo((meta.type || st.deviceType || 'robot')).label },
-      { k: '运行状态', v: stateLabel(view.runtimeState), cls: view.runtimeState === 'running' ? 'ok' : '' },
-      { k: '位置', v: vec(st.position) },
-      { k: '朝向', v: st.facingName || String(st.facing || '-') },
-      { k: '目标', v: vec(st.target) },
-      { k: '能量', v: `${fmt(st.energy, 0)} / ${fmt(st.maxEnergy, 0)}` },
-      { k: '选中格', v: String(st.selected || 1) },
-      { k: '灯光颜色', v: '#' + Number(st.light || 0).toString(16).padStart(6, '0') },
+      { k: T('mods.card.type'), v: typeInfo((meta.type || st.deviceType || 'robot')).label },
+      { k: T('mods.card.state'), v: stateLabel(view.runtimeState), cls: view.runtimeState === 'running' ? 'ok' : '' },
+      { k: T('mods.card.position'), v: vec(st.position) },
+      { k: T('mods.card.facing'), v: st.facingName || String(st.facing || '-') },
+      { k: T('mods.card.target'), v: vec(st.target) },
+      { k: T('mods.card.energy'), v: `${fmt(st.energy, 0)} / ${fmt(st.maxEnergy, 0)}` },
+      { k: T('mods.card.selected'), v: String(st.selected || 1) },
+      { k: T('mods.card.light'), v: '#' + Number(st.light || 0).toString(16).padStart(6, '0') },
     ];
-    if (st.lastError) cards.push({ k: '最近错误', v: String(st.lastError), cls: 'err' });
+    if (st.lastError) cards.push({ k: T('mods.card.last-error'), v: String(st.lastError), cls: 'err' });
 
     // 核电站摘要
     const reactor = meta.reactor;
@@ -954,23 +954,23 @@ const ModView = (() => {
 
     // 工具 (主手 / 副手)
     const toolRow = (label, t) => {
-      if (!t) return `<tr><td>${escapeHTML(label)}</td><td>空手</td><td class="num">-</td></tr>`;
+      if (!t) return `<tr><td>${escapeHTML(label)}</td><td>${T('common.empty-hand')}</td><td class="num">-</td></tr>`;
       const dur = (t.durability != null && t.maxDurability)
-        ? `${fmt(t.durability, 0)} / ${fmt(t.maxDurability, 0)}` : '不可损坏';
+        ? `${fmt(t.durability, 0)} / ${fmt(t.maxDurability, 0)}` : T('mods.tool.unbreakable');
       return `<tr><td>${escapeHTML(label)}</td><td>${escapeHTML(t.name || '-')}</td><td class="num">${escapeHTML(dur)}</td></tr>`;
     };
-    let toolHTML = `<div class="mod-empty">未装备工具</div>`;
+    let toolHTML = `<div class="mod-empty">${T('mods.tool.none')}</div>`;
     if (st.tool || st.offhand) {
       toolHTML = `
         <table class="mod-table">
-          <tr><th>槽位</th><th>工具</th><th>耐久</th></tr>
-          ${toolRow('主手', st.tool)}
-          ${toolRow('副手', st.offhand)}
+          <tr><th>${T('common.slot')}</th><th>${T('common.tool')}</th><th>${T('common.durability')}</th></tr>
+          ${toolRow(T('mods.tool.main'), st.tool)}
+          ${toolRow(T('mods.tool.off'), st.offhand)}
         </table>`;
     }
 
     // 储罐
-    let tanksHTML = `<div class="mod-empty">未安装储罐</div>`;
+    let tanksHTML = `<div class="mod-empty">${T('mods.tank.none')}</div>`;
     if (Array.isArray(st.tanks) && st.tanks.length > 0) {
       const rows = st.tanks.map((tk, i) => `
         <tr class="${i + 1 === st.selectedTank ? 'selected' : ''}">
@@ -982,13 +982,13 @@ const ModView = (() => {
       `).join('');
       tanksHTML = `
         <table class="mod-table">
-          <tr><th>#</th><th>液体</th><th>液位</th><th>容量</th></tr>
+          <tr><th>#</th><th>${T('common.fluid')}</th><th>${T('common.amount')}</th><th>${T('common.capacity')}</th></tr>
           ${rows}
         </table>`;
     }
 
     // 物品栏
-    let invHTML = `<div class="mod-empty">物品栏为空</div>`;
+    let invHTML = `<div class="mod-empty">${T('mods.inv.empty')}</div>`;
     if (Array.isArray(st.inventory) && st.inventory.length > 0) {
       const rows = st.inventory.map(it => `
         <tr class="${it.slot === st.selected ? 'selected' : ''}">
@@ -1000,7 +1000,7 @@ const ModView = (() => {
       `).join('');
       invHTML = `
         <table class="mod-table">
-          <tr><th>格</th><th>物品</th><th>数量</th><th>单格上限</th></tr>
+          <tr><th>${T('common.slot')}</th><th>${T('common.item')}</th><th>${T('common.count')}</th><th>${T('common.limit')}</th></tr>
           ${rows}
         </table>`;
     }
@@ -1009,15 +1009,15 @@ const ModView = (() => {
       <div class="mod-info-grid">${cardsHTML}</div>
       ${meta.description ? `<div class="mod-empty" style="text-align:left;">${escapeHTML(meta.description)}</div>` : ''}
       <div>
-        <div class="scene-section-title">工具</div>
+        <div class="scene-section-title">${T('mods.section.tools')}</div>
         ${toolHTML}
       </div>
       <div>
-        <div class="scene-section-title">储罐</div>
+        <div class="scene-section-title">${T('mods.section.tanks')}</div>
         ${tanksHTML}
       </div>
       <div>
-        <div class="scene-section-title">物品栏</div>
+        <div class="scene-section-title">${T('mods.section.inventory')}</div>
         ${invHTML}
       </div>
     `;
@@ -1031,8 +1031,8 @@ const ModView = (() => {
     const runtime = reactor && reactor.runtime ? reactor.runtime : null;
 
     const cards = [
-      { k: '设备类型', v: typeInfo(meta.type || 'reactor').label },
-      { k: '运行状态', v: stateLabel(view.runtimeState), cls: view.runtimeState === 'running' ? 'ok' : '' },
+      { k: T('mods.card.type'), v: typeInfo(meta.type || 'reactor').label },
+      { k: T('mods.card.state'), v: stateLabel(view.runtimeState), cls: view.runtimeState === 'running' ? 'ok' : '' },
       { k: T('mods.component-address', '组件地址'), v: view.address || '-' },
     ];
     if (stats) {
@@ -1401,7 +1401,7 @@ const ModView = (() => {
     if (!view) return;
     try {
       const data = await App.api(`mods/${encodeURIComponent(modName)}`);
-      if (!data || data.error) throw new Error((data && data.error) || '加载失败');
+      if (!data || data.error) throw new Error((data && data.error) || T('mods.load-failed', '加载失败'));
       view.meta = data;
       view.markers = Array.isArray(data.markers) ? data.markers : [];
       view.address = data.address || view.address;
@@ -1417,7 +1417,7 @@ const ModView = (() => {
         deviceType: data.type,
       });
     } catch (e) {
-      appendLog(modName, { ts: Date.now(), level: 'error', msg: `读取 Mod 状态失败: ${e.message}` });
+      appendLog(modName, { ts: Date.now(), level: 'error', msg: `${T('mods.state-load-failed', '读取 Mod 状态失败: ')}${e.message}` });
     }
   }
 

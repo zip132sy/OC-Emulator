@@ -14,6 +14,8 @@ const App = (() => {
     wsSubscribedMod: null,
     logLevel: 'error',   // full | error | off, 与服务端设置同步
     sidebarMode: 'vm',  // 'vm' | 'mod'
+    connText: 'disconnected', // 最近一次连接状态 key, 语言切换后重绘
+    connKind: 'err',
     _modsSig: '',       // Mods 列表签名, 避免轮询时无意义重建 DOM
     tabPanes: new Map(), // tabId -> HTMLElement (缓存 pane 避免切换时重建)
   };
@@ -34,6 +36,8 @@ const App = (() => {
 
   function setConnStatus(text, kind = '') {
     const el = $('#conn-status');
+    state.connText = text;
+    state.connKind = kind;
     el.textContent = I18N.t('ws.' + text);
     el.className = 'conn-status ' + kind;
   }
@@ -54,23 +58,23 @@ const App = (() => {
   // ---------- Lua 检测 ----------
   async function checkLua() {
     const badge = $('#lua-badge');
-    badge.textContent = 'Lua: 检查中…';
+    badge.textContent = I18N.t('lua.checking');
     badge.className = 'brand-sub';
     try {
       const r = await api('lua/check', { method: 'POST' });
       if (r && r.ok) {
-        badge.textContent = 'Lua: ' + r.version + (r.cached ? ' (缓存)' : '');
+        badge.textContent = 'Lua: ' + r.version + (r.cached ? I18N.t('lua.cached') : '');
         badge.className = 'brand-sub ok';
       } else {
-        badge.textContent = 'Lua: 失败';
+        badge.textContent = I18N.t('lua.failed');
         badge.className = 'brand-sub err';
-        const errs = (r && r.errors) ? r.errors.join('; ') : '未知错误';
-        setStatus('Lua 检测失败: ' + errs, 'err');
+        const errs = (r && r.errors) ? r.errors.join('; ') : I18N.t('lua.unknown-error');
+        setStatus(I18N.t('lua.check-failed') + errs, 'err');
       }
     } catch (e) {
-      badge.textContent = 'Lua: 错误';
+      badge.textContent = I18N.t('lua.error');
       badge.className = 'brand-sub err';
-      setStatus('Lua 检测请求失败: ' + e.message, 'err');
+      setStatus(I18N.t('lua.request-failed') + e.message, 'err');
     }
   }
 
@@ -169,7 +173,9 @@ const App = (() => {
           <button class="btn" data-action="modal-close">${I18N.t('settings.cancel')}</button>
           <button class="btn btn-primary" id="settings-save">${I18N.t('settings.save')}</button>
         `,
-        onMount(body) {
+        onMount(body, footer) {
+          const cancelBtn = footer.querySelector('[data-action="modal-close"]');
+          if (cancelBtn) cancelBtn.addEventListener('click', () => Modal.close());
           const input = body.querySelector('#settings-luaexe');
           const langSelect = body.querySelector('#settings-lang');
           const logLevelSelect = body.querySelector('#settings-loglevel');
@@ -243,9 +249,7 @@ const App = (() => {
           fileInput.addEventListener('change', () => {
             if (fileInput.files.length > 0) {
               input.value = fileInput.files[0].name;
-              alert(I18N.getLang() === 'zh'
-                ? '浏览器安全限制无法获取完整路径, 请手动输入 Lua 可执行文件的完整路径。'
-                : 'Browser security prevents getting the full path. Please enter the full path manually.');
+              alert(I18N.t('settings.path-restricted'));
               input.focus();
               input.select();
             }
@@ -277,7 +281,7 @@ const App = (() => {
         },
       });
     } catch (e) {
-      alert((I18N.getLang() === 'zh' ? '加载设置失败: ' : 'Failed to load settings: ') + e.message);
+      alert(I18N.t('settings.load-failed') + e.message);
     }
   }
 
@@ -797,12 +801,12 @@ const App = (() => {
 
   function showModContextMenu(modName, x, y) {
     const items = [
-      { label: '打开', action: () => openModTab(modName) },
-      { label: '启动', action: () => api(`mods/${encodeURIComponent(modName)}/start`, { method: 'POST' }).then(() => refreshMods(true)) },
-      { label: '停止', action: () => api(`mods/${encodeURIComponent(modName)}/stop`, { method: 'POST' }).then(() => refreshMods(true)) },
-      { label: '重启', action: () => api(`mods/${encodeURIComponent(modName)}/restart`, { method: 'POST' }).then(() => refreshMods(true)) },
-      { label: '删除', action: async () => {
-        if (confirm(`确定删除 Mod "${modName}" ?`)) {
+      { label: I18N.t('ctx.open'), action: () => openModTab(modName) },
+      { label: I18N.t('ctx.start'), action: () => api(`mods/${encodeURIComponent(modName)}/start`, { method: 'POST' }).then(() => refreshMods(true)) },
+      { label: I18N.t('ctx.stop'), action: () => api(`mods/${encodeURIComponent(modName)}/stop`, { method: 'POST' }).then(() => refreshMods(true)) },
+      { label: I18N.t('ctx.restart'), action: () => api(`mods/${encodeURIComponent(modName)}/restart`, { method: 'POST' }).then(() => refreshMods(true)) },
+      { label: I18N.t('ctx.delete'), action: async () => {
+        if (confirm(I18N.t('ctx.confirm-delete-mod').replace('{name}', modName))) {
           await api(`mods/${encodeURIComponent(modName)}`, { method: 'DELETE' });
           const related = state.tabs.filter(t => t.type === 'mod' && t.mod === modName);
           for (const t of related) closeTab(t.id);
@@ -811,7 +815,7 @@ const App = (() => {
       } },
     ];
     const choice = items.map((it, i) => `${i}: ${it.label}`).join('\n');
-    const idx = prompt(`选择操作:\n${choice}`, '0');
+    const idx = prompt(`${I18N.t('ctx.menu-title')}\n${choice}`, '0');
     if (idx !== null) {
       const i = parseInt(idx, 10);
       if (items[i]) items[i].action();
@@ -949,7 +953,7 @@ const App = (() => {
       const el = document.createElement('div');
       el.className = 'tab' + (tab.id === state.activeTabId ? ' active' : '');
       el.dataset.tabId = tab.id;
-      el.innerHTML = `<span class="tab-title"></span><span class="tab-close" title="关闭">×</span>`;
+      el.innerHTML = `<span class="tab-title"></span><span class="tab-close" title="${I18N.t('tab.close')}">×</span>`;
       el.querySelector('.tab-title').textContent = tab.title;
       el.addEventListener('click', (e) => {
         if (e.target.classList.contains('tab-close')) {
@@ -976,9 +980,9 @@ const App = (() => {
         welcome.className = 'welcome';
         welcome.innerHTML = `
           <div class="welcome-logo">⬣</div>
-          <h1>OC Emulator</h1>
-          <p>OpenComputers 模拟器 · Web 控制面板 v2.0</p>
-          <p class="hint">从左侧选择一个虚拟机,或点击「新建虚拟机」开始。</p>`;
+          <h1 id="welcome-title">${I18N.t('welcome.title')}</h1>
+          <p id="welcome-subtitle">${I18N.t('welcome.subtitle')}</p>
+          <p class="hint" id="welcome-hint">${I18N.t('welcome.hint')}</p>`;
         container.appendChild(welcome);
       }
       welcome.style.display = '';
@@ -1124,10 +1128,10 @@ const App = (() => {
   function showVMContextMenu(vmName, x, y) {
     // 简易菜单: 启动/停止/编辑/导出/导入/删除
     const items = [
-      { label: '打开', action: () => openVMTab(vmName) },
-      { label: '启动', action: () => api(`vms/${encodeURIComponent(vmName)}/start`, { method: 'POST' }).then(refreshVMs) },
-      { label: '停止', action: () => api(`vms/${encodeURIComponent(vmName)}/stop`, { method: 'POST' }).then(refreshVMs) },
-      { label: '编辑磁盘…', action: () => {
+      { label: I18N.t('ctx.open'), action: () => openVMTab(vmName) },
+      { label: I18N.t('ctx.start'), action: () => api(`vms/${encodeURIComponent(vmName)}/start`, { method: 'POST' }).then(refreshVMs) },
+      { label: I18N.t('ctx.stop'), action: () => api(`vms/${encodeURIComponent(vmName)}/stop`, { method: 'POST' }).then(refreshVMs) },
+      { label: I18N.t('ctx.edit-disk'), action: () => {
         // 找到该 VM 的 disk1
         api(`vms/${encodeURIComponent(vmName)}`).then(cfg => {
           const hw = cfg && cfg.hardware || {};
@@ -1136,17 +1140,17 @@ const App = (() => {
             openTab({
               id: 'disk-' + vmName + '-disk1',
               type: 'disk-editor',
-              title: `${vmName} / 磁盘1`,
+              title: `${vmName} / ${I18N.t('hw.disk1')}`,
               vm: vmName,
               diskPath: `vms/${vmName}/${diskFile}`,
             });
           }
         });
       } },
-      { label: '导出虚拟机…', action: () => ExportWizard.open(vmName) },
-      { label: '导入虚拟机…', action: () => ExportWizard.openImport() },
-      { label: '删除', action: async () => {
-        if (confirm(`确定删除虚拟机 "${vmName}" ?`)) {
+      { label: I18N.t('ctx.export-vm'), action: () => ExportWizard.open(vmName) },
+      { label: I18N.t('ctx.import-vm'), action: () => ExportWizard.openImport() },
+      { label: I18N.t('ctx.delete'), action: async () => {
+        if (confirm(I18N.t('ctx.confirm-delete-vm').replace('{name}', vmName))) {
           await api(`vms/${encodeURIComponent(vmName)}`, { method: 'DELETE' });
           // 关闭相关 tab
           const related = state.tabs.filter(t => t.vm === vmName);
@@ -1157,7 +1161,7 @@ const App = (() => {
     ];
     // 简易实现: 用 confirm/prompt 替代
     const choice = items.map((it, i) => `${i}: ${it.label}`).join('\n');
-    const idx = prompt(`选择操作:\n${choice}`, '0');
+    const idx = prompt(`${I18N.t('ctx.menu-title')}\n${choice}`, '0');
     if (idx !== null) {
       const i = parseInt(idx, 10);
       if (items[i]) items[i].action();
@@ -1259,6 +1263,13 @@ const App = (() => {
 
   function applyLanguage() {
     const t = I18N.t;
+    document.title = t('app.page-title');
+    // 连接状态与无障碍标签
+    setConnStatus(state.connText, state.connKind);
+    const navToggle = $('.nav-toggle');
+    if (navToggle) navToggle.setAttribute('aria-label', t('sidebar.vm-library'));
+    const modalClose = $('.modal-close');
+    if (modalClose) modalClose.setAttribute('aria-label', t('tab.close'));
     // 顶部菜单
     const set = (id, key) => { const el = document.getElementById(id); if (el) el.textContent = t(key); };
     set('menu-new-vm', 'menu.new-vm');
@@ -1278,6 +1289,8 @@ const App = (() => {
     set('welcome-title', 'welcome.title');
     set('welcome-subtitle', 'welcome.subtitle');
     set('welcome-hint', 'welcome.hint');
+    // 标签页关闭按钮提示
+    renderTabs();
     // 刷新列表文字
     renderVMList();
     renderModList();

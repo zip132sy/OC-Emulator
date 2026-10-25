@@ -450,7 +450,7 @@ const Console = (() => {
       } catch (e) {
         view.state = 'stopped';
         updateStateBadge(vmName);
-        appendLog(vmName, `[error] 启动失败: ${e.message}`, 'error');
+        appendLog(vmName, `[error] ${I18N.t('log.start-failed')}${e.message}`, 'error');
       }
       App.wsSubscribe(vmName);
     } else if (action === 'stop') {
@@ -466,7 +466,7 @@ const Console = (() => {
         view.expectCleanStop = false;
         view.state = wasRunning;
         updateStateBadge(vmName);
-        appendLog(vmName, `[error] 停止失败: ${e.message}`, 'error');
+        appendLog(vmName, `[error] ${I18N.t('log.stop-failed')}${e.message}`, 'error');
       }
     } else if (action === 'pause') {
       // 乐观 UI: 立即显示暂停状态
@@ -478,7 +478,7 @@ const Console = (() => {
       } catch (e) {
         view.state = 'running';
         updateStateBadge(vmName);
-        appendLog(vmName, `[error] 暂停失败: ${e.message}`, 'error');
+        appendLog(vmName, `[error] ${I18N.t('log.pause-failed')}${e.message}`, 'error');
       }
     } else if (action === 'resume') {
       // 乐观 UI: 立即显示运行状态
@@ -490,7 +490,7 @@ const Console = (() => {
       } catch (e) {
         view.state = 'paused';
         updateStateBadge(vmName);
-        appendLog(vmName, `[error] 恢复失败: ${e.message}`, 'error');
+        appendLog(vmName, `[error] ${I18N.t('log.resume-failed')}${e.message}`, 'error');
       }
     } else if (action === 'restart') {
       // 乐观 UI: 显示重启中状态 (用 'starting' 临时态, 运行/暂停按钮都会被禁用)
@@ -498,12 +498,12 @@ const Console = (() => {
       view.expectCleanStop = true;   // 重启过程中的停止阶段也按"正常关闭"处理
       view.state = 'starting';
       updateStateBadge(vmName);
-      appendLog(vmName, `[info] 正在重启 ${vmName}...`);
+      appendLog(vmName, `[info] ${I18N.t('log.restarting')}${vmName}...`);
       try {
         await App.api(`vms/${encodeURIComponent(vmName)}/restart`, { method: 'POST' });
         // 重启由服务器推 s2c.state, 不在此处乐观设置最终态
       } catch (e) {
-        appendLog(vmName, `[error] 重启失败: ${e.message}`, 'error');
+        appendLog(vmName, `[error] ${I18N.t('log.restart-failed')}${e.message}`, 'error');
         // 失败: 拉取服务器真实状态
         App.api(`vms/${encodeURIComponent(vmName)}/state`).then(s => {
           if (s) {
@@ -522,12 +522,12 @@ const Console = (() => {
         App.openTab({
           id: 'disk-' + vmName + '-disk1',
           type: 'disk-editor',
-          title: `${vmName} / 磁盘1`,
+          title: `${vmName} / ${I18N.t('hw.disk1')}`,
           vm: vmName,
           diskPath: `vms/${vmName}/${f}`,
         });
       } else {
-        alert('该虚拟机未挂载磁盘1');
+        alert(I18N.t('hw.no-disk1'));
       }
     } else if (action === 'edit-disk2') {
       const cfg = await App.api(`vms/${encodeURIComponent(vmName)}`);
@@ -536,12 +536,12 @@ const Console = (() => {
         App.openTab({
           id: 'disk-' + vmName + '-disk2',
           type: 'disk-editor',
-          title: `${vmName} / 磁盘2`,
+          title: `${vmName} / ${I18N.t('hw.disk2')}`,
           vm: vmName,
           diskPath: `vms/${vmName}/${f}`,
         });
       } else {
-        alert('该虚拟机未挂载磁盘2');
+        alert(I18N.t('hw.no-disk2'));
       }
     } else if (action === 'edit-floppy') {
       const cfg = await App.api(`vms/${encodeURIComponent(vmName)}`);
@@ -550,12 +550,12 @@ const Console = (() => {
         App.openTab({
           id: 'disk-' + vmName + '-floppy',
           type: 'disk-editor',
-          title: `${vmName} / 软盘`,
+          title: `${vmName} / ${I18N.t('hw.floppy')}`,
           vm: vmName,
           diskPath: `vms/${vmName}/${f}`,
         });
       } else {
-        alert('该虚拟机未挂载软盘');
+        alert(I18N.t('hw.no-floppy'));
       }
     }
   }
@@ -891,14 +891,14 @@ const Console = (() => {
       const val = tpl.path === 'openos.ocd' ? 'openos' : 'disk_template:' + tpl.path;
       disk1Items.push({
         value: val,
-        label: tpl.name + ' (模板)',
+        label: tpl.name + I18N.t('disk.template-suffix'),
         removable: false,
         selected: false,
         isTemplate: true,
       });
       disk2Items.push({
         value: val,
-        label: tpl.name + ' (模板)',
+        label: tpl.name + I18N.t('disk.template-suffix'),
         removable: false,
         selected: false,
         isTemplate: true,
@@ -1817,7 +1817,12 @@ const Console = (() => {
     const now = Date.now();
     if (now - _renderStats.since >= 5000) {
       const sec = ((now - _renderStats.since) / 1000).toFixed(1);
-      flog('debug', `render: ${_renderStats.frames} 帧 / ${_renderStats.cells} 格 / ${_renderStats.full} 次全屏 (${sec}s)`);
+      flog('debug', I18N.t('log.render-stats', {
+        frames: _renderStats.frames,
+        cells: _renderStats.cells,
+        full: _renderStats.full,
+        sec,
+      }));
       _renderStats = { since: now, frames: 0, cells: 0, full: 0 };
     }
   }
@@ -2022,7 +2027,7 @@ const Console = (() => {
       diag.inputDropped++;
       if (!inputDropWarned) {
         inputDropWarned = true;
-        appendLog(vmName, '[frontend] 输入未发送: WebSocket 未连接, 请等待重连后再试', 'warn');
+        appendLog(vmName, `[frontend] ${I18N.t('log.input-not-sent')}`, 'warn');
       }
     }
     return ok;
