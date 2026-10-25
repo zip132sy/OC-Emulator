@@ -16,6 +16,7 @@ const { DiskIO } = require('./lib/diskIO');
 const { LuaCheck } = require('./lib/luaCheck');
 const { ModemHub } = require('./lib/modemHub');
 const { InternetProxy } = require('./lib/internetProxy');
+const { DeviceBus } = require('./lib/deviceBus');
 const floppyTemplates = require('./lib/floppyTemplates');
 const sysInfo = require('./lib/sysInfo');
 
@@ -399,6 +400,8 @@ const modemHub = new ModemHub();
 const internetProxy = new InternetProxy({ timeout: 60000 });
 const diskIO = new DiskIO({ projectDir: PROJECT_DIR, luaExe: settings.luaExe });
 const luaCheck = new LuaCheck({ projectDir: PROJECT_DIR, luaExe: settings.luaExe });
+// 设备总线: 把核电站这类非计算机设备作为组件暴露给所有虚拟机
+const deviceBus = new DeviceBus({ logger });
 const vmManager = new VMManager({
   projectDir: PROJECT_DIR,
   luaExe: settings.luaExe,
@@ -406,6 +409,7 @@ const vmManager = new VMManager({
   modemHub,
   internetProxy,
   diskIO,
+  deviceBus,
   logger,
   logLevel: settings.logLevel,
 });
@@ -419,9 +423,12 @@ const modsManager = new ModsManager({
   modemHub,
   internetProxy,
   diskIO,
+  deviceBus,
   logger,
   logLevel: settings.logLevel,
 });
+deviceBus.attach(vmManager);
+deviceBus.attach(modsManager);
 
 // ---------- 静态文件服务 ----------
 const MIME_TYPES = {

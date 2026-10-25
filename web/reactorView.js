@@ -327,6 +327,7 @@ const ReactorView = (() => {
           </div>
         </div>
         <div class="ic2-palette" data-role="palette"></div>
+        <div class="ic2-hint">${escapeHTML(T('reactor.design-hint', '统计按冷却单元满容量计算；实际运行状态请看设备页的「反应堆」面板。'))}</div>
         <div class="ic2-actions">
           <button type="button" class="ic2-tool-btn" data-action="clear">${escapeHTML(T('reactor.clear', '清空'))}</button>
           <button type="button" class="ic2-tool-btn" data-action="sample">${escapeHTML(T('reactor.sample', '示例布局'))}</button>

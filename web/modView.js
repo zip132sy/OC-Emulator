@@ -681,14 +681,18 @@ const ModView = (() => {
     const isReactor = type === 'reactor';
     const sceneTab = $('[data-tab="scene"]', view.pane);
     const reactorTab = $('[data-tab="reactor"]', view.pane);
+    const consoleTab = $('[data-tab="console"]', view.pane);
     if (!sceneTab || !reactorTab) return;
 
     sceneTab.style.display = isReactor ? 'none' : '';
     reactorTab.style.display = isReactor ? '' : 'none';
+    // 核电站没有程序, 控制台标签页也没有意义
+    if (consoleTab) consoleTab.style.display = isReactor ? 'none' : '';
 
     if (isReactor && !view.reactorTabApplied) {
       view.reactorTabApplied = true;
       sceneTab.classList.remove('active');
+      if (consoleTab) consoleTab.classList.remove('active');
       reactorTab.classList.add('active');
       $$('.mod-pane', view.pane).forEach(p => p.classList.toggle('active', p.dataset.pane === 'reactor'));
     }
@@ -698,8 +702,8 @@ const ModView = (() => {
       return;
     }
 
-    // 运行中每秒拉一次运行时数据, 让热量 / 发电等数值实时变化
-    ensureReactorPolling(view, view.runtimeState === 'running');
+    // 核电站的数值每秒都在变, 打开面板期间持续刷新
+    ensureReactorPolling(view, true);
 
     if (!window.ReactorView) return;
     const data = view.meta && view.meta.reactor;
@@ -773,23 +777,43 @@ const ModView = (() => {
     view.stateEl.className = `mod-state ${runtime}`;
     view.stateEl.textContent = stateLabel(runtime);
 
+    // 机器类设备 (核电站) 没有程序与无线网卡, 只显示组件地址
+    const isMachine = view.meta ? view.meta.computer === false : false;
+    const addrLabel = isMachine
+      ? T('mods.component-address', '组件地址')
+      : T('mods.wireless-address', '无线地址');
+
     if (!view.addrFlashTimer) {
       if (view.address) {
-        view.addrEl.textContent = `无线地址: ${view.address}`;
-        view.addrEl.title = '双击复制无线地址';
+        view.addrEl.textContent = `${addrLabel}: ${view.address}`;
+        view.addrEl.title = '双击复制';
       } else {
-        view.addrEl.textContent = '无线地址: (启动后分配)';
-        view.addrEl.title = '启动设备后由无线网卡分配';
+        view.addrEl.textContent = isMachine
+          ? `${addrLabel}: -`
+          : `${addrLabel}: (启动后分配)`;
+        view.addrEl.title = isMachine ? '' : '启动设备后由无线网卡分配';
       }
     }
 
     const efi = view.meta && view.meta.efi;
-    view.efiEl.textContent = efi === 'missing' ? 'EFI 缺失' : '内置 EFI';
-    view.efiEl.style.color = efi === 'missing' ? 'var(--err)' : '';
+    if (isMachine) {
+      view.efiEl.style.display = 'none';
+    } else {
+      view.efiEl.style.display = '';
+      view.efiEl.textContent = efi === 'missing' ? 'EFI 缺失' : '内置 EFI';
+      view.efiEl.style.color = efi === 'missing' ? 'var(--err)' : '';
+    }
 
+    // 机器类设备没有启动/停止/重启
     $$('[data-act]', view.pane).forEach(btn => {
-      if (btn.dataset.act === 'start') btn.disabled = runtime === 'running' || runtime === 'starting';
-      if (btn.dataset.act === 'stop') btn.disabled = runtime === 'stopped' || runtime === 'error';
+      const act = btn.dataset.act;
+      if (isMachine && (act === 'start' || act === 'stop' || act === 'restart')) {
+        btn.style.display = 'none';
+        return;
+      }
+      btn.style.display = '';
+      if (act === 'start') btn.disabled = runtime === 'running' || runtime === 'starting';
+      if (act === 'stop') btn.disabled = runtime === 'stopped' || runtime === 'error';
     });
 
     const disabled = runtime !== 'running';
@@ -837,6 +861,10 @@ const ModView = (() => {
   function renderItems(view) {
     const st = view.state;
     const meta = view.meta || {};
+    if (meta.computer === false) {
+      renderMachineInfo(view);
+      return;
+    }
     if (!st) {
       view.itemsEl.innerHTML = `<div class="mod-empty">设备尚未上报状态。启动设备后会显示物品栏、工具与储罐。</div>`;
       return;
@@ -943,6 +971,43 @@ const ModView = (() => {
     `;
   }
 
+  // 机器类设备 (核电站) 的摘要: 没有物品栏与工具, 只显示设备参数
+  function renderMachineInfo(view) {
+    const meta = view.meta || {};
+    const reactor = meta.reactor || null;
+    const stats = reactor && reactor.stats ? reactor.stats : null;
+    const runtime = reactor && reactor.runtime ? reactor.runtime : null;
+
+    const cards = [
+      { k: '设备类型', v: typeInfo(meta.type || 'reactor').label },
+      { k: '运行状态', v: stateLabel(view.runtimeState), cls: view.runtimeState === 'running' ? 'ok' : '' },
+      { k: T('mods.component-address', '组件地址'), v: view.address || '-' },
+    ];
+    if (stats) {
+      cards.push({ k: T('reactor.size', '大小'), v: `${stats.columns} × ${stats.rows}` });
+      cards.push({ k: T('reactor.eu', 'EU/t'), v: String(stats.euPerTick) });
+      cards.push({ k: T('reactor.heat', '热量/t'), v: String(stats.heatPerTick) });
+      cards.push({ k: T('reactor.heat-capacity', '吸热容量'), v: Number(stats.effectiveHeatCapacity || 0).toLocaleString() });
+      cards.push({ k: T('reactor.info.fuel-rods', '燃料棒'), v: String(stats.fuelRods) });
+    }
+    if (runtime) {
+      cards.push({ k: T('reactor.info.generated', '累计发电'), v: `${Math.round(runtime.generatedEu).toLocaleString()} EU` });
+      cards.push({ k: T('reactor.info.elapsed', '运行时长'), v: String(Math.floor(runtime.elapsed)) + 's' });
+    }
+
+    const cardsHTML = cards.map(c => `
+      <div class="mod-card">
+        <div class="k">${escapeHTML(c.k)}</div>
+        <div class="v ${c.cls || ''}">${escapeHTML(c.v)}</div>
+      </div>
+    `).join('');
+
+    view.itemsEl.innerHTML = `
+      <div class="mod-info-grid">${cardsHTML}</div>
+      <div class="mod-empty" style="text-align:left;">${escapeHTML(T('mods.machine-hint', '该设备不是计算机：没有 EFI、硬盘与程序，其它计算机可以通过组件访问它。'))}</div>
+    `;
+  }
+
   // ---------- 日志 ----------
   function appendLog(modName, entry) {
     const view = views.get(modName);
@@ -962,17 +1027,48 @@ const ModView = (() => {
     view.consoleEl.scrollTop = view.consoleEl.scrollHeight;
   }
 
+  // ---------- 核电站配置: 只有设备本身, 没有 EFI / 磁盘 ----------
+  async function openReactorConfig(modName, mod) {
+    let data = mod.reactor || null;
+    if (!data) {
+      try {
+        data = await App.api(`mods/${encodeURIComponent(modName)}/reactor`);
+      } catch (e) {
+        appendLog(modName, { ts: Date.now(), level: 'error', msg: `${T('mods.config.load-failed', '加载配置失败')}: ${e.message}` });
+      }
+    }
+    Modal.open({
+      title: `${T('mods.config.title', '配置')} · ${modName}`,
+      size: 'large',
+      bodyHTML: '<div class="mod-config"><div id="mod-reactor-root"></div></div>',
+      footerHTML: `<button class="btn" data-action="modal-close" type="button">${T('mods.config.close', '关闭')}</button>`,
+      onMount(body, footer) {
+        const root = body.querySelector('#mod-reactor-root');
+        if (root && data && !data.error && window.ReactorView) {
+          ReactorView.render(root, modName, data, {
+            onSaved: () => {
+              if (window.App) App.refreshMods(true);
+              reload(modName);
+            },
+          });
+        } else if (root) {
+          root.innerHTML = `<div class="hw-note">${T('mods.config.load-failed', '加载配置失败')}</div>`;
+        }
+        const close = footer.querySelector('[data-action="modal-close"]');
+        if (close) close.addEventListener('click', () => Modal.close());
+      },
+    });
+  }
+
   // ---------- 配置 (EFI / 硬件) ----------
   async function openConfig(modName) {
     let mod, efi;
     try {
-      const results = await Promise.all([
-        App.api(`mods/${encodeURIComponent(modName)}`),
-        App.api(`mods/${encodeURIComponent(modName)}/efi`),
-      ]);
-      mod = results[0] || {};
-      efi = results[1] || {};
+      mod = await App.api(`mods/${encodeURIComponent(modName)}`) || {};
       if (mod.error) throw new Error(mod.error);
+      // 机器类设备 (核电站) 没有程序与硬件, 只配置设备本身
+      if (mod.type === 'reactor') return openReactorConfig(modName, mod);
+      efi = await App.api(`mods/${encodeURIComponent(modName)}/efi`) || {};
       if (efi.error) throw new Error(efi.error);
     } catch (e) {
       const msg = T('mods.config.load-failed', '加载配置失败') + ': ' + e.message;
@@ -989,8 +1085,6 @@ const ModView = (() => {
     const curScreen = (cfg.screen && cfg.screen.tier) || 1;
     const curStrength = hw.modemStrength == null ? '' : String(hw.modemStrength);
     const isRunning = mod.state === 'running' || mod.state === 'starting';
-    const isReactor = mod.type === 'reactor' || (hw.modsType === 'reactor');
-    const firstTab = isReactor ? 'reactor' : 'efi';
     const maxSize = Number(efi.maxSize) || 4096;
 
     // 设备专属配置: 机器人 (主手/副手工具) / 无人机 (飞行参数)
@@ -1065,15 +1159,11 @@ const ModView = (() => {
     const bodyHTML = `
       <div class="mod-config">
         <div class="mod-config-tabs">
-          ${isReactor ? `<button class="mod-config-tab ${firstTab === 'reactor' ? 'active' : ''}" data-mctab="reactor" type="button">☢ ${T('mods.config.reactor', '反应堆')}</button>` : ''}
-          <button class="mod-config-tab ${firstTab === 'efi' ? 'active' : ''}" data-mctab="efi" type="button">${T('mods.config.efi', 'EFI 程序')}</button>
+          <button class="mod-config-tab active" data-mctab="efi" type="button">${T('mods.config.efi', 'EFI 程序')}</button>
           <button class="mod-config-tab" data-mctab="hardware" type="button">${T('mods.config.hardware', '硬件')}</button>
           ${hasProfile ? `<button class="mod-config-tab" data-mctab="profile" type="button">${profIcon} ${escapeHTML(profLabel)}</button>` : ''}
         </div>
-        ${isReactor ? `<div class="mod-config-pane ${firstTab === 'reactor' ? 'active' : ''}" data-mcpane="reactor">
-          <div id="mod-reactor-root"></div>
-        </div>` : ''}
-        <div class="mod-config-pane ${firstTab === 'efi' ? 'active' : ''}" data-mcpane="efi">
+        <div class="mod-config-pane active" data-mcpane="efi">
           <div class="efi-bar">
             <span>${T('mods.config.efi-limit', 'EEPROM 上限')}: <b>${maxSize}</b> bytes</span>
             <span id="mod-efi-size">0 / ${maxSize}</span>
@@ -1121,13 +1211,6 @@ const ModView = (() => {
         const saveBtn = footer.querySelector('#mod-cfg-save');
         const restoreBtn = body.querySelector('#mod-efi-restore');
         const restartEl = footer.querySelector('#mod-cfg-restart');
-        const restartLabel = restartEl ? restartEl.closest('label') : null;
-        const setFooterSaveVisible = (visible) => {
-          if (saveBtn) saveBtn.style.display = visible ? '' : 'none';
-          if (restartLabel) restartLabel.style.display = visible ? '' : 'none';
-        };
-        // 反应堆页签有自己的「保存反应堆」按钮, 避免底部通用保存按钮造成误解
-        setFooterSaveVisible(!(isReactor && firstTab === 'reactor'));
 
         editor.value = efi.content || '';
 
@@ -1143,27 +1226,6 @@ const ModView = (() => {
 
         updateSize();
         editor.addEventListener('input', updateSize);
-
-        // IC2 核电站布局 GUI
-        if (isReactor && window.ReactorView) {
-          const reactorRoot = body.querySelector('#mod-reactor-root');
-          const mountReactor = (data) => {
-            if (!data || data.error || !reactorRoot) return;
-            ReactorView.render(reactorRoot, modName, data, {
-              onSaved: () => {
-                if (window.App) App.refreshMods(true);
-                reload(modName);
-              },
-            });
-          };
-          if (mod.reactor) {
-            mountReactor(mod.reactor);
-          } else {
-            App.api(`mods/${encodeURIComponent(modName)}/reactor`)
-              .then(mountReactor)
-              .catch(() => { /* 布局加载失败时保留空面板 */ });
-          }
-        }
 
         // Tab 插入两个空格, Ctrl+S 保存
         editor.addEventListener('keydown', (e) => {
@@ -1194,7 +1256,6 @@ const ModView = (() => {
             const name = btn.dataset.mctab;
             $$('.mod-config-tab', body).forEach(b => b.classList.toggle('active', b === btn));
             $$('.mod-config-pane', body).forEach(p => p.classList.toggle('active', p.dataset.mcpane === name));
-            setFooterSaveVisible(name !== 'reactor');
           });
         });
 

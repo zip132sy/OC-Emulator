@@ -1375,6 +1375,15 @@ local function dispatchServerMessage(msg)
     mods._wallMs = tonumber(msg.wall) or mods._wallMs
   end
   local t = msg.type
+  -- 外部设备: 列表与状态快照
+  if t == "ext_devices" then
+    if extComponents then extComponents.apply(msg.devices) end
+    return
+  end
+  if t == "ext_state" then
+    if extComponents then extComponents.update(msg.devices) end
+    return
+  end
   -- 把前端传来的 "OC 像素坐标" 换算成 OC 信号真正使用的坐标。
   --
   -- 关键点: OC 在精确模式 (setPrecise) 下返回的并不是像素值, 而是"0 基分数字符
@@ -3631,6 +3640,123 @@ setmetatable(component, {
     return nil
   end
 })
+
+-- ============================================================
+-- 外部设备组件
+--
+-- 核电站这类设备不是计算机, 在真实环境里通过适配器接入组件网络。
+-- 服务端每秒推送一次状态快照 (ext_state), 这里的组件方法读取本地快照;
+-- 写操作 (setActive) 通过 ext_command 发回服务端执行。
+--
+-- 说明: Lua 5.1 的单个 chunk 最多 200 个 local, 这里用全局表保存,
+-- 避免再占用 local 名额。
+-- ============================================================
+extComponents = { devices = {} }   -- devices: address -> proxy
+
+extComponents.makeReactor = function(address)
+  local dev = { address = address, type = "reactor", _state = {} }
+  local function S() return dev._state end
+
+  function dev.getHeat() return tonumber(S().hullHeat) or 0 end
+  function dev.getMaxHeat() return tonumber(S().hullHeatCapacity) or 0 end
+  function dev.getReactorEUOutput() return tonumber(S().euPerTick) or 0 end
+  dev.getReactorEUEnergyOutput = dev.getReactorEUOutput
+  function dev.getEnergyOutput() return tonumber(S().euPerTick) or 0 end
+  function dev.getHeatOutput() return tonumber(S().heatPerTick) or 0 end
+  function dev.isActive() return S().active == true end
+  function dev.getActive() return S().active == true end
+  function dev.setActive(on)
+    local value = on and true or false
+    sendToServer({ type = "ext_command", address = address, method = "setActive", args = { value } })
+    dev._state.active = value
+    return true
+  end
+  function dev.activate() return dev.setActive(true) end
+  function dev.deactivate() return dev.setActive(false) end
+  function dev.getSize() return tonumber(S().columns) or 0, tonumber(S().rows) or 0 end
+  function dev.slotCount() return (tonumber(S().columns) or 0) * (tonumber(S().rows) or 0) end
+  dev.getSlotCount = dev.slotCount
+  function dev.getStackInSlot(slot)
+    local index = tonumber(slot)
+    if not index then return nil end
+    local slots = S().slots
+    if type(slots) ~= "table" then return nil end
+    -- OC 的槽位编号从 0 开始
+    local item = slots[index + 1]
+    if type(item) ~= "table" then return nil end
+    return item
+  end
+  function dev.getStats()
+    local s = S()
+    return {
+      active = s.active == true,
+      columns = tonumber(s.columns) or 0,
+      rows = tonumber(s.rows) or 0,
+      euPerTick = tonumber(s.euPerTick) or 0,
+      heatPerTick = tonumber(s.heatPerTick) or 0,
+      hullHeat = tonumber(s.hullHeat) or 0,
+      hullHeatCapacity = tonumber(s.hullHeatCapacity) or 0,
+      remainingCapacity = tonumber(s.remainingCapacity) or 0,
+      totalCapacity = tonumber(s.totalCapacity) or 0,
+      generatedEu = tonumber(s.generatedEu) or 0,
+      status = s.status,
+    }
+  end
+  return dev
+end
+
+extComponents.apply = function(list)
+  if type(list) ~= "table" then return end
+  local seen = {}
+  for _, entry in ipairs(list) do
+    local address = entry.address
+    local ctype = entry.type
+    if type(address) == "string" and type(ctype) == "string" then
+      seen[address] = true
+      if not extComponents.devices[address] then
+        local proxy = nil
+        if ctype == "reactor" then proxy = extComponents.makeReactor(address) end
+        if proxy then
+          extComponents.devices[address] = proxy
+          componentRegistry[address] = { type = ctype, proxy = proxy }
+          if not component._primaries[ctype] then component._primaries[ctype] = address end
+        end
+      end
+    end
+  end
+  -- 服务端已不存在的设备要从组件表里移除
+  for address, proxy in pairs(extComponents.devices) do
+    if not seen[address] then
+      extComponents.devices[address] = nil
+      componentRegistry[address] = nil
+      if component._primaries[proxy.type] == address then component._primaries[proxy.type] = nil end
+    end
+  end
+end
+
+extComponents.update = function(list)
+  if type(list) ~= "table" then return end
+  for _, entry in ipairs(list) do
+    local proxy = extComponents.devices[entry.address]
+    if proxy and type(entry.state) == "table" then
+      for k, v in pairs(entry.state) do proxy._state[k] = v end
+    end
+  end
+end
+
+-- 启动时载入 devices.json: 程序一开始运行就能访问外部设备
+do
+  local f = _io_open(vmDir .. "/devices.json", "r")
+  if f then
+    local text = f:read("*a")
+    f:close()
+    local ok, list = pcall(jsonDecode, text or "")
+    if ok and type(list) == "table" then
+      extComponents.apply(list)
+      extComponents.update(list)
+    end
+  end
+end
 
 -- ============================================================
 -- unicode API (UTF-8 支持)
