@@ -20,6 +20,9 @@
 - **软盘与磁盘**：磁盘为 `.ocd` 格式，软盘为独立的 `.ocf` 格式；软盘模板从官方 loot 目录同步。
 - **位图字体渲染**：使用 GNU Unifont `.hex` 位图字体逐像素渲染，支持宽字符（中文）与调色板 16 色模式。
 - **组件模拟**：GPU（含 Tier 分级与调色板）、Screen（Tier 分辨率）、键盘 / 鼠标（含精确模式）、文件系统、网卡、数据卡、EEPROM、Internet 代理等。
+- **Mods 统一组件**：把 OpenComputers 的机器人（Robot）、无人机（Drone）、单片机（Microcontroller）合并为一个 `mods` 组件，提供完整的中文 API 映射与虚拟世界模拟，可像原版一样移动、挖掘、放置、管理物品栏与储罐。
+- **Mods 设备面板**：左侧列表可在「虚拟机 / Mods」之间切换；每个 Mod 是一个独立设备，带 3D 坐标场景、物品/状态标签页、内置 EFI 启动日志，并可通过 T1/T2 无线网卡用电脑远程控制。
+- **IC2 核电站**：Mod 类型新增「核电站」，配置中使用 IC2 原版风格的灰色反应堆 GUI，燃料棒分铀/MOX 与单联/双联/四联，冷却单元分 10k/30k/60k，冷凝模块分 20k/100k；可调整 3~9 列反应堆大小，实时查看 EU/t、热量、吸热容量与安全时间。设备页用 2D 反应堆面板替代 3D 场景，逐格显示组件等级、脉冲、产电、发热、吸热与生效状态。
 - **系统信息联动**：读取宿主机的内存占用与电量，映射给虚拟机内的 `computer.freeMemory()` / `computer.energy()`。
 - **自动更新**：启动脚本可自动从 GitHub / Gitee 拉取最新版本（默认开启，可在设置中关闭）。
 - **错误反馈**：前端出现异常时会弹出错误面板，支持一键复制错误信息并跳转 GitHub / Gitee 提交 Issue。
@@ -75,6 +78,29 @@ http://127.0.0.1:8080
 - **⚙ Settings**：设置 Lua 路径、界面语言、日志级别、命令行窗口显示、滚轮兼容模式、**自动更新开关**。
 - **Restart / Stop service**：从面板重启或停止后台服务。
 
+### Mods 统一组件与 Mods 设备
+
+每台虚拟机默认带一个 `mods` 组件（机器人 / 无人机 / 单片机三合一），在系统里直接使用：
+
+```lua
+local mods = require("mods")
+print(mods.getVersion())
+print(mods.help())          -- 查看完整的 OC 原版 API 映射
+```
+
+控制面板左侧新增「Mods」列表：
+
+- 点击「＋ New Mod」创建无人机 / 机器人 / 核电站；也可以把 Mod 文件夹放进项目根目录的 `Mods/` 后点刷新。
+- 打开 Mod 后可切换 **3D 场景**、**物品 / 状态**、**控制台 / EFI** 三个标签页；核电站的第一个标签页是 **☢ 反应堆** 2D 面板。
+- 3D 场景显示坐标轴、网格、设备位置、目标点、朝向、速度与 `mod.json` 中配置的标记点。
+- 每个 Mod 自动安装内置 EFI 和启动盘，不需要手动准备固件。
+- 「⚙ 配置」可编辑 EFI 程序和硬件（APU / 内存 / 屏幕 / 扩展卡 / 无线强度），保存后可自动重启生效。
+- 机器人和无人机各有专属配置页：机器人可设置主手 / 副手工具、物品栏格数与内部储罐；无人机可设置最大速度、加速度与物品栏格数。
+- 核电站的「⚙ 配置 → 反应堆」标签页提供 IC2 风格网格 GUI：支持 3~9 列 × 6 行、燃料棒 / 冷却单元 / 冷凝模块的位置与数量编辑、实时 EU/t 与热量计算。
+- 电脑使用扩展卡中的无线网卡（T1 / T2 均可）连接 Mod 的 7777 端口即可远程控制；双击 Mod 工具栏中的无线地址即可复制。
+
+完整的映射表、Mods 文件夹格式、3D 标记点与无线协议见 [MODS.md](./MODS.md)。
+
 ---
 
 ## 📁 目录结构
@@ -83,6 +109,8 @@ http://127.0.0.1:8080
 OC-Emulator/
 ├── server.js                 # 主服务端入口 (HTTP + WebSocket, 端口探测, 静态资源)
 ├── oc-emulator.lua           # 核心 VM 运行时 (OpenComputers 组件 / 屏幕 / 事件模型)
+├── mods.lua                  # Mods 统一组件 (机器人 / 无人机 / 单片机 + 虚拟世界)
+├── mods-efi.lua              # Mods 设备内置 EFI 模板
 ├── disk.lua                  # .ocd 磁盘格式读写模块
 ├── json.lua                  # Lua JSON 编解码
 ├── lua_check.lua             # Lua 环境检测脚本
@@ -93,6 +121,8 @@ OC-Emulator/
 │   ├── diskIO.js                 # 磁盘 / 软盘 I/O（.ocd / .ocf）
 │   ├── luaCheck.js               # Lua 解释器检测与缓存
 │   ├── modemHub.js               # 网卡 / 调制解调器信号路由
+│   ├── modsManager.js            # Mods 设备管理 (创建 / 启动 / 状态 / 无线桥接)
+│   ├── reactor.js                # IC2 核电站网格 / 组件 / EU 与热量计算
 │   ├── internetProxy.js          # Internet 组件 HTTP/HTTPS 代理
 │   ├── floppyTemplates.js        # 软盘模板读取
 │   ├── setupLua.js               # 跨平台 Lua 5.3 自动安装
@@ -107,6 +137,8 @@ OC-Emulator/
 │   ├── styles.css                # 样式
 │   ├── app.js                    # 主应用：VM 列表 / WebSocket / 标签页 / 设置
 │   ├── console.js                # 屏幕渲染（位图字体 / 脏更新 / 输入事件 / 滚轮兼容）
+│   ├── modView.js                # Mods 设备视图（3D 场景 / 物品状态 / EFI 控制台）
+│   ├── reactorView.js            # IC2 核电站配置 GUI
 │   ├── diskEditor.js             # 磁盘编辑器
 │   ├── wizard.js                 # 新建虚拟机向导
 │   ├── exportWizard.js           # 导入 / 导出向导
@@ -119,9 +151,13 @@ OC-Emulator/
 ├── disks/                    # 磁盘模板
 │   └── openos.ocd                # OpenOS 模板磁盘
 │
+├── Mods/                     # Mods 设备数据 (运行时自动生成, 不入库)
+│   └── <名称>/                   # mod.json / config.json / efi.lua / disk.ocd
+│
 ├── run.bat                   # Windows 启动脚本（看门狗 + 自动更新）
 ├── run.sh                    # Linux / macOS 启动脚本（看门狗 + 自动更新）
 ├── SHA256SUMS                # 各文件的 SHA-256 清单（用于校验下载是否完整）
+├── MODS.md                   # Mods 统一组件说明与完整 API 映射
 ├── .gitignore                # 忽略规则
 ├── LICENSE                   # MIT 开源协议
 └── README.md                 # 本文件

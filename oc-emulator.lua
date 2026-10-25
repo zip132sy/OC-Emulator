@@ -621,6 +621,14 @@ package.path = EMU_DIR .. "?.lua;" .. package.path
 
 -- 加载模块
 local disk = require("disk")
+-- Mods: 机器人 / 无人机 / 单片机 统一组件
+local mods = require("mods")
+-- 使用服务端墙钟作为 Mods 的时间源 (收到 tick 时更新)
+mods.setClock(function()
+  local ms = tonumber(mods._wallMs) or 0
+  if ms > 0 then return ms / 1000 end
+  return os.clock()
+end)
 
 -- ============================================================
 -- 从 VM 目录加载 config.json
@@ -774,6 +782,15 @@ local config = {
   bootOrder = hw.bootOrder,
   -- 扩展卡
   expansion = hw.expansion or {nil, nil, nil},
+  -- Mods 统一组件 (机器人 / 无人机 / 单片机), 默认启用
+  modsEnabled = hw.mods ~= false,
+  -- Mods 设备模式: 由控制面板创建, 使用内置 EFI 启动并上报状态
+  modsDevice = vmConfig.modsDevice == true,
+  modsName = hw.modsName,
+  modsType = hw.modsType,
+  -- Mods 设备专属配置 (机器人: 主手 / 副手工具等, 无人机: 速度等)
+  robotProfile = hw.robot,
+  droneProfile = hw.drone,
   -- APU
   apuTier = apuTier,
   useAPU = true,
@@ -792,6 +809,29 @@ _stderr:write("[emulator] Disk1: " .. (config.disk1File or "none") .. "\n")
 _stderr:write("[emulator] Disk2: " .. (config.disk2File or "none") .. "\n")
 _stderr:write("[emulator] Floppy: " .. (config.floppyFile or "none") .. "\n")
 _stderr:write("[emulator] EEPROM: " .. (config.eepromFile or "built-in") .. "\n")
+
+-- 应用 Mods 设备元数据
+if config.modsName then mods.setName(config.modsName) end
+if config.modsType then mods.setDeviceType(config.modsType) end
+
+-- 应用设备专属配置 (机器人主手 / 副手工具、无人机速度等)
+if config.robotProfile then mods.setProfile(config.robotProfile) end
+if config.droneProfile then mods.setProfile(config.droneProfile) end
+
+-- Mods 设备的 EFI 通过这两个全局向服务端上报状态 / 读取墙钟
+if config.modsDevice then
+  _G.modWallTime = function()
+    local ms = tonumber(mods._wallMs) or 0
+    if ms > 0 then return ms / 1000 end
+    return os.clock()
+  end
+  _G.modsEmit = function(payload)
+    if type(payload) ~= "table" then return end
+    local out = {}
+    for k, v in pairs(payload) do out[k] = v end
+    sendToServer(out)
+  end
+end
 
 -- 发送状态: running
 sendToServer({ type = "state", state = "running" })
@@ -997,26 +1037,8 @@ local function saveAllDisks()
     end)
     if not ok then _stderr:write("[emulator] WARNING: save floppy failed: " .. tostring(err) .. "\n") end
   end
-  -- EEPROM: 把 eepromCode/eepromLabel/eepromData 写回 .oce 或 .lua 文件
-  if config.eepromFile and config.eepromFile ~= "" then
-    local eepromPath = config.eepromFile
-    if not eepromPath:match("^[A-Za-z]:") and not eepromPath:match("^[/\\]") then
-      eepromPath = config.vmDir .. "/" .. eepromPath
-    end
-    if eepromPath:match("%.oce$") then
-      local ok, err = pcall(function()
-        disk.saveEEPROM(eepromPath, eepromLabel, eepromCode)
-      end)
-      if not ok then _stderr:write("[emulator] WARNING: save EEPROM failed: " .. tostring(err) .. "\n") end
-    elseif eepromPath:match("%.lua$") then
-      -- .lua 文件: 纯文本写回 (如果用户 eeprom.set 写入了新代码)
-      local f = _io_open(eepromPath, "wb")
-      if f then
-        f:write(eepromCode or "")
-        f:close()
-      end
-    end
-  end
+  -- EEPROM 不参与关机写回: eeprom.set() 会立即持久化, 关机时再写回内存副本
+  -- 会覆盖控制面板刚保存的 EFI。
 end
 
 -- ============================================================
@@ -1342,6 +1364,10 @@ local _externalRamTotal = 0
 local function dispatchServerMessage(msg)
   ocCheckAttribution("dispatchServerMessage")
   if type(msg) ~= "table" then return end
+  -- 服务端每 50ms~10s 会发 tick; 携带真实墙钟, 供 Mods 无人机运动与状态上报使用
+  if msg.wall then
+    mods._wallMs = tonumber(msg.wall) or mods._wallMs
+  end
   local t = msg.type
   -- 把前端传来的 "OC 像素坐标" 换算成 OC 信号真正使用的坐标。
   --
@@ -1384,17 +1410,12 @@ local function dispatchServerMessage(msg)
       pushSignal(ev, screenAddr, mx, my, msg.btn or 0, "player")
     elseif ev == "scroll" then
       -- OC scroll 信号: scroll(address, x, y, direction, playerName)
-      if not screen then
-        elog("INPUT: scroll IGNORED - screen is nil!")
-        return
-      end
+      if not screen then return end
       local sx, sy = tonumber(msg.x) or 1, tonumber(msg.y) or 1
       -- 滚轮只需要"光标落在哪个字符格", 不需要亚格精度; 而且不论精确模式是否
       -- 开启, 传整数格坐标都能被正确命中 (MineOS 用 math.ceil 换算回格)。
-      -- 因此这里有意不走 screenInputCoords, 以免精确模式下的坐标空间差异
-      -- 导致命中判定失败、滚轮完全没有反应。
-      elog("INPUT: scroll addr=" .. tostring(screenAddr) .. " precise=" .. tostring(screen._precise)
-        .. " sx=" .. tostring(sx) .. " sy=" .. tostring(sy) .. " delta=" .. tostring(msg.delta or 1))
+      -- 因此这里有意不走 screenInputCoords, 避免精确模式下的坐标空间差异
+      -- 使命中判定失败。
       pushSignal("scroll", screenAddr, sx, sy, msg.delta or 1, "player")
     elseif ev == "clipboard" then
       pushSignal("clipboard", keyboardAddr, msg.text or "")
@@ -1436,6 +1457,9 @@ local function dispatchServerMessage(msg)
       vmPaused = true
     elseif msg.cmd == "resume" then
       vmPaused = false
+    elseif msg.cmd == "mod_command" then
+      -- 控制面板 → Mods 设备 EFI 的本地命令
+      pushSignal("mod_command", msg.data)
     elseif msg.cmd == "floppy_reload" then
       -- 重新加载软盘镜像 (热插拔)
       -- msg.data 可包含新的文件路径 (可选)
@@ -1594,8 +1618,7 @@ local function pullSignal(timeout)
     end
   end
 
-  -- 文件模式 (legacy, 仅在没有 --json-io 时使用)
-  -- (旧路径, 保留以兼容)
+  -- 文件模式 (legacy): 仅在未启用 --json-io 时使用, 保留以兼容旧调用方式
   if not config.inputFile then return nil end
   local startTime = os.clock()
   local maxWait = timeout or math.huge
@@ -2284,6 +2307,13 @@ keyboard.isKeyDown = function(code) return false end
 -- Filesystem 组件（基于虚拟磁盘）
 -- ============================================================
 fsAddr = genAddr()
+-- 虚拟只读文件: 让系统内的 require("mods") 直接拿到模拟器注入的组件。
+-- 不写入磁盘镜像, 仅在文件系统代理层可见。
+config.virtualFsFiles = {}
+if config.modsEnabled then
+  config.virtualFsFiles["/lib/mods.lua"] = "return mods\n"
+end
+
 local filesystem = { _label = vdisk.label, _address = fsAddr }
 filesystem.getLabel = function() local l = vdisk.label or "Untitled"; dlog("fs.getLabel ->", l); return l end
 filesystem.setLabel = function(label)
@@ -2295,10 +2325,26 @@ end
 filesystem.spaceUsed = function() return vfsSpaceUsed() end
 filesystem.spaceTotal = function() return config.hddSize end
 filesystem.isReadOnly = function() return false end
-filesystem.exists = function(path) local r = vfsExists(path); dlog("fs.exists", path, "->", r); return r end
-filesystem.isDirectory = function(path) return vfsIsDirectory(path) end
+filesystem.exists = function(path)
+  path = vfsNormalize(path)
+  if config.virtualFsFiles[path] ~= nil then return true end
+  local r = vfsExists(path); dlog("fs.exists", path, "->", r); return r
+end
+filesystem.isDirectory = function(path)
+  path = vfsNormalize(path)
+  if config.virtualFsFiles[path] ~= nil then return false end
+  return vfsIsDirectory(path)
+end
 filesystem.list = function(path)
+  path = vfsNormalize(path)
   local list = vfsList(path)
+  if path == "/lib" and vfsIsDirectory("/lib") and config.virtualFsFiles["/lib/mods.lua"] ~= nil then
+    local found = false
+    for _, name in ipairs(list) do
+      if name == "mods.lua" then found = true; break end
+    end
+    if not found then list[#list + 1] = "mods.lua" end
+  end
   local i = 0
   -- 返回真实的数组 table，附加 __call 元方法用于迭代
   -- 这样 #list、ipairs、pairs、table.concat、索引访问全部原生支持
@@ -2310,9 +2356,14 @@ filesystem.list = function(path)
     end,
   })
 end
-filesystem.size = function(path) return vfsSize(path) end
+filesystem.size = function(path)
+  path = vfsNormalize(path)
+  if config.virtualFsFiles[path] ~= nil then return #config.virtualFsFiles[path] end
+  return vfsSize(path)
+end
 filesystem.lastModified = function(path)
   path = vfsNormalize(path)
+  if config.virtualFsFiles[path] ~= nil then return os.time() * 1000 end
   -- OC 标准: lastModified 返回毫秒 (real world timestamp)
   local mod = vdisk.files[path] and vdisk.files[path].modified or os.time()
   return mod * 1000
@@ -2321,6 +2372,16 @@ filesystem.open = function(path, mode)
   dlog("fs.open", path, "mode", mode)
   mode = mode or "r"
   path = vfsNormalize(path)
+  -- 虚拟只读文件 (如 /lib/mods.lua)
+  if config.virtualFsFiles[path] ~= nil then
+    if mode:match("w") or mode:match("a") then
+      return nil, "read-only"
+    end
+    handleCount = handleCount + 1
+    local handle = handleCount
+    openHandles[handle] = { mode = mode, pos = 0, buffer = config.virtualFsFiles[path], path = path }
+    return handle
+  end
   -- 目录不能打开
   if vfsIsDirectory(path) then
     dlog("fs.open: cannot open directory:", path)
@@ -2382,8 +2443,17 @@ filesystem.seek = function(handle, whence, offset)
   return h.pos
 end
 filesystem.makeDirectory = function(path) return vfsMkdir(path) end
-filesystem.remove = function(path) return vfsRemove(path) end
-filesystem.rename = function(from, to) return vfsRename(from, to) end
+filesystem.remove = function(path)
+  path = vfsNormalize(path)
+  if config.virtualFsFiles[path] ~= nil then return nil, "read-only" end
+  return vfsRemove(path)
+end
+filesystem.rename = function(from, to)
+  from = vfsNormalize(from)
+  to = vfsNormalize(to)
+  if config.virtualFsFiles[from] ~= nil or config.virtualFsFiles[to] ~= nil then return nil, "read-only" end
+  return vfsRename(from, to)
+end
 filesystem.format = function()
   -- 清空所有文件, 保留根目录
   for k in pairs(vdisk.files) do
@@ -3100,7 +3170,7 @@ end
 
 -- 创建通用文件系统代理。
 -- onLabelSet: 标签变更回调。必须把新标签写回外层变量, 否则 saveAllDisks() 写盘时
---   用的仍是创建代理时的旧标签, 表现为"虚拟机里改标签成功, 重启后又变回去"。
+--   用的是创建代理时的标签, 导致改标签只在本次运行内有效。
 local function makeFsProxy(filesTable, label, capacity, readOnly, onLabelSet, onDirty)
   local fs = {}
   -- 发生修改时通知调用方 (磁盘打脏标记, tmpfs 不传此回调)
@@ -3290,6 +3360,15 @@ end
 -- tmpfs: 始终注册, RAM 临时文件系统
 componentRegistry[tmpAddr] = { type = "filesystem", proxy = tmpfs }
 
+-- Mods: 机器人 / 无人机 / 单片机 合并为一个组件
+modsAddr = nil
+if config.modsEnabled then
+  modsAddr = genAddr()
+  mods.address = modsAddr
+  componentRegistry[modsAddr] = { type = "mods", proxy = mods }
+  _stderr:write("[emulator] Mods: robot / drone / microcontroller merged component\n")
+end
+
 -- 扩展卡: 根据配置条件注册
 local modem = nil
 
@@ -3436,6 +3515,7 @@ component._primaries = {
 if componentRegistry[internetAddr] then component._primaries.internet = internetAddr end
 if componentRegistry[dataAddr] then component._primaries.data = dataAddr end
 if modemAddr then component._primaries.modem = modemAddr end
+if modsAddr then component._primaries.mods = modsAddr end
 function component.list(filter, exact)
   dlog("component.list called with filter:", tostring(filter))
   local list = {}
@@ -3756,6 +3836,7 @@ _G.text = text
 _G.serialization = serialization
 _G.filesystem = filesystem
 _G.bit32 = bit32
+if modsAddr then _G.mods = mods end
 
 if not _G.checkArg then
   function checkArg(n, val, ...)
@@ -3870,6 +3951,7 @@ _G.package.loaded.bit32 = bit32
 _G.package.loaded.event = event
 _G.package.loaded.data = data
 _G.package.loaded.internet = internet
+if modsAddr then _G.package.loaded.mods = mods end
 _G.package.loaded.filesystem = {
   proxy = function(addr) return component.proxy(addr) end,
   mount = function() end,
@@ -4047,6 +4129,7 @@ if setfenv then setfenv(chunk, _G) end
 local ok, err = xpcall(chunk, function(e) return debug.traceback(e) end)
 if not ok then
   _stderr:write("[emulator] runtime error:\n" .. tostring(err) .. "\n")
+  if modsAddr and mods.reportError then mods.reportError(tostring(err)) end
   showScreenMessage("Runtime error\n" .. tostring(err))
   saveAllDisks()
   os.exit(1)

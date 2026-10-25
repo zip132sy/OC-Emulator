@@ -5,11 +5,15 @@
 const App = (() => {
   const state = {
     vms: [],            // [{ name, state, config }]
+    mods: [],           // [{ name, type, state, address, ... }]
     tabs: [],           // [{ id, vm, type, title, dirty }]
     activeTabId: null,
     ws: null,
     wsReconnectTimer: null,
     wsSubscribedVm: null,
+    wsSubscribedMod: null,
+    sidebarMode: 'vm',  // 'vm' | 'mod'
+    _modsSig: '',       // Mods 列表签名, 避免轮询时无意义重建 DOM
     tabPanes: new Map(), // tabId -> HTMLElement (缓存 pane 避免切换时重建)
   };
 
@@ -567,16 +571,20 @@ const App = (() => {
           if (window.Console && Console.reloadView) Console.reloadView(tab.vm);
         }
       }
-      setStatus(I18N.t('status.vm-loaded').replace('{count}', state.vms.length));
+      if (state.sidebarMode === 'vm') {
+        setStatus(I18N.t('status.vm-loaded').replace('{count}', state.vms.length));
+      }
     } catch (e) {
-      setStatus(I18N.t('status.vm-load-failed') + ': ' + e.message, 'err');
+      if (state.sidebarMode === 'vm') {
+        setStatus(I18N.t('status.vm-load-failed') + ': ' + e.message, 'err');
+      }
     }
   }
 
   function renderVMList() {
     const ul = $('#vm-list');
     ul.innerHTML = '';
-    $('#vm-count').textContent = state.vms.length;
+    updateSidebarCount();
 
     // 重建列表会丢掉选中高亮, 这里根据当前激活标签页重新应用,
     // 否则每 5 秒自动刷新一次就会把"正在查看的虚拟机"的高亮抹掉。
@@ -623,6 +631,234 @@ const App = (() => {
       });
       ul.appendChild(li);
     }
+  }
+
+  // ---------- Mods 列表 ----------
+  function modTypeInfo(type) {
+    if (type === 'drone') return { icon: '🛸', label: I18N.t('mods.type.drone') };
+    if (type === 'reactor') return { icon: '☢️', label: I18N.t('mods.type.reactor') };
+    if (type === 'microcontroller') return { icon: '🧩', label: I18N.t('mods.type.mcu') };
+    return { icon: '🤖', label: I18N.t('mods.type.robot') };
+  }
+
+  function modStateLabel(s) {
+    return I18N.t('vm.state.' + (s || 'stopped'));
+  }
+
+  function modMetaText(mod) {
+    const ti = modTypeInfo(mod.type);
+    const parts = [ti.label, modStateLabel(mod.state)];
+    if (mod.type === 'reactor' && mod.reactor) {
+      parts.push(`${mod.reactor.euPerTick || 0} EU/t`);
+    }
+    if (mod.address) parts.push(mod.address.slice(0, 8));
+    return parts.join(' · ');
+  }
+
+  function updateSidebarCount() {
+    const title = $('#vm-list-title');
+    const count = $('#vm-count');
+    if (!title || !count) return;
+    if (state.sidebarMode === 'mod') {
+      title.textContent = I18N.t('sidebar.mod-library');
+      count.textContent = state.mods.length;
+    } else {
+      title.textContent = I18N.t('sidebar.vm-library');
+      count.textContent = state.vms.length;
+    }
+  }
+
+  function setSidebarMode(mode) {
+    state.sidebarMode = mode === 'mod' ? 'mod' : 'vm';
+    const vmTab = $('#side-tab-vm');
+    const modTab = $('#side-tab-mod');
+    if (vmTab) vmTab.classList.toggle('active', state.sidebarMode === 'vm');
+    if (modTab) modTab.classList.toggle('active', state.sidebarMode === 'mod');
+    const vmList = $('#vm-list');
+    const modList = $('#mod-list');
+    if (vmList) vmList.classList.toggle('hidden', state.sidebarMode !== 'vm');
+    if (modList) modList.classList.toggle('hidden', state.sidebarMode !== 'mod');
+    updateSidebarCount();
+    if (state.sidebarMode === 'mod') renderModList();
+    else renderVMList();
+  }
+
+  async function refreshMods(manual) {
+    try {
+      const mods = await api('mods');
+      const list = mods || [];
+      const sig = JSON.stringify(list.map(m => [m.name, m.type, m.state, m.address]));
+      const changed = sig !== state._modsSig;
+      state._modsSig = sig;
+      state.mods = list;
+      // 只在数据变化或用户手动刷新时重建列表, 避免每 5 秒替换 DOM 导致点击丢失
+      if (changed || manual) renderModList();
+      updateSidebarCount();
+      if (manual) {
+        const tab = state.tabs.find(t => t.id === state.activeTabId);
+        if (tab && tab.type === 'mod' && window.ModView) ModView.reload(tab.mod);
+      }
+      if (state.sidebarMode === 'mod') {
+        setStatus(I18N.t('status.mod-loaded').replace('{count}', state.mods.length));
+      }
+    } catch (e) {
+      if (state.sidebarMode === 'mod') {
+        setStatus(I18N.t('status.mod-load-failed') + ': ' + e.message, 'err');
+      }
+    }
+  }
+
+  function renderModList() {
+    const ul = $('#mod-list');
+    if (!ul) return;
+    ul.innerHTML = '';
+
+    const activeTab = state.tabs.find(t => t.id === state.activeTabId);
+    const activeMod = (activeTab && activeTab.type === 'mod') ? activeTab.mod : null;
+
+    if (state.mods.length === 0) {
+      const li = document.createElement('li');
+      li.className = 'vm-empty';
+      li.innerHTML = I18N.t('sidebar.no-mod').replace(/\n/g, '<br>');
+      ul.appendChild(li);
+      return;
+    }
+
+    for (const mod of state.mods) {
+      const ti = modTypeInfo(mod.type);
+      const li = document.createElement('li');
+      li.className = 'vm-item' + (mod.name === activeMod ? ' active' : '');
+      li.dataset.modName = mod.name;
+      li.innerHTML = `
+        <span class="vm-icon ${mod.state || 'stopped'}"></span>
+        <div class="vm-info">
+          <div class="vm-name"></div>
+          <div class="vm-meta"></div>
+        </div>
+      `;
+      li.querySelector('.vm-name').textContent = `${ti.icon} ${mod.name}`;
+      li.querySelector('.vm-meta').textContent = modMetaText(mod);
+      li.title = mod.description || '';
+      li.addEventListener('click', () => openModTab(mod.name));
+      li.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        showModContextMenu(mod.name, e.clientX, e.clientY);
+      });
+      ul.appendChild(li);
+    }
+  }
+
+  function updateModListItem(name, patch = {}) {
+    const clean = {};
+    for (const [k, v] of Object.entries(patch)) {
+      if (v !== undefined && v !== null) clean[k] = v;
+    }
+    const mod = state.mods.find(m => m.name === name);
+    if (mod) Object.assign(mod, clean);
+    const li = $$('#mod-list .vm-item').find(el => el.dataset.modName === name);
+    if (!li) return;
+    if (clean.state) li.querySelector('.vm-icon').className = `vm-icon ${clean.state}`;
+    if (mod) li.querySelector('.vm-meta').textContent = modMetaText(mod);
+  }
+
+  function openModTab(modName) {
+    const id = 'mod-' + modName;
+    let tab = state.tabs.find(t => t.id === id);
+    if (!tab) {
+      const mod = state.mods.find(m => m.name === modName);
+      const ti = modTypeInfo(mod ? mod.type : 'robot');
+      tab = {
+        id,
+        type: 'mod',
+        mod: modName,
+        title: `${ti.icon} ${modName}`,
+        onClose: () => { if (window.ModView) ModView.destroy(modName); },
+      };
+      state.tabs.push(tab);
+    }
+    activateTab(id);
+    $$('#mod-list .vm-item').forEach(li => {
+      li.classList.toggle('active', li.dataset.modName === modName);
+    });
+  }
+
+  function showModContextMenu(modName, x, y) {
+    const items = [
+      { label: '打开', action: () => openModTab(modName) },
+      { label: '启动', action: () => api(`mods/${encodeURIComponent(modName)}/start`, { method: 'POST' }).then(() => refreshMods(true)) },
+      { label: '停止', action: () => api(`mods/${encodeURIComponent(modName)}/stop`, { method: 'POST' }).then(() => refreshMods(true)) },
+      { label: '重启', action: () => api(`mods/${encodeURIComponent(modName)}/restart`, { method: 'POST' }).then(() => refreshMods(true)) },
+      { label: '删除', action: async () => {
+        if (confirm(`确定删除 Mod "${modName}" ?`)) {
+          await api(`mods/${encodeURIComponent(modName)}`, { method: 'DELETE' });
+          const related = state.tabs.filter(t => t.type === 'mod' && t.mod === modName);
+          for (const t of related) closeTab(t.id);
+          refreshMods();
+        }
+      } },
+    ];
+    const choice = items.map((it, i) => `${i}: ${it.label}`).join('\n');
+    const idx = prompt(`选择操作:\n${choice}`, '0');
+    if (idx !== null) {
+      const i = parseInt(idx, 10);
+      if (items[i]) items[i].action();
+    }
+  }
+
+  function openNewModDialog() {
+    Modal.open({
+      title: I18N.t('mods.new.title'),
+      size: 'small',
+      bodyHTML: `
+        <div class="form-row"><label>${I18N.t('mods.new.name')}</label><input id="new-mod-name" value="Drone-01"></div>
+        <div class="form-row"><label>${I18N.t('mods.new.type')}</label>
+          <select id="new-mod-type">
+            <option value="drone">${I18N.t('mods.type.drone')}</option>
+            <option value="robot">${I18N.t('mods.type.robot')}</option>
+            <option value="reactor">${I18N.t('mods.type.reactor')}</option>
+          </select>
+        </div>
+        <div class="form-row"><label>${I18N.t('mods.new.description')}</label><input id="new-mod-desc" value=""></div>
+        <p class="hint" style="margin:8px 0 0;color:var(--fg-muted);font-size:12px;line-height:1.6;">
+          ${escapeHtml(I18N.t('mods.new.hint'))}
+        </p>
+        <label style="display:flex;align-items:center;gap:6px;margin-top:10px;font-size:12px;">
+          <input type="checkbox" id="new-mod-autostart" checked>
+          ${I18N.t('mods.new.autostart')}
+        </label>
+      `,
+      footerHTML: `
+        <button class="btn" data-action="modal-close">${I18N.t('wizard.cancel')}</button>
+        <button class="btn btn-primary" id="new-mod-create">${I18N.t('wizard.create')}</button>
+      `,
+      onMount(body, footer) {
+        const cancel = footer.querySelector('[data-action="modal-close"]');
+        if (cancel) cancel.addEventListener('click', () => Modal.close());
+        footer.querySelector('#new-mod-create').addEventListener('click', async () => {
+          const name = body.querySelector('#new-mod-name').value.trim();
+          const type = body.querySelector('#new-mod-type').value;
+          const description = body.querySelector('#new-mod-desc').value.trim();
+          const autostart = body.querySelector('#new-mod-autostart').checked;
+          if (!/^[A-Za-z0-9_-]{1,32}$/.test(name)) {
+            alert(I18N.t('mods.new.invalid-name'));
+            return;
+          }
+          try {
+            await api('mods', { method: 'POST', body: { name, type, description } });
+            Modal.close();
+            await refreshMods();
+            setSidebarMode('mod');
+            openModTab(name);
+            if (autostart) {
+              await api(`mods/${encodeURIComponent(name)}/start`, { method: 'POST' });
+              setTimeout(() => refreshMods(true), 500);
+            }
+          } catch (e) {
+            alert(e.message);
+          }
+        });
+      },
+    });
   }
 
   // ---------- 标签页管理 ----------
@@ -681,11 +917,12 @@ const App = (() => {
     // 处理 WS 订阅切换
     const tab = state.tabs.find(t => t.id === id);
     const targetVm = (tab && tab.type === 'vm') ? tab.vm : null;
-    if (targetVm !== state.wsSubscribedVm) {
-      wsSubscribe(targetVm);
+    const targetMod = (tab && tab.type === 'mod') ? tab.mod : null;
+    if (targetVm !== state.wsSubscribedVm || targetMod !== state.wsSubscribedMod) {
+      wsSubscribe(targetVm, targetMod);
     }
     // 切换后触发一次 resize, 确保 canvas 尺寸正确 (从隐藏→显示时)
-    if (tab && tab.type === 'vm') {
+    if (tab && (tab.type === 'vm' || tab.type === 'mod')) {
       requestAnimationFrame(() => {
         window.dispatchEvent(new Event('resize'));
       });
@@ -751,6 +988,8 @@ const App = (() => {
 
       if (tab.type === 'vm') {
         Console.renderVMView(pane, tab.vm);
+      } else if (tab.type === 'mod') {
+        if (window.ModView) ModView.render(pane, tab.mod);
       } else if (tab.type === 'disk-editor') {
         DiskEditor.render(pane, tab.diskPath, tab.vm);
       }
@@ -776,6 +1015,9 @@ const App = (() => {
       // 重新订阅
       if (state.wsSubscribedVm) {
         wsSend({ type: 'c2s.subscribe', vm: state.wsSubscribedVm });
+      }
+      if (state.wsSubscribedMod) {
+        wsSend({ type: 'c2s.mod.subscribe', mod: state.wsSubscribedMod });
       }
     };
     state.ws.onclose = () => {
@@ -814,24 +1056,35 @@ const App = (() => {
     return false;
   }
 
-  function wsSubscribe(vmName) {
+  function wsSubscribe(vmName, modName) {
     if (state.wsSubscribedVm && state.wsSubscribedVm !== vmName) {
       wsSend({ type: 'c2s.unsubscribe' });
     }
-    state.wsSubscribedVm = vmName;
+    if (state.wsSubscribedMod && state.wsSubscribedMod !== modName) {
+      wsSend({ type: 'c2s.mod.unsubscribe' });
+    }
+    state.wsSubscribedVm = vmName || null;
+    state.wsSubscribedMod = modName || null;
     if (vmName) {
       wsSend({ type: 'c2s.subscribe', vm: vmName });
+    }
+    if (modName) {
+      wsSend({ type: 'c2s.mod.subscribe', mod: modName });
     }
   }
 
   // ---------- 处理服务器消息 ----------
   function onServerMessage(msg) {
-    // 消息类型 s2c.* 由 Console / DiskEditor 等处理
+    // 消息类型 s2c.* 由 Console / DiskEditor / ModView 等处理
     if (!msg.type) return;
 
     // 路由到对应 VM 的 console 控制器
     if (msg.vm) {
       Console.onServerMessage(msg);
+    }
+    // 路由到对应 Mod 的视图
+    if (msg.mod && window.ModView) {
+      ModView.onServerMessage(msg);
     }
 
     if (msg.type === 's2c.state') {
@@ -841,6 +1094,12 @@ const App = (() => {
         vm.state = msg.state;
         renderVMList();
       }
+    } else if (msg.type === 's2c.mod.state') {
+      updateModListItem(msg.mod, {
+        state: msg.runtimeState,
+        address: msg.address,
+        type: msg.deviceType || undefined,
+      });
     } else if (msg.type === 's2c.screen') {
       // 屏幕更新, Console.onServerMessage 已处理
     } else if (msg.type === 's2c.log') {
@@ -898,7 +1157,8 @@ const App = (() => {
       btn.addEventListener('click', () => {
         const action = btn.dataset.action;
         if (action === 'new-vm') Wizard.open(refreshVMs);
-        else if (action === 'refresh') refreshVMs(true);
+        else if (action === 'new-mod') openNewModDialog();
+        else if (action === 'refresh') { refreshVMs(true); refreshMods(true); }
         else if (action === 'check-update') checkUpdate();
         else if (action === 'lua-recheck') checkLua();
         else if (action === 'import-vm') ExportWizard.openImport();
@@ -909,13 +1169,20 @@ const App = (() => {
       });
     });
 
+    // 侧边栏: 虚拟机 / Mods 切换
+    $$('.side-tab').forEach(btn => {
+      btn.addEventListener('click', () => setSidebarMode(btn.dataset.side));
+    });
+
     // 手机端抽屉遮罩: 点击关闭抽屉
     $$('.nav-scrim').forEach(el => {
       el.addEventListener('click', () => toggleNav(false));
     });
-    // 手机上选中某个 VM 后自动收起抽屉
+    // 手机上选中某个 VM / Mod 后自动收起抽屉
     const vmListEl = document.getElementById('vm-list');
     if (vmListEl) vmListEl.addEventListener('click', () => toggleNav(false));
+    const modListEl = document.getElementById('mod-list');
+    if (modListEl) modListEl.addEventListener('click', () => toggleNav(false));
 
     // 模态关闭
     $$('.modal-close, .modal-backdrop').forEach(el => {
@@ -934,9 +1201,10 @@ const App = (() => {
     bindMenu();
     checkLua();
     refreshVMs();
+    refreshMods();
     wsConnect();
-    // 周期刷新 VM 状态 (轻量兜底轮询; 手动刷新走 refreshVMs(true))
-    setInterval(() => refreshVMs(false), 5000);
+    // 周期刷新 VM / Mods 状态 (轻量兜底轮询; 手动刷新走 refreshXC(true))
+    setInterval(() => { refreshVMs(false); refreshMods(false); }, 5000);
   }
 
   // ---------- 语言 ----------
@@ -980,6 +1248,7 @@ const App = (() => {
     // 顶部菜单
     const set = (id, key) => { const el = document.getElementById(id); if (el) el.textContent = t(key); };
     set('menu-new-vm', 'menu.new-vm');
+    set('menu-new-mod', 'menu.new-mod');
     set('menu-import-vm', 'menu.import-vm');
     set('menu-refresh', 'menu.refresh');
     set('menu-check-update', 'menu.check-update');
@@ -988,18 +1257,22 @@ const App = (() => {
     set('menu-restart-server', 'menu.restart-server');
     set('menu-stop-server', 'menu.stop-server');
     // 侧边栏
-    set('vm-list-title', 'sidebar.vm-library');
+    set('side-tab-vm', 'sidebar.vm-tab');
+    set('side-tab-mod', 'sidebar.mod-tab');
+    updateSidebarCount();
     // 欢迎页
     set('welcome-title', 'welcome.title');
     set('welcome-subtitle', 'welcome.subtitle');
     set('welcome-hint', 'welcome.hint');
-    // 刷新 VM 列表文字
-    refreshVMs();
+    // 刷新列表文字
+    renderVMList();
+    renderModList();
   }
 
   return {
     state, $, $$, api,
-    init, refreshVMs, openVMTab, openTab, closeTab, activateTab,
+    init, refreshVMs, refreshMods, openVMTab, openModTab, openTab, closeTab, activateTab,
+    setSidebarMode,
     wsSend, wsSubscribe, setStatus, setStatusRight,
     onServerMessage, showLanguageSelector, applyLanguage,
   };
@@ -1015,8 +1288,9 @@ const Modal = (() => {
     body.innerHTML = bodyHTML || '';
     footer.innerHTML = footerHTML || '';
     if (size === 'large') {
-      container.querySelector('.modal-dialog').style.minWidth = '720px';
-      container.querySelector('.modal-dialog').style.maxWidth = '900px';
+      const dlg = container.querySelector('.modal-dialog');
+      dlg.style.minWidth = 'min(720px, calc(100vw - 24px))';
+      dlg.style.maxWidth = 'min(900px, calc(100vw - 24px))';
     } else {
       container.querySelector('.modal-dialog').style.minWidth = '480px';
       container.querySelector('.modal-dialog').style.maxWidth = '800px';

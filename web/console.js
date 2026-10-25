@@ -112,11 +112,8 @@ const Console = (() => {
   // VM 视图缓存: vmName -> { canvas, ctx, offscreen, offCtx, w, h, cells, charW, charH, logLines }
   const views = new Map();
 
-  // 轻量诊断计数 (不写日志, 避免刷屏): 用于快速判断"滚轮/输入到底有没有发出去"。
-  // 在浏览器控制台执行 Console.diag 即可查看。
-  const diag = { wheelSeen: 0, wheelSent: 0, wheelSkipped: 0, wheelInside: false, inputDropped: 0, inputDropWarned: false };
-  // 最近一次渲染的虚拟机名 (供文档级诊断日志使用)
-  let lastVmName = null;
+  // WebSocket 不可用时只提示一次, 避免日志刷屏
+  let inputDropWarned = false;
 
   function getView(vmName) {
     if (!views.has(vmName)) {
@@ -143,7 +140,6 @@ const Console = (() => {
   function renderVMView(pane, vmName) {
     const view = getView(vmName);
     const t = I18N.t;
-    lastVmName = vmName;
     pane.innerHTML = `
       <div class="console-wrap">
         <div class="vm-toolbar">
@@ -198,8 +194,6 @@ const Console = (() => {
     view.logContainer = pane.querySelector(`#log-panel-${cssEsc(vmName)}`);
     view.canvasWrap = pane.querySelector(`#canvas-wrap-${cssEsc(vmName)}`);
     view.canvasStage = pane.querySelector(`#canvas-stage-${cssEsc(vmName)}`);
-    console.log(`[console.js v39] renderVMView: ${vmName}, canvasWrap=`, !!view.canvasWrap, 'canvas=', !!view.canvas);
-    appendLog(vmName, `[debug] console.js v39 loaded, canvasWrap=${!!view.canvasWrap}, canvas=${!!view.canvas}`, 'info');
 
     // 日志面板最小化/展开
     const logHeader = pane.querySelector(`#log-header-${cssEsc(vmName)}`);
@@ -1988,14 +1982,11 @@ const Console = (() => {
   // ---------- 输入事件 ----------
   function sendInput(vmName, ev) {
     // wsSend 在连接不可用时返回 false。输入 (键盘/鼠标/滚轮) 全部走这条通道,
-    // 显式告警一次: 静默丢弃会让"键盘/滚轮无反应"难以定位。
+    // 提示一次: 静默丢弃会让"键盘/滚轮无反应"难以定位。
     const ok = App.wsSend({ type: 'c2s.input', ...ev });
-    if (ok === false) {
-      diag.inputDropped++;
-      if (!diag.inputDropWarned) {
-        diag.inputDropWarned = true;
-        appendLog(vmName, '[frontend] 输入未发送: WebSocket 未连接, 请等待重连后再试', 'warn');
-      }
+    if (ok === false && !inputDropWarned) {
+      inputDropWarned = true;
+      appendLog(vmName, '[frontend] 输入未发送: WebSocket 未连接, 请等待重连后再试', 'warn');
     }
     return ok;
   }
@@ -2022,16 +2013,7 @@ const Console = (() => {
 
   // 真 wheel 与"滚轮被映射成按键"两条路共用的发送逻辑
   function sendScroll(vmName, x, y, px, py, delta) {
-    diag.wheelSent++;
-    const sent = sendInput(vmName, { event: 'scroll', x, y, px, py, delta });
-    updateWheelStatus();
-    // 前几次留痕, 便于和服务端日志对照 (次数用完后再滚就没有反馈, 会让人误判)
-    if (diag.wheelSent <= 4) {
-      appendLog(vmName,
-        `[frontend] 滚轮 x=${x} y=${y} px=${px} py=${py} delta=${delta} 已发送=${sent !== false}`,
-        'info');
-    }
-    return sent;
+    return sendInput(vmName, { event: 'scroll', x, y, px, py, delta });
   }
 
   function onKey(e, vmName) {
@@ -2094,11 +2076,7 @@ const Console = (() => {
 
   function onWheel(e, vmName) {
     const view = getView(vmName);
-    if (!view.canvas || !view.w || !view.h) {
-      diag.wheelSkipped++;
-      appendLog(vmName, `[frontend] onWheel skipped: canvas=${!!view.canvas} w=${view.w} h=${view.h}`, 'warn');
-      return;
-    }
+    if (!view.canvas || !view.w || !view.h) return;
     const rect = view.canvas.getBoundingClientRect();
     const realCharW = rect.width / view.w;
     const realCharH = rect.height / view.h;
@@ -2222,43 +2200,10 @@ const Console = (() => {
     return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
 
-  // ============================================================
-  // 滚轮自检 (文档级, 捕获阶段, 被动: 只统计, 绝不干预其它逻辑)
-  //
-  // 用来把两种完全不同的情况分开:
-  //   a) 浏览器根本没把 wheel 事件投递给页面 —— 操作系统/窗口焦点层面的事
-  //      (例如 Windows 未开启"在我悬停的窗口上滚动", 且浏览器窗口没有焦点,
-  //       或者输入设备的手势被系统/其它程序吃掉)。这种情况页面里任何代码都救不了。
-  //   b) 事件投递到了页面, 但没有落在虚拟机的监听区域 (布局/命中范围问题)。
-  //
-  // 结果实时显示在底部状态栏右下角, 滚动时数字会立刻变化 —— 不需要看日志,
-  // 也不需要开控制台。完整计数在控制台执行 Console.diag 查看。
-  // 不用"只打印前 N 次"的做法: 次数用完后再滚就没有任何反馈, 反而让人以为没生效。
-  // ============================================================
-  function updateWheelStatus() {
-    const el = document.getElementById('status-right');
-    if (!el) return;
-    el.textContent = `滚轮: 页面收到 ${diag.wheelSeen} / 已发给虚拟机 ${diag.wheelSent}`
-      + ` · 最近落点${diag.wheelInside ? '在虚拟机区域' : '在其它区域'}`;
-  }
-
-  document.addEventListener('wheel', (e) => {
-    diag.wheelSeen++;
-    const tgt = e.target;
-    diag.wheelInside = !!(tgt && tgt.closest && tgt.closest('[data-oc-wheel-bound]'));
-    // 第一次收到时在日志面板也留一行 (方便对照服务端日志)
-    if (diag.wheelSeen === 1 && lastVmName) {
-      appendLog(lastVmName,
-        `[frontend] 浏览器已投递滚轮事件 (落点在虚拟机区域内=${diag.wheelInside})`,
-        'info');
-    }
-    updateWheelStatus();
-  }, { capture: true, passive: true });
-
   // 页面加载时异步加载 hexfont, 加载完成后自动重绘
   loadHexFont();
 
-  return { renderVMView, onServerMessage, loadHexFont, onConnectionLost, applyServerState, reloadView, diag, isWheelKeyCompat, setWheelKeyCompat };
+  return { renderVMView, onServerMessage, loadHexFont, onConnectionLost, applyServerState, reloadView, isWheelKeyCompat, setWheelKeyCompat };
 })();
 
 window.Console = Console;

@@ -11,6 +11,7 @@ const { execFile } = require('child_process');
 const { WebSocketServer } = require('ws');
 
 const { VMManager } = require('./lib/vmManager');
+const { ModsManager } = require('./lib/modsManager');
 const { DiskIO } = require('./lib/diskIO');
 const { LuaCheck } = require('./lib/luaCheck');
 const { ModemHub } = require('./lib/modemHub');
@@ -31,13 +32,14 @@ const floppyAliases = {
 // ---------- 路径 ----------
 const PROJECT_DIR = __dirname;
 const VMS_DIR = path.join(PROJECT_DIR, 'vms');
+const MODS_DIR = path.join(PROJECT_DIR, 'Mods');
 const DISKS_DIR = path.join(PROJECT_DIR, 'disks');
 const WEB_DIR = path.join(PROJECT_DIR, 'web');
 const CACHE_DIR = path.join(PROJECT_DIR, 'cache');
 const EMU_SCRIPT = path.join(PROJECT_DIR, 'oc-emulator.lua');
 
 // 确保目录存在
-for (const d of [VMS_DIR, DISKS_DIR, CACHE_DIR]) {
+for (const d of [VMS_DIR, MODS_DIR, DISKS_DIR, CACHE_DIR]) {
   if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
 }
 
@@ -92,6 +94,11 @@ function shutDownForGuardian(code) {
     for (const vm of vmManager.list()) {
       if (vm.state === 'running' || vm.state === 'paused' || vm.state === 'starting') {
         try { vmManager.stop(vm.name); } catch (e) { /* 忽略单个 VM 的停止失败 */ }
+      }
+    }
+    for (const mod of modsManager.listMods()) {
+      if (mod.state === 'running' || mod.state === 'paused' || mod.state === 'starting') {
+        try { modsManager.stop(mod.name); } catch (e) { /* 忽略单个 Mod 的停止失败 */ }
       }
     }
   } catch (e) { /* 忽略 */ }
@@ -403,6 +410,19 @@ const vmManager = new VMManager({
   logLevel: settings.logLevel,
 });
 
+// Mods 设备管理器: 与 VM 共用 modemHub / diskIO, 但使用独立的 Mods/ 目录
+const modsManager = new ModsManager({
+  projectDir: PROJECT_DIR,
+  modsDir: MODS_DIR,
+  luaExe: settings.luaExe,
+  emuScript: EMU_SCRIPT,
+  modemHub,
+  internetProxy,
+  diskIO,
+  logger,
+  logLevel: settings.logLevel,
+});
+
 // ---------- 静态文件服务 ----------
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -531,6 +551,7 @@ async function handleApi(req, res, body) {
         // 应用新的 logLevel 到 vmManager (影响后续启动的 VM)
         if (patch.logLevel) {
           vmManager.logLevel = patch.logLevel;
+          modsManager.logLevel = patch.logLevel;
         }
         // 命令行窗口显示开关: 立即生效
         let consoleResult = null;
@@ -545,6 +566,116 @@ async function handleApi(req, res, body) {
           autoUpdate: settings.autoUpdate !== false,
           consoleResult,
         });
+      }
+    }
+
+    // /api/mods - Mods 设备 (机器人 / 无人机)
+    if (parts[1] === 'mods') {
+      const validModName = (n) => typeof n === 'string' && /^[A-Za-z0-9_-]{1,32}$/.test(n);
+
+      if (parts.length === 2) {
+        if (method === 'GET') return json(res, modsManager.listMods());
+        if (method === 'POST') {
+          const spec = JSON.parse(body || '{}');
+          return json(res, modsManager.create(spec));
+        }
+        return json(res, { error: 'Method not allowed' }, 405);
+      }
+
+      const modName = decodeURIComponent(parts[2] || '');
+      if (!validModName(modName)) return json(res, { error: 'Invalid mod name' }, 400);
+
+      if (parts.length === 3) {
+        if (method === 'GET') {
+          const mod = modsManager.getMod(modName);
+          if (!mod) return json(res, { error: 'Mod not found' }, 404);
+          return json(res, mod);
+        }
+        if (method === 'DELETE') {
+          if (!fs.existsSync(modsManager.modDir(modName))) {
+            return json(res, { error: 'Mod not found' }, 404);
+          }
+          modsManager.delete(modName);
+          return json(res, { ok: true });
+        }
+        return json(res, { error: 'Method not allowed' }, 405);
+      }
+
+      if (parts.length === 4) {
+        const action = parts[3];
+
+        if (action === 'start' && method === 'POST') {
+          return json(res, modsManager.start(modName));
+        }
+        if (action === 'stop' && method === 'POST') {
+          try { modsManager.stop(modName); } catch (e) { /* 已停止 */ }
+          return json(res, { ok: true });
+        }
+        if (action === 'restart' && method === 'POST') {
+          try { modsManager.restart(modName); } catch (e) { /* 忽略 */ }
+          return json(res, { ok: true });
+        }
+        if (action === 'pause' && method === 'POST') {
+          try { modsManager.pause(modName); } catch (e) { /* 忽略 */ }
+          return json(res, { ok: true });
+        }
+        if (action === 'resume' && method === 'POST') {
+          try { modsManager.resume(modName); } catch (e) { /* 忽略 */ }
+          return json(res, { ok: true });
+        }
+        if (action === 'state' && method === 'GET') {
+          const mod = modsManager.getMod(modName);
+          if (!mod) return json(res, { error: 'Mod not found' }, 404);
+          return json(res, mod);
+        }
+        if (action === 'command' && method === 'POST') {
+          const command = JSON.parse(body || '{}');
+          modsManager.sendModCommand(modName, command);
+          return json(res, { ok: true });
+        }
+
+        if (action === 'efi') {
+          try {
+            if (method === 'GET') return json(res, modsManager.getEfi(modName));
+            if (method === 'PUT') {
+              const payload = JSON.parse(body || '{}');
+              return json(res, modsManager.saveEfi(modName, payload.content));
+            }
+          } catch (e) {
+            return json(res, { error: e.message }, 400);
+          }
+          return json(res, { error: 'Method not allowed' }, 405);
+        }
+
+        if (action === 'config') {
+          try {
+            if (method === 'GET') {
+              const cfg = modsManager.getConfig(modName);
+              if (!cfg) return json(res, { error: 'Mod not found' }, 404);
+              return json(res, cfg);
+            }
+            if (method === 'PUT') {
+              const patch = JSON.parse(body || '{}');
+              return json(res, modsManager.updateHardware(modName, patch));
+            }
+          } catch (e) {
+            return json(res, { error: e.message }, 400);
+          }
+          return json(res, { error: 'Method not allowed' }, 405);
+        }
+
+        if (action === 'reactor') {
+          try {
+            if (method === 'GET') return json(res, modsManager.getReactor(modName));
+            if (method === 'PUT') {
+              const patch = JSON.parse(body || '{}');
+              return json(res, modsManager.saveReactor(modName, patch));
+            }
+          } catch (e) {
+            return json(res, { error: e.message }, 400);
+          }
+          return json(res, { error: 'Method not allowed' }, 405);
+        }
       }
     }
 
@@ -1475,6 +1606,7 @@ const wss = new WebSocketServer({ server, path: '/ws' });
 wss.on('connection', (ws, req) => {
   logger.log('[ws] client connected');
   let subscribedVm = null;
+  let subscribedMod = null;
 
   ws.on('message', (data) => {
     try {
@@ -1482,6 +1614,7 @@ wss.on('connection', (ws, req) => {
       switch (msg.type) {
         case 'c2s.subscribe':
           if (subscribedVm) vmManager.unsubscribe(subscribedVm, ws);
+          if (subscribedMod) { modsManager.unsubscribe(subscribedMod, ws); subscribedMod = null; }
           subscribedVm = msg.vm;
           vmManager.subscribe(subscribedVm, ws);
           break;
@@ -1491,6 +1624,24 @@ wss.on('connection', (ws, req) => {
             vmManager.unsubscribe(subscribedVm, ws);
             subscribedVm = null;
           }
+          break;
+
+        case 'c2s.mod.subscribe':
+          if (subscribedVm) { vmManager.unsubscribe(subscribedVm, ws); subscribedVm = null; }
+          if (subscribedMod) modsManager.unsubscribe(subscribedMod, ws);
+          subscribedMod = msg.mod;
+          modsManager.subscribe(subscribedMod, ws);
+          break;
+
+        case 'c2s.mod.unsubscribe':
+          if (subscribedMod) {
+            modsManager.unsubscribe(subscribedMod, ws);
+            subscribedMod = null;
+          }
+          break;
+
+        case 'c2s.mod.command':
+          if (subscribedMod) modsManager.sendModCommand(subscribedMod, msg.command);
           break;
 
         case 'c2s.input':
@@ -1526,6 +1677,7 @@ wss.on('connection', (ws, req) => {
 
   ws.on('close', () => {
     if (subscribedVm) vmManager.unsubscribe(subscribedVm, ws);
+    if (subscribedMod) modsManager.unsubscribe(subscribedMod, ws);
     logger.log('[ws] client disconnected');
   });
 });
