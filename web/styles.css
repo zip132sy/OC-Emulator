@@ -1643,6 +1643,8 @@ html, body {
 .ic2-slot.filled.condensator { background: #b78fd6; }
 .ic2-slot:focus { outline: 2px solid #ffd700; outline-offset: -2px; }
 .ic2-slot.selected { outline: 2px solid #ffd700; outline-offset: -2px; }
+/* 已耗尽的燃料棒: 置灰且保留在格位里 */
+.ic2-slot.depleted { opacity: 0.55; filter: grayscale(0.85); }
 /* 耐久填充: 从底部按剩余耐久比例向上填充 */
 .ic2-slot-fill {
   position: absolute;
@@ -1704,6 +1706,7 @@ html, body {
 .ic2-status.warning { background: #d6b75a; }
 .ic2-status.critical { background: #d66a6a; color: #fff; }
 .ic2-status.overheat { background: #8f2f2f; color: #fff; }
+.ic2-status.depleted { background: #7d6c3f; color: #fff; }
 .ic2-status.off { background: #999; color: #eee; }
 .ic2-status.idle { background: #9ab6cc; }
 .ic2-gauge {

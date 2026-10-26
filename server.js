@@ -698,6 +698,15 @@ async function handleApi(req, res, body) {
           }
         }
 
+        if (action === 'reactor-options' && method === 'POST') {
+          try {
+            const payload = JSON.parse(body || '{}');
+            return json(res, modsManager.setReactorOptions(modName, payload));
+          } catch (e) {
+            return json(res, { error: e.message }, 400);
+          }
+        }
+
         if (action === 'reactor-temperature') {
           try {
             if (method === 'GET') {

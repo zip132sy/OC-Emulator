@@ -592,6 +592,7 @@ Mods/
   "columns": 5,
   "rows": 6,
   "active": true,
+  "stopWhenDepleted": true,
   "grid": [
     ["uranium_2x", "coolant_30k", "condensator_20k", null, null],
     ["uranium_1x", "coolant_10k", null, null, null],
@@ -605,7 +606,9 @@ Mods/
 
 旧布局里的 `fuel_rod` / `coolant_cell` / `condensator` 会在读取时自动升级为 `uranium_1x` / `coolant_10k` / `condensator_20k`。
 
-相关 API：`GET/PUT /api/mods/:name/reactor`，响应中的 `stats.cells` 是逐格信息、`runtime` 是运行时快照；`POST /api/mods/:name/reactor` 复位堆芯；`POST /api/mods/:name/reactor-active`（`{ active }`）切换运行开关；`POST /api/mods/:name/connect`（`{ vm }`，传 `null` 断开）设置连接的目标虚拟机。计算采用适合模拟器的简化规则，用于配置验证和状态展示；真实 IC2 的完整热传导/脉冲公式更复杂。
+相关 API：`GET/PUT /api/mods/:name/reactor`，响应中的 `stats.cells` 是逐格信息、`runtime` 是运行时快照（含实时的 `euPerTick` / `heatPerTick` / `activeRods`）；`POST /api/mods/:name/reactor` 复位堆芯；`POST /api/mods/:name/reactor-active`（`{ active }`）切换运行开关；`POST /api/mods/:name/reactor-options`（`{ stopWhenDepleted }`）设置燃料耗尽自动停机；`POST /api/mods/:name/connect`（`{ vm }`，传 `null` 断开）设置连接的目标虚拟机。计算采用适合模拟器的简化规则，用于配置验证和状态展示；真实 IC2 的完整热传导/脉冲公式更复杂。
+
+燃料棒完全耗尽后不再发电放热，`euPerTick` / `heatPerTick` 会降为 0，状态变为 `depleted`。反应堆默认在燃料耗尽后自动停机（`reactor.json` 的 `stopWhenDepleted`，默认 `true`），可在设备页的反应堆面板关闭。
 
 ### 9.3 设备专属配置（机器人 / 无人机）
 
@@ -677,7 +680,7 @@ print(mods.getOffhand())            -- 副手工具
 | `getTemperature()` | number | 当前温度（°C）：环境温度 20 °C + 堆芯热量 |
 | `getMaxTemperature()` | number | 温度上限（°C）：外壳热容量 + 20 °C |
 | `setTemperature(value)` | number | 设置温度，越界自动夹在 20 °C ~ 上限；返回实际温度 |
-| `getReactorEUOutput()` / `getReactorEUEnergyOutput()` | number | 每 tick 发电量（EU/t） |
+| `getReactorEUOutput()` / `getReactorEUEnergyOutput()` | number | 每 tick 发电量（EU/t），燃料耗尽后为 0 |
 | `getEnergyOutput()` | number | 同 `getReactorEUOutput()` |
 | `getHeatOutput()` | number | 每 tick 发热量 |
 | `isActive()` / `getActive()` | boolean | 反应堆开关 |
@@ -692,7 +695,7 @@ print(mods.getOffhand())            -- 副手工具
 | `getStats()` | table | 运行快照 |
 
 - 每个组件单独记录耐久与温度：反应堆温度 = 20 °C + 堆芯热量；组件温度 = 反应堆温度 + (温度上限 − 反应堆温度) × 已损耗耐久比例，因此每个格位的温度都不同，普通运行时也不会显示 0 °C。
-- 燃料棒按自身脉冲数消耗耐久（模拟寿命 10000 tick，运行时每 tick 消耗脉冲数），脉冲越高耗尽越快，耗尽后不再发电放热。
+- 燃料棒按自身脉冲数消耗耐久（模拟寿命 10000 tick，运行时每 tick 消耗脉冲数），脉冲越高耗尽越快，耗尽后不再发电放热；燃料棒全部耗尽时反应堆默认自动停机。
 - 冷却单元 / 冷凝模块各自吸收热量并减少剩余容量；热量先分给相邻的冷却单元，再分给冷凝模块，分不完的进入堆芯；未生效（不相邻燃料棒）的冷却单元保持满耐久。
 - 设备页的格位按「电池电量」样式用背景填充显示剩余耐久，悬浮可看具体数值；点击格子也会在「格位详情」中列出耐久与百分比。
 - 温度达到上限时反应堆会自动停机（`status` 变为 `overheat`），堆芯温度保留；先复位堆芯再启动。
@@ -705,7 +708,7 @@ print(mods.getOffhand())            -- 副手工具
 | 0 | 堆芯热量 | 当前热量 / 上限 × 15 |
 | 1 | 发电量 | 每 100 EU/t 一档，上限 15 |
 | 2 | 燃料棒数量 | 0~15（超出按 15） |
-| 3 | 反应堆状态 | off 0 / idle 3 / stable 8 / warning 12 / critical、overheat 15 |
+| 3 | 反应堆状态 | off 0 / idle、depleted 3 / stable 8 / warning 12 / critical、overheat 15 |
 | 4 | 剩余吸热 | 剩余容量 / 总容量 × 15 |
 | 5 | 是否运行 | 运行 15，停止 0 |
 | 6 | 燃料棒最低耐久 | 最低剩余耐久比例 × 15 |

@@ -913,6 +913,36 @@ const ModView = (() => {
     const connectBtn = infoRoot.querySelector('[data-role="connect"]');
     if (connectBtn) connectBtn.addEventListener('click', () => openConnectDialog(view));
 
+    const stopDepleted = infoRoot.querySelector('[data-role="stop-depleted"]');
+    if (stopDepleted) {
+      stopDepleted.addEventListener('change', async () => {
+        stopDepleted.disabled = true;
+        try {
+          const r = await App.api(`mods/${encodeURIComponent(view.name)}/reactor-options`, {
+            method: 'POST',
+            body: { stopWhenDepleted: stopDepleted.checked },
+          });
+          if (r && r.error) throw new Error(r.error);
+          if (window.App && App.setStatus) {
+            App.setStatus(T(stopDepleted.checked
+              ? 'reactor.stop-depleted-on'
+              : 'reactor.stop-depleted-off',
+            stopDepleted.checked ? '已开启燃料耗尽自动停机' : '已关闭燃料耗尽自动停机'));
+          }
+          reload(view.name);
+        } catch (e) {
+          stopDepleted.checked = !stopDepleted.checked;
+          appendLog(view.name, {
+            ts: Date.now(),
+            level: 'error',
+            msg: `${T('mods.request-failed', '请求失败: ')}${e.message}`,
+          });
+        } finally {
+          stopDepleted.disabled = false;
+        }
+      });
+    }
+
     const btn = infoRoot.querySelector('[data-role="reset-core"]');
     if (!btn) return;
     btn.addEventListener('click', async () => {

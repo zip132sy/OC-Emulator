@@ -102,7 +102,13 @@ const ReactorView = (() => {
       }
       grid.push(row);
     }
-    return { columns, rows: ROWS, active: src.active !== false, grid };
+    return {
+      columns,
+      rows: ROWS,
+      active: src.active !== false,
+      stopWhenDepleted: src.stopWhenDepleted !== false,
+      grid,
+    };
   }
 
   function inside(r, c, columns) {
@@ -239,7 +245,9 @@ const ReactorView = (() => {
 
   // 运行状态优先于布局推算的状态; 过热停机后仍显示过热, 直到复位堆芯
   function effectiveStatus(stats, runtime) {
-    if (runtime && (runtime.running || runtime.status === 'overheat')) return runtime.status;
+    if (runtime && (runtime.running || runtime.status === 'overheat' || runtime.status === 'depleted')) {
+      return runtime.status;
+    }
     return stats.status;
   }
 
@@ -301,6 +309,7 @@ const ReactorView = (() => {
     const lines = [`${cellSummary(parts, cell)} (${r + 1}, ${c + 1})`];
     const dur = durabilityLabel(cell);
     if (dur) lines.push(dur);
+    if (cell && cell.depleted) lines.push(T('reactor.info.depleted', '已耗尽'));
     if (cell && Number.isFinite(cell.temperature)) {
       lines.push(`${T('reactor.info.temperature', '温度')} ${temperatureText(cell)}`);
     }
@@ -324,6 +333,7 @@ const ReactorView = (() => {
       columns: config.columns,
       rows: ROWS,
       active: config.active,
+      stopWhenDepleted: config.stopWhenDepleted,
       grid: config.grid,
       selectedPart: firstPartId(parts, 'fuel'),
       dirty: false,
@@ -373,6 +383,10 @@ const ReactorView = (() => {
             <label class="ic2-active">
               <input type="checkbox" data-role="active" ${state.active ? 'checked' : ''}>
               <span>${escapeHTML(T('reactor.active', '运行'))}</span>
+            </label>
+            <label class="ic2-active">
+              <input type="checkbox" data-role="stop-depleted" ${state.stopWhenDepleted ? 'checked' : ''}>
+              <span>${escapeHTML(T('reactor.stop-depleted', '燃料耗尽自动停机'))}</span>
             </label>
             <div class="ic2-note" data-role="note"></div>
           </div>
@@ -594,6 +608,13 @@ const ReactorView = (() => {
       updateStats();
       markDirty();
     });
+    const stopDepletedEl = root.querySelector('[data-role="stop-depleted"]');
+    if (stopDepletedEl) {
+      stopDepletedEl.addEventListener('change', () => {
+        state.stopWhenDepleted = stopDepletedEl.checked;
+        markDirty();
+      });
+    }
 
     root.querySelector('[data-action="clear"]').addEventListener('click', () => {
       state.grid = emptyGrid(state.columns);
@@ -615,6 +636,7 @@ const ReactorView = (() => {
             columns: state.columns,
             rows: ROWS,
             active: state.active,
+            stopWhenDepleted: state.stopWhenDepleted,
             grid: state.grid,
           },
         });
@@ -714,11 +736,17 @@ const ReactorView = (() => {
       el.style.width = pct.toFixed(1) + '%';
     };
 
-    set('eu', String(stats.euPerTick));
-    set('heat', String(stats.heatPerTick));
+    const liveEu = runtime && Number.isFinite(runtime.euPerTick) ? runtime.euPerTick : stats.euPerTick;
+    const liveHeat = runtime && Number.isFinite(runtime.heatPerTick) ? runtime.heatPerTick : stats.heatPerTick;
+    const activeRods = runtime && Number.isFinite(runtime.activeRods) ? runtime.activeRods : stats.fuelRods;
+    set('eu', String(liveEu));
+    set('heat', String(liveHeat));
     set('capacity', fmtNum(stats.effectiveHeatCapacity));
     set('safe', formatSafeTime(runtime && runtime.running ? runtime.safeSeconds : stats.safeSeconds));
     set('running', runtime && runtime.running ? T('reactor.info.on', '是') : T('reactor.info.off', '否'));
+    set('rods', `${activeRods} / ${stats.fuelRods}`);
+    const stopDepletedEl = root.querySelector('[data-role="stop-depleted"]');
+    if (stopDepletedEl) stopDepletedEl.checked = config.stopWhenDepleted !== false;
     set('temperature', temperatureRangeText(runtime));
 
     if (runtime) {
@@ -750,6 +778,7 @@ const ReactorView = (() => {
       } else if (fill) {
         fill.remove();
       }
+      btn.classList.toggle('depleted', !!(cell && cell.depleted));
       btn.title = slotTipText(parts, cell, r, c);
     });
     // 组件明细表里的温度也随运行变化
@@ -773,6 +802,9 @@ const ReactorView = (() => {
     const status = effectiveStatus(stats, runtime);
     root.__ic2Cells = stats.cells;
     root.__ic2Runtime = runtime;
+    const liveEu = runtime && Number.isFinite(runtime.euPerTick) ? runtime.euPerTick : stats.euPerTick;
+    const liveHeat = runtime && Number.isFinite(runtime.heatPerTick) ? runtime.heatPerTick : stats.heatPerTick;
+    const activeRods = runtime && Number.isFinite(runtime.activeRods) ? runtime.activeRods : stats.fuelRods;
     const byPos = new Map(stats.cells.map(cell => [`${cell.r}:${cell.c}`, cell]));
 
     const prevSel = root.__ic2Sel || null;
@@ -787,11 +819,11 @@ const ReactorView = (() => {
           <div class="ic2-status ${status}" data-role="status">${escapeHTML(T('reactor.status.' + status, status))}</div>
         </div>
         <div class="ic2-info-gauges">
-          <div class="ic2-info-gauge"><span>${escapeHTML(T('reactor.eu', 'EU/t'))}</span><b data-info="eu">${stats.euPerTick}</b></div>
-          <div class="ic2-info-gauge"><span>${escapeHTML(T('reactor.heat', '热量/t'))}</span><b data-info="heat">${stats.heatPerTick}</b></div>
+          <div class="ic2-info-gauge"><span>${escapeHTML(T('reactor.eu', 'EU/t'))}</span><b data-info="eu">${liveEu}</b></div>
+          <div class="ic2-info-gauge"><span>${escapeHTML(T('reactor.heat', '热量/t'))}</span><b data-info="heat">${liveHeat}</b></div>
           <div class="ic2-info-gauge"><span>${escapeHTML(T('reactor.heat-capacity', '吸热容量'))}</span><b data-info="capacity">${fmtNum(stats.effectiveHeatCapacity)}</b></div>
           <div class="ic2-info-gauge"><span>${escapeHTML(T('reactor.safe-time', '安全时间'))}</span><b data-info="safe">${formatSafeTime(runtime && runtime.running ? runtime.safeSeconds : stats.safeSeconds)}</b></div>
-          <div class="ic2-info-gauge"><span>${escapeHTML(T('reactor.info.fuel-rods', '燃料棒'))}</span><b>${stats.fuelRods}</b></div>
+          <div class="ic2-info-gauge"><span>${escapeHTML(T('reactor.info.active-rods', '活跃燃料棒'))}</span><b data-info="rods">${activeRods} / ${stats.fuelRods}</b></div>
           <div class="ic2-info-gauge"><span>${escapeHTML(T('reactor.info.used', '占用'))}</span><b>${stats.usedSlots} / ${stats.totalSlots}</b></div>
           <div class="ic2-info-gauge"><span>${escapeHTML(T('reactor.info.temperature', '温度'))}</span><b data-info="temperature">${temperatureRangeText(runtime)}</b></div>
           <div class="ic2-info-gauge"><span>${escapeHTML(T('reactor.active', '反应堆运行'))}</span><b data-info="running">${runtime && runtime.running ? T('reactor.info.on', '是') : T('reactor.info.off', '否')}</b></div>
@@ -804,6 +836,10 @@ const ReactorView = (() => {
           <button type="button" class="ic2-tool-btn" data-role="reactor-start" ${config.active ? 'disabled' : ''}>${escapeHTML(T('vm.start', '▶ 启动'))}</button>
           <button type="button" class="ic2-tool-btn" data-role="reactor-stop" ${config.active ? '' : 'disabled'}>${escapeHTML(T('vm.stop', '■ 停止'))}</button>
           <button type="button" class="ic2-tool-btn" data-role="reset-core">${escapeHTML(T('reactor.info.reset-core', '复位堆芯'))}</button>
+          <label class="ic2-active" title="${escapeHTML(T('reactor.stop-depleted', '燃料耗尽自动停机'))}">
+            <input type="checkbox" data-role="stop-depleted" ${config.stopWhenDepleted !== false ? 'checked' : ''}>
+            <span>${escapeHTML(T('reactor.stop-depleted', '燃料耗尽自动停机'))}</span>
+          </label>
           <button type="button" class="ic2-tool-btn" data-role="connect">${escapeHTML(T('reactor.connect.button', '连接到虚拟机'))}</button>
         </div>
         <div class="ic2-info-body">
@@ -847,7 +883,8 @@ const ReactorView = (() => {
       const isSel = sel && sel.r === r && sel.c === c;
       const dur = durabilityInfo(info);
       const fill = dur ? `<i class="ic2-slot-fill" style="height:${(dur.ratio * 100).toFixed(1)}%"></i>` : '';
-      return `<button type="button" class="ic2-slot ${cellClass(parts, id)} ${isSel ? 'selected' : ''}"
+      const depleted = info && info.depleted ? 'depleted' : '';
+      return `<button type="button" class="ic2-slot ${cellClass(parts, id)} ${isSel ? 'selected' : ''} ${depleted}"
         data-r="${r}" data-c="${c}" title="${escapeHTML(slotTipText(parts, info, r, c))}" aria-label="${escapeHTML(partLabel(parts, id))}">
         ${fill}
         <span class="ic2-slot-icon">${p ? p.icon : ''}</span>
@@ -891,6 +928,9 @@ const ReactorView = (() => {
           rows.push([T('reactor.info.neighbors', '相邻燃料棒'), String(cell.neighbors)]);
           rows.push([T('reactor.eu', 'EU/t'), String(cell.eu)]);
           rows.push([T('reactor.heat', '热量/t'), String(cell.heat)]);
+          if (cell.depleted) {
+            rows.push([T('reactor.info.state', '状态'), T('reactor.info.depleted', '已耗尽')]);
+          }
         } else {
           rows.push([T('reactor.info.absorb', '吸热'), fmtNum(cell.capacity)]);
           rows.push([T('reactor.info.state', '状态'), cell.active
@@ -914,9 +954,11 @@ const ReactorView = (() => {
       tbodyEl.innerHTML = stats.cells.map(cell => {
         const p = parts[cell.id] || {};
         const isFuel = cell.category === 'fuel';
-        const state = cell.active
-          ? T('reactor.info.active', '生效')
-          : T('reactor.info.inactive', '未生效');
+        const state = cell.depleted
+          ? T('reactor.info.depleted', '已耗尽')
+          : (cell.active
+            ? T('reactor.info.active', '生效')
+            : T('reactor.info.inactive', '未生效'));
         return `<tr data-r="${cell.r}" data-c="${cell.c}" class="${cell.active ? '' : 'inactive'}">
           <td>${cell.r + 1} , ${cell.c + 1}</td>
           <td>${escapeHTML(p.icon || '')} ${escapeHTML(partLabel(parts, cell.id))}</td>
