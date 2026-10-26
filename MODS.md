@@ -680,8 +680,13 @@ print(mods.getOffhand())            -- 副手工具
 | `isActive()` / `getActive()` | boolean | 反应堆开关 |
 | `getSize()` | columns, rows | 网格尺寸 |
 | `slotCount()` / `getSlotCount()` | number | 槽位总数 |
-| `getStackInSlot(slot)` | table / nil | 0 基槽位内容 |
+| `getStackInSlot(slot)` / `getComponentInfo(slot)` | table / nil | 0 基槽位内容，含 `durability` / `maxDurability` |
+| `getComponentDurability(slot)` / `getSlotDurability(slot)` | current, max | 组件当前耐久与最大耐久；空槽为 0, 0 |
 | `getStats()` | table | 运行快照 |
+
+- 燃料棒耐久按运行时间消耗（模拟寿命 10000 tick，运行时每 tick 消耗 1 点）。
+- 冷却单元 / 冷凝模块的耐久等于剩余吸热容量；未生效（不相邻燃料棒）的冷却单元保持满耐久。
+- 设备页点击任意格子即可在「格位详情」中看到该组件的耐久数值与百分比。
 
 `reactor_chamber` 不提供写方法，开关必须通过红石 I/O 控制。
 

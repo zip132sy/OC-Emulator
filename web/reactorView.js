@@ -634,9 +634,11 @@ const ReactorView = (() => {
     if (!root) return null;
     const parts = partsFrom(data && data.components);
     const config = normalizeConfig(data && data.config, parts);
-    const stats = computeStats(config, parts);
+    const stats = (data && data.stats && Array.isArray(data.stats.cells)) ? data.stats : computeStats(config, parts);
     const runtime = (data && data.runtime) || null;
     const status = effectiveStatus(stats, runtime);
+    root.__ic2Cells = stats.cells;
+    root.__ic2Runtime = runtime;
 
     const statusEl = root.querySelector('[data-role="status"]');
     if (statusEl) {
@@ -670,6 +672,8 @@ const ReactorView = (() => {
       setBar('hull-bar', runtime.hullRatio);
       setBar('cap-bar', runtime.capacityRatio);
     }
+    // 耐久随运行时间变化, 重绘当前选中格子的详情
+    if (typeof root.__ic2Detail === 'function') root.__ic2Detail();
     return stats;
   }
 
@@ -677,9 +681,11 @@ const ReactorView = (() => {
     if (!root) return null;
     const parts = partsFrom(data && data.components);
     const config = normalizeConfig(data && data.config, parts);
-    const stats = computeStats(config, parts);
+    const stats = (data && data.stats && Array.isArray(data.stats.cells)) ? data.stats : computeStats(config, parts);
     const runtime = (data && data.runtime) || null;
     const status = effectiveStatus(stats, runtime);
+    root.__ic2Cells = stats.cells;
+    root.__ic2Runtime = runtime;
     const byPos = new Map(stats.cells.map(cell => [`${cell.r}:${cell.c}`, cell]));
 
     const prevSel = root.__ic2Sel || null;
@@ -773,13 +779,19 @@ const ReactorView = (() => {
         detailEl.innerHTML = `<div class="ic2-detail-empty">${escapeHTML(T('reactor.info.pick', '选择左侧任意格子查看详情'))}</div>`;
         return;
       }
-      const cell = byPos.get(`${sel.r}:${sel.c}`);
+      const cells = Array.isArray(root.__ic2Cells) ? root.__ic2Cells : stats.cells;
+      const cell = cells.find(x => x.r === sel.r && x.c === sel.c) || null;
       const p = cell ? parts[cell.id] : null;
       const rows = [];
       rows.push([T('reactor.info.position', '位置'), `${sel.r + 1} , ${sel.c + 1}`]);
       rows.push([T('reactor.info.component', '组件'), cell ? partLabel(parts, cell.id) : T('reactor.cell-empty', '空槽')]);
       if (cell && p) {
         rows.push([T('reactor.info.tier', '等级'), `${p.tier || '-'}`]);
+        if (Number.isFinite(cell.maxDurability) && cell.maxDurability > 0) {
+          const cur = Math.max(0, Math.min(cell.maxDurability, Number(cell.durability) || 0));
+          const pct = Math.round((cur / cell.maxDurability) * 100);
+          rows.push([T('reactor.info.durability', '耐久'), `${fmtNum(cur)} / ${fmtNum(cell.maxDurability)} (${pct}%)`]);
+        }
         if (cell.category === 'fuel') {
           rows.push([T('reactor.info.rods', '联数'), String(cell.rods)]);
           rows.push([T('reactor.info.pulses', '脉冲'), String(cell.pulses)]);
@@ -844,6 +856,7 @@ const ReactorView = (() => {
     });
 
     root.__ic2Sel = defaultSel ? { r: defaultSel.r, c: defaultSel.c } : null;
+    root.__ic2Detail = renderDetail;
     renderGrid();
     renderDetail();
     renderTable();

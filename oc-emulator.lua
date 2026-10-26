@@ -3681,6 +3681,15 @@ extComponents.makeReactorChamber = function(address)
     if type(item) ~= "table" then return nil end
     return item
   end
+  dev.getComponentInfo = dev.getStackInSlot
+
+  -- 组件耐久: 返回当前耐久, 最大耐久; 空槽返回 0, 0
+  function dev.getComponentDurability(slot)
+    local item = dev.getStackInSlot(slot)
+    if not item then return 0, 0 end
+    return tonumber(item.durability) or 0, tonumber(item.maxDurability) or 0
+  end
+  dev.getSlotDurability = dev.getComponentDurability
   function dev.getStats()
     local s = S()
     return {
