@@ -67,7 +67,11 @@ local machineRedstone = true
 
 local function isScalar(value)
   local t = type(value)
-  return t == "number" or t == "boolean" or t == "string"
+  if t == "number" then
+    -- NaN / inf 无法编码成 JSON, 直接跳过
+    return value == value and value ~= math.huge and value ~= -math.huge
+  end
+  return t == "boolean" or t == "string"
 end
 
 local function copyState(state)
