@@ -22,7 +22,7 @@
 - **组件模拟**：GPU（含 Tier 分级与调色板）、Screen（Tier 分辨率）、键盘 / 鼠标（含精确模式）、文件系统、网卡、数据卡、EEPROM、Internet 代理等。
 - **Mods 统一组件**：把 OpenComputers 的机器人（Robot）、无人机（Drone）、单片机（Microcontroller）合并为一个 `mods` 组件，提供完整的中文 API 映射与虚拟世界模拟，可像原版一样移动、挖掘、放置、管理物品栏与储罐。
 - **Mods 设备面板**：左侧列表可在「虚拟机 / Mods」之间切换；计算机类设备（机器人 / 无人机 / 单片机）是独立 VM，带 3D 坐标场景、物品/状态标签页、内置 EFI 启动日志，并可通过 T1/T2 无线网卡远程控制。
-- **IC2 核电站**：核电站是机器类设备，不跑程序也没有 EFI/硬盘，通过红石 I/O 端口接入所选计算机（`component.list("redstone")`，用 `component.redstone` 读写红石信号）。配置中使用 IC2 原版风格的灰色反应堆 GUI，燃料棒分铀/MOX 与单联/双联/四联，冷却单元分 10k/30k/60k，冷凝模块分 20k/100k；可调整 3~9 列大小，实时查看 EU/t、热量、吸热容量与安全时间。设备页用 2D 反应堆面板逐格显示组件等级、脉冲、产电、发热、吸热与生效状态。
+- **IC2 核电站**：核电站是机器类设备，不跑程序也没有 EFI/硬盘，通过红石 I/O 端口接入所选计算机，并提供一个只读 `reactor_chamber` 组件与一个 `redstone` 控制组件（兼容 MineOS IC2Reactors.app）。配置中使用 IC2 原版风格的灰色反应堆 GUI，燃料棒分铀/MOX 与单联/双联/四联，冷却单元分 10k/30k/60k，冷凝模块分 20k/100k；可调整 3~9 列大小，实时查看 EU/t、热量、吸热容量与安全时间。设备页用 2D 反应堆面板逐格显示组件等级、脉冲、产电、发热、吸热与生效状态。
 - **系统信息联动**：读取宿主机的内存占用与电量，映射给虚拟机内的 `computer.freeMemory()` / `computer.energy()`。
 - **自动更新**：启动脚本可自动从 GitHub / Gitee 拉取最新版本（默认开启，可在设置中关闭）。
 - **错误反馈**：前端出现异常时会弹出错误面板，支持一键复制错误信息并跳转 GitHub / Gitee 提交 Issue。
@@ -98,14 +98,14 @@ print(mods.help())          -- 查看完整的 OC 原版 API 映射
 - 「⚙ 配置」对计算机类设备可编辑 EFI 程序和硬件（APU / 内存 / 屏幕 / 扩展卡 / 无线强度），保存后可自动重启生效。
 - 机器人和无人机各有专属配置页：机器人可设置主手 / 副手工具、物品栏格数与内部储罐；无人机可设置最大速度、加速度与物品栏格数。
 - 电脑使用扩展卡中的无线网卡（T1 / T2 均可）连接计算机类设备的 7777 端口即可远程控制；双击工具栏中的无线地址即可复制。
-- 核电站是机器类设备：没有 EFI / 硬盘，只有 **☢ 反应堆** 与 **物品 / 状态** 两个页签；面板与顶部工具栏都提供启动 / 停止。点击「连接到虚拟机」选择一台虚拟机后，它通过**红石 I/O 端口**接到那台计算机，对方用 `component.redstone` 读写红石信号来控制反应堆，示例：
+- 核电站是机器类设备：没有 EFI / 硬盘，只有 **☢ 反应堆** 与 **物品 / 状态** 两个页签；面板与顶部工具栏都提供启动 / 停止。点击「连接到虚拟机」选择一台虚拟机后，它通过**红石 I/O 端口**接到那台计算机，同时提供一个只读的 `reactor_chamber` 组件（兼容 MineOS 的 IC2Reactors.app）。控制与遥测示例：
 
   ```lua
   local component = require("component")
+  local chamber = component.reactor_chamber
   local redstone = component.redstone
-  -- 0 号输入通道是堆芯热量 (0..15)，3 号是状态
-  print("heat", redstone.getInput(0), "status", redstone.getInput(3))
-  redstone.setOutput(0, 15) -- 启动；写 0 停止
+  print(chamber.getHeat(), chamber.getMaxHeat(), chamber.getReactorEUOutput())
+  redstone.setOutput(3, 15) -- 任意通道均可：> 0 启动，0 停止
   ```
 
 完整的映射表、Mods 文件夹格式、3D 标记点与无线协议见 [MODS.md](./MODS.md)。

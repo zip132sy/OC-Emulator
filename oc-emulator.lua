@@ -3656,6 +3656,50 @@ setmetatable(component, {
 -- ============================================================
 extComponents = { devices = {} }   -- devices: address -> proxy
 
+-- 只读仪表组件: MineOS IC2Reactors.app 等程序通过 reactor_chamber 读取数值
+extComponents.makeReactorChamber = function(address)
+  local dev = { address = address, type = "reactor_chamber", _state = {} }
+  local function S() return dev._state end
+
+  function dev.getHeat() return tonumber(S().hullHeat) or 0 end
+  function dev.getMaxHeat() return tonumber(S().hullHeatCapacity) or 0 end
+  function dev.getReactorEUOutput() return tonumber(S().euPerTick) or 0 end
+  dev.getReactorEUEnergyOutput = dev.getReactorEUOutput
+  function dev.getEnergyOutput() return tonumber(S().euPerTick) or 0 end
+  function dev.getHeatOutput() return tonumber(S().heatPerTick) or 0 end
+  function dev.isActive() return S().active == true end
+  function dev.getActive() return S().active == true end
+  function dev.getSize() return tonumber(S().columns) or 0, tonumber(S().rows) or 0 end
+  function dev.slotCount() return (tonumber(S().columns) or 0) * (tonumber(S().rows) or 0) end
+  dev.getSlotCount = dev.slotCount
+  function dev.getStackInSlot(slot)
+    local index = tonumber(slot)
+    if not index then return nil end
+    local slots = S().slots
+    if type(slots) ~= "table" then return nil end
+    local item = slots[index + 1]
+    if type(item) ~= "table" then return nil end
+    return item
+  end
+  function dev.getStats()
+    local s = S()
+    return {
+      active = s.active == true,
+      columns = tonumber(s.columns) or 0,
+      rows = tonumber(s.rows) or 0,
+      euPerTick = tonumber(s.euPerTick) or 0,
+      heatPerTick = tonumber(s.heatPerTick) or 0,
+      hullHeat = tonumber(s.hullHeat) or 0,
+      hullHeatCapacity = tonumber(s.hullHeatCapacity) or 0,
+      remainingCapacity = tonumber(s.remainingCapacity) or 0,
+      totalCapacity = tonumber(s.totalCapacity) or 0,
+      generatedEu = tonumber(s.generatedEu) or 0,
+      status = s.status,
+    }
+  end
+  return dev
+end
+
 extComponents.makeRedstone = function(address)
   local dev = { address = address, type = "redstone", _state = {}, _out = {}, _bout = {} }
   local function S() return dev._state end
@@ -3707,15 +3751,13 @@ extComponents.makeRedstone = function(address)
     return dev._out[tonumber(side) or 0] or 0
   end
 
-  -- 输出通道 (计算机 -> 反应堆): 0 号通道控制开关, > 0 为运行
+  -- 输出通道 (计算机 -> 反应堆): 任一通道都可控制开关, > 0 为运行
   function dev.setOutput(side, value)
     side = tonumber(side) or 0
     value = clamp(value)
     dev._out[side] = value
-    if side == 0 then
-      sendToServer({ type = "ext_command", address = address, method = "setOutput", args = { 0, value } })
-      dev._state.active = value > 0
-    end
+    sendToServer({ type = "ext_command", address = address, method = "setOutput", args = { side, value } })
+    dev._state.active = value > 0
     return value
   end
 
@@ -3723,15 +3765,13 @@ extComponents.makeRedstone = function(address)
     return dev._bout[tonumber(side) or 0] or 0
   end
 
-  -- 0 号通道的 bit0 表示开关
+  -- bit0 表示开关, 任一通道均可
   function dev.setBundledOutput(side, mask)
     side = tonumber(side) or 0
     mask = tonumber(mask) or 0
     dev._bout[side] = mask
-    if side == 0 then
-      sendToServer({ type = "ext_command", address = address, method = "setBundledOutput", args = { 0, mask } })
-      dev._state.active = (mask % 2) == 1
-    end
+    sendToServer({ type = "ext_command", address = address, method = "setBundledOutput", args = { side, mask } })
+    dev._state.active = (mask % 2) == 1
     return mask
   end
 
@@ -3765,7 +3805,8 @@ extComponents.apply = function(list)
       seen[address] = true
       if not extComponents.devices[address] then
         local proxy = nil
-        if ctype == "redstone" then proxy = extComponents.makeRedstone(address) end
+        if ctype == "reactor_chamber" then proxy = extComponents.makeReactorChamber(address)
+        elseif ctype == "redstone" then proxy = extComponents.makeRedstone(address) end
         if proxy then
           extComponents.devices[address] = proxy
           componentRegistry[address] = { type = ctype, proxy = proxy }

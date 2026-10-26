@@ -661,13 +661,31 @@ print(mods.getOffhand())            -- 副手工具
 
 相关接口：`GET /api/mods/:name` 返回 `profile`（`{ type, value, tools, limits }`），`PUT /api/mods/:name/config` 接受 `profile` 字段。
 
-### 9.4 核电站红石 I/O API（component redstone）
+### 9.4 核电站组件 API（reactor_chamber + redstone）
 
-核电站通过**红石 I/O 端口**接入已连接的虚拟机：只有该虚拟机的 `component.list("redstone")` 能看到它，`component.redstone` 是主组件。未连接时任何虚拟机都看不到该组件；也不再直接暴露 `reactor` 组件。
+核电站接入已连接的虚拟机后会暴露**两个组件**（都只对该虚拟机可见，未连接时不存在）：
 
-所有通道都是 0~15 的模拟红石信号，读写都走标准 `redstone` 组件 API。
+- `reactor_chamber`：只读仪表，兼容 MineOS 的 **IC2Reactors.app** 等程序。
+- `redstone`：红石 I/O 控制端口，用标准 `redstone` 组件 API 读写 0~15 模拟信号。
 
-**输入通道（反应堆 → 计算机，`getInput(side)`）**
+**reactor_chamber（只读）**
+
+| 方法 | 返回 | 说明 |
+|---|---|---|
+| `getHeat()` | number | 堆芯当前热量 |
+| `getMaxHeat()` | number | 堆芯热量上限 |
+| `getReactorEUOutput()` / `getReactorEUEnergyOutput()` | number | 每 tick 发电量（EU/t） |
+| `getEnergyOutput()` | number | 同 `getReactorEUOutput()` |
+| `getHeatOutput()` | number | 每 tick 发热量 |
+| `isActive()` / `getActive()` | boolean | 反应堆开关 |
+| `getSize()` | columns, rows | 网格尺寸 |
+| `slotCount()` / `getSlotCount()` | number | 槽位总数 |
+| `getStackInSlot(slot)` | table / nil | 0 基槽位内容 |
+| `getStats()` | table | 运行快照 |
+
+`reactor_chamber` 不提供写方法，开关必须通过红石 I/O 控制。
+
+**redstone 输入通道（反应堆 → 计算机，`getInput(side)`）**
 
 | 通道 | 含义 | 取值 |
 |---|---|---|
@@ -680,24 +698,23 @@ print(mods.getOffhand())            -- 副手工具
 
 `getBundledInput(0)` 用位表示状态：bit0 运行、bit1 稳定、bit2 注意、bit3 危险；其它通道为 0。`getComparatorInput(side)` 与 `getInput(side)` 相同。
 
-**输出通道（计算机 → 反应堆，`setOutput(side, value)`）**
+**redstone 输出通道（计算机 → 反应堆）**
 
-| 通道 | 含义 |
-|---|---|
-| 0 | 反应堆开关：> 0 运行，0 停止（写回 `reactor.json`） |
-| 1~5 | 预留，记录数值但不影响反应堆 |
+- `setOutput(side, value)`：**任意通道**都可以控制开关，`value > 0` 运行、`0` 停止（写回 `reactor.json`）。
+- `setBundledOutput(side, mask)`：任意通道的 bit0 为 1 表示运行。
+- `getOutput(side)` / `getBundledOutput(side)` 返回最近一次写入的值。
 
-`setBundledOutput(0, mask)` 同样可控制开关：bit0 为 1 表示运行。`getOutput(side)` / `getBundledOutput(side)` 返回最近一次写入的值。
+IC2Reactors.app 会为每台核电站选择一个 I/O 端口和侧面，因此这里不限定 side。
 
-**API 一览**
+**redstone API 一览**
 
 | 方法 | 返回 | 说明 |
 |---|---|---|
 | `getInput(side)` / `getComparatorInput(side)` | number | 读取反应堆状态对应的红石信号 |
 | `getBundledInput(side)` | number | 读取状态位（仅通道 0 有值） |
-| `setOutput(side, value)` | number | 写输出信号；通道 0 控制开关 |
+| `setOutput(side, value)` | number | 写输出信号控制开关 |
 | `getOutput(side)` | number | 最近写入的输出值 |
-| `setBundledOutput(side, mask)` | number | 写捆绑输出；通道 0 的 bit0 控制开关 |
+| `setBundledOutput(side, mask)` | number | 写捆绑输出控制开关 |
 | `getBundledOutput(side)` | number | 最近写入的捆绑输出 |
 | `getSides()` | table | `{0,1,2,3,4,5}` |
 
@@ -705,19 +722,19 @@ print(mods.getOffhand())            -- 副手工具
 
 ```lua
 local component = require("component")
+local chamber = component.reactor_chamber
 local redstone = component.redstone
 
-local heat = redstone.getInput(0)          -- 0..15
-local status = redstone.getInput(3)        -- 0/3/8/12/15
-if status >= 12 then
-  redstone.setOutput(0, 0)                 -- 危险时停机
+print(chamber.getHeat(), chamber.getMaxHeat(), chamber.getReactorEUOutput())
+-- 任意通道都能控制开关；这里用 3 号通道
+if redstone.getInput(3) >= 12 then       -- 危险
+  redstone.setOutput(3, 0)
 else
-  redstone.setOutput(0, 15)                -- 正常时运行
+  redstone.setOutput(3, 15)
 end
-print("heat signal:", heat)
 ```
 
-- 有多个核电站时，用 `component.list("redstone")` 遍历，每个设备对应一个红石 I/O 组件。
+- 有多个核电站时，`component.list("reactor_chamber")` 与 `component.list("redstone")` 会各返回对应数量。
 - 程序启动时组件即可用（设备清单在启动前写入 `devices.json`）；运行中新增或断开连接会即时同步并发出 `component_added` / `component_removed`。
 
 ## 10. 无线控制协议（T1 / T2 均可）
