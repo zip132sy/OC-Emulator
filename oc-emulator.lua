@@ -3877,7 +3877,7 @@ extComponents.makeRedstone = function(address, meta)
   }
   local function S() return dev._state end
 
-  local STATUS_CODE = { off = 0, idle = 3, stable = 8, warning = 12, critical = 15 }
+  local STATUS_CODE = { off = 0, idle = 3, depleted = 3, stable = 8, warning = 12, critical = 15, overheat = 15 }
 
   local function clamp(v)
     v = tonumber(v) or 0
