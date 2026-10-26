@@ -1687,6 +1687,7 @@ html, body {
 .ic2-status.stable { background: #7fb77f; }
 .ic2-status.warning { background: #d6b75a; }
 .ic2-status.critical { background: #d66a6a; color: #fff; }
+.ic2-status.overheat { background: #8f2f2f; color: #fff; }
 .ic2-status.off { background: #999; color: #eee; }
 .ic2-status.idle { background: #9ab6cc; }
 .ic2-gauge {

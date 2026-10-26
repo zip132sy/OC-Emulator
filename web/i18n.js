@@ -320,6 +320,7 @@ const I18N = (() => {
       'reactor.info.fuel-rods': '燃料棒总数',
       'reactor.info.used': '占用',
       'reactor.info.hull': '外壳热量',
+      'reactor.info.temperature': '温度',
       'reactor.info.on': '是',
       'reactor.info.off': '否',
       'reactor.info.hull-heat': '堆芯热量',
@@ -365,11 +366,13 @@ const I18N = (() => {
       'reactor.status.stable': '稳定',
       'reactor.status.warning': '注意',
       'reactor.status.critical': '危险',
+      'reactor.status.overheat': '过热停机',
       'reactor.note.off': '反应堆已停机，不产生 EU 与热量。',
       'reactor.note.idle': '放置燃料棒后开始计算 EU 与热量。',
       'reactor.note.stable': '吸热容量充足，运行稳定。',
       'reactor.note.warning': '吸热容量偏低，建议增加冷却单元或冷凝模块。',
       'reactor.note.critical': '没有吸热容量或安全时间过短，堆芯会快速过热。',
+      'reactor.note.overheat': '温度达到上限，反应堆已自动停机；请先复位堆芯再启动。',
 
       // 设置
       'settings.title': '设置',
@@ -1062,6 +1065,7 @@ const I18N = (() => {
       'reactor.info.fuel-rods': 'Total rods',
       'reactor.info.used': 'Used',
       'reactor.info.hull': 'Hull heat',
+      'reactor.info.temperature': 'Temperature',
       'reactor.info.on': 'Yes',
       'reactor.info.off': 'No',
       'reactor.info.hull-heat': 'Core heat',
@@ -1107,11 +1111,13 @@ const I18N = (() => {
       'reactor.status.stable': 'Stable',
       'reactor.status.warning': 'Warning',
       'reactor.status.critical': 'Critical',
+      'reactor.status.overheat': 'Overheated',
       'reactor.note.off': 'Reactor is offline; no EU or heat is generated.',
       'reactor.note.idle': 'Place fuel rods to start generating EU and heat.',
       'reactor.note.stable': 'Heat capacity is sufficient; operation is stable.',
       'reactor.note.warning': 'Heat capacity is low; add coolant cells or condensators.',
       'reactor.note.critical': 'No/low heat capacity; the core will overheat quickly.',
+      'reactor.note.overheat': 'Temperature reached the limit and the reactor shut down automatically. Reset the core before starting again.',
 
       // Settings
       'settings.title': 'Settings',

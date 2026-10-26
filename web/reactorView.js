@@ -235,9 +235,10 @@ const ReactorView = (() => {
     return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
   }
 
-  // 运行状态优先于布局推算的状态
+  // 运行状态优先于布局推算的状态; 过热停机后仍显示过热, 直到复位堆芯
   function effectiveStatus(stats, runtime) {
-    return runtime && runtime.running ? runtime.status : stats.status;
+    if (runtime && (runtime.running || runtime.status === 'overheat')) return runtime.status;
+    return stats.status;
   }
 
   // 单个格子的信息文本 (配置 GUI 的 tooltip 与 2D 面板的明细共用)
@@ -609,8 +610,14 @@ const ReactorView = (() => {
     if (!runtime) return '';
     const hullPct = Math.round(Math.max(0, Math.min(1, runtime.hullRatio || 0)) * 100);
     const capPct = Math.round(Math.max(0, Math.min(1, runtime.capacityRatio || 0)) * 100);
+    const tempPct = Math.round(Math.max(0, Math.min(1, runtime.temperatureRatio || 0)) * 100);
     return `
       <div class="ic2-runtime" data-role="runtime">
+        <div class="ic2-rt-row">
+          <span>${escapeHTML(T('reactor.info.temperature', '温度'))}</span>
+          <div class="ic2-bar"><i data-info="temp-bar" style="width:${tempPct}%"></i></div>
+          <b data-info="temp-text">${fmtNum(Math.round(runtime.temperature || 0))} / ${fmtNum(runtime.maxTemperature || 0)} °C</b>
+        </div>
         <div class="ic2-rt-row">
           <span>${escapeHTML(T('reactor.info.hull-heat', '堆芯热量'))}</span>
           <div class="ic2-bar"><i data-info="hull-bar" style="width:${hullPct}%"></i></div>
@@ -662,13 +669,18 @@ const ReactorView = (() => {
     set('capacity', fmtNum(stats.effectiveHeatCapacity));
     set('safe', formatSafeTime(runtime && runtime.running ? runtime.safeSeconds : stats.safeSeconds));
     set('running', runtime && runtime.running ? T('reactor.info.on', '是') : T('reactor.info.off', '否'));
+    set('temperature', runtime
+      ? `${fmtNum(Math.round(runtime.temperature || 0))} / ${fmtNum(runtime.maxTemperature || 0)} °C`
+      : '-');
 
     if (runtime) {
+      set('temp-text', `${fmtNum(Math.round(runtime.temperature || 0))} / ${fmtNum(runtime.maxTemperature || 0)} °C`);
       set('hull-text', `${fmtNum(Math.round(runtime.hullHeat))} / ${fmtNum(runtime.hullHeatCapacity)}`);
       set('cap-text', `${fmtNum(runtime.remainingCapacity)} / ${fmtNum(runtime.totalCapacity)}`);
       set('generated', `${fmtNum(Math.round(runtime.generatedEu))} EU`);
       set('elapsed', formatDuration(runtime.elapsed));
       set('absorbed', fmtNum(Math.round(runtime.absorbed)));
+      setBar('temp-bar', runtime.temperatureRatio);
       setBar('hull-bar', runtime.hullRatio);
       setBar('cap-bar', runtime.capacityRatio);
     }
@@ -706,7 +718,9 @@ const ReactorView = (() => {
           <div class="ic2-info-gauge"><span>${escapeHTML(T('reactor.safe-time', '安全时间'))}</span><b data-info="safe">${formatSafeTime(runtime && runtime.running ? runtime.safeSeconds : stats.safeSeconds)}</b></div>
           <div class="ic2-info-gauge"><span>${escapeHTML(T('reactor.info.fuel-rods', '燃料棒'))}</span><b>${stats.fuelRods}</b></div>
           <div class="ic2-info-gauge"><span>${escapeHTML(T('reactor.info.used', '占用'))}</span><b>${stats.usedSlots} / ${stats.totalSlots}</b></div>
-          <div class="ic2-info-gauge"><span>${escapeHTML(T('reactor.info.hull', '外壳热量'))}</span><b>${fmtNum(stats.hullHeatCapacity)}</b></div>
+          <div class="ic2-info-gauge"><span>${escapeHTML(T('reactor.info.temperature', '温度'))}</span><b data-info="temperature">${runtime
+            ? `${fmtNum(Math.round(runtime.temperature || 0))} / ${fmtNum(runtime.maxTemperature || 0)} °C`
+            : '-'}</b></div>
           <div class="ic2-info-gauge"><span>${escapeHTML(T('reactor.active', '反应堆运行'))}</span><b data-info="running">${runtime && runtime.running ? T('reactor.info.on', '是') : T('reactor.info.off', '否')}</b></div>
         </div>
         ${runtimeBlockHTML(runtime)}

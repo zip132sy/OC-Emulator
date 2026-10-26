@@ -3663,6 +3663,22 @@ extComponents.makeReactorChamber = function(address)
 
   function dev.getHeat() return tonumber(S().hullHeat) or 0 end
   function dev.getMaxHeat() return tonumber(S().hullHeatCapacity) or 0 end
+  -- 温度: 与堆芯热量同刻度, 上限为外壳热容量
+  function dev.getTemperature() return tonumber(S().temperature) or tonumber(S().hullHeat) or 0 end
+  function dev.getMaxTemperature() return tonumber(S().maxTemperature) or tonumber(S().hullHeatCapacity) or 0 end
+  function dev.getHeatCapacity() return dev.getMaxTemperature() end
+  -- 设置温度 (自动夹在 0 ~ 上限), 返回设置后的温度
+  function dev.setTemperature(value)
+    local v = tonumber(value) or 0
+    local max = dev.getMaxTemperature()
+    if v < 0 then v = 0 end
+    if max > 0 and v > max then v = max end
+    sendToServer({ type = "ext_command", address = address, method = "setTemperature", args = { v } })
+    S().temperature = v
+    S().hullHeat = v
+    S().overheated = (max > 0 and v >= max) or false
+    return v
+  end
   function dev.getReactorEUOutput() return tonumber(S().euPerTick) or 0 end
   dev.getReactorEUEnergyOutput = dev.getReactorEUOutput
   function dev.getEnergyOutput() return tonumber(S().euPerTick) or 0 end
@@ -3700,6 +3716,9 @@ extComponents.makeReactorChamber = function(address)
       heatPerTick = tonumber(s.heatPerTick) or 0,
       hullHeat = tonumber(s.hullHeat) or 0,
       hullHeatCapacity = tonumber(s.hullHeatCapacity) or 0,
+      temperature = tonumber(s.temperature) or tonumber(s.hullHeat) or 0,
+      maxTemperature = tonumber(s.maxTemperature) or tonumber(s.hullHeatCapacity) or 0,
+      overheated = s.overheated == true,
       remainingCapacity = tonumber(s.remainingCapacity) or 0,
       totalCapacity = tonumber(s.totalCapacity) or 0,
       generatedEu = tonumber(s.generatedEu) or 0,

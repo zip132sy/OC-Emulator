@@ -665,15 +665,18 @@ print(mods.getOffhand())            -- 副手工具
 
 核电站接入已连接的虚拟机后会暴露**两个组件**（都只对该虚拟机可见，未连接时不存在）：
 
-- `reactor_chamber`：只读仪表，兼容 MineOS 的 **IC2Reactors.app** 等程序。
+- `reactor_chamber`：仪表，兼容 MineOS 的 **IC2Reactors.app** 等程序；另提供温度读写。
 - `redstone`：红石 I/O 控制端口，用标准 `redstone` 组件 API 读写 0~15 模拟信号。
 
-**reactor_chamber（只读）**
+**reactor_chamber**
 
 | 方法 | 返回 | 说明 |
 |---|---|---|
 | `getHeat()` | number | 堆芯当前热量 |
 | `getMaxHeat()` | number | 堆芯热量上限 |
+| `getTemperature()` | number | 当前温度（°C，与堆芯热量同刻度） |
+| `getMaxTemperature()` | number | 温度上限（°C，即外壳热容量） |
+| `setTemperature(value)` | number | 设置温度，越界自动夹在 0 ~ 上限；返回实际写入值 |
 | `getReactorEUOutput()` / `getReactorEUEnergyOutput()` | number | 每 tick 发电量（EU/t） |
 | `getEnergyOutput()` | number | 同 `getReactorEUOutput()` |
 | `getHeatOutput()` | number | 每 tick 发热量 |
@@ -687,8 +690,8 @@ print(mods.getOffhand())            -- 副手工具
 - 燃料棒耐久按运行时间消耗（模拟寿命 10000 tick，运行时每 tick 消耗 1 点）。
 - 冷却单元 / 冷凝模块的耐久等于剩余吸热容量；未生效（不相邻燃料棒）的冷却单元保持满耐久。
 - 设备页点击任意格子即可在「格位详情」中看到该组件的耐久数值与百分比。
-
-`reactor_chamber` 不提供写方法，开关必须通过红石 I/O 控制。
+- 温度达到上限时反应堆会自动停机（`status` 变为 `overheat`），堆芯温度保留；先复位堆芯再启动。
+- 开关必须通过红石 I/O 控制，`setTemperature` 只改变堆芯温度。
 
 **redstone 输入通道（反应堆 → 计算机，`getInput(side)`）**
 
@@ -697,11 +700,11 @@ print(mods.getOffhand())            -- 副手工具
 | 0 | 堆芯热量 | 当前热量 / 上限 × 15 |
 | 1 | 发电量 | 每 100 EU/t 一档，上限 15 |
 | 2 | 燃料棒数量 | 0~15（超出按 15） |
-| 3 | 反应堆状态 | off 0 / idle 3 / stable 8 / warning 12 / critical 15 |
+| 3 | 反应堆状态 | off 0 / idle 3 / stable 8 / warning 12 / critical、overheat 15 |
 | 4 | 剩余吸热 | 剩余容量 / 总容量 × 15 |
 | 5 | 是否运行 | 运行 15，停止 0 |
 
-`getBundledInput(0)` 用位表示状态：bit0 运行、bit1 稳定、bit2 注意、bit3 危险；其它通道为 0。`getComparatorInput(side)` 与 `getInput(side)` 相同。
+`getBundledInput(0)` 用位表示状态：bit0 运行、bit1 稳定、bit2 注意、bit3 危险/过热；其它通道为 0。`getComparatorInput(side)` 与 `getInput(side)` 相同。
 
 **redstone 输出通道（计算机 → 反应堆）**
 
@@ -722,6 +725,8 @@ IC2Reactors.app 会为每台核电站选择一个 I/O 端口和侧面，因此�
 | `setBundledOutput(side, mask)` | number | 写捆绑输出控制开关 |
 | `getBundledOutput(side)` | number | 最近写入的捆绑输出 |
 | `getSides()` | table | `{0,1,2,3,4,5}` |
+
+温度也可以通过 HTTP 读写：`GET /api/mods/:name/reactor-temperature` 返回 `{ temperature, maxTemperature, overheated, running }`，`POST` 同一路径（`{ temperature }`）写入温度。
 
 读操作使用服务端每秒推送的状态快照；写操作通过消息回到服务端执行。
 

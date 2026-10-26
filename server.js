@@ -698,6 +698,27 @@ async function handleApi(req, res, body) {
           }
         }
 
+        if (action === 'reactor-temperature') {
+          try {
+            if (method === 'GET') {
+              const reactor = modsManager.getReactor(modName);
+              return json(res, {
+                temperature: reactor.runtime ? reactor.runtime.temperature : 0,
+                maxTemperature: reactor.runtime ? reactor.runtime.maxTemperature : 0,
+                overheated: !!(reactor.runtime && reactor.runtime.overheated),
+                running: !!(reactor.runtime && reactor.runtime.running),
+              });
+            }
+            if (method === 'POST') {
+              const payload = JSON.parse(body || '{}');
+              return json(res, modsManager.setReactorTemperature(modName, payload.temperature));
+            }
+          } catch (e) {
+            return json(res, { error: e.message }, 400);
+          }
+          return json(res, { error: 'Method not allowed' }, 405);
+        }
+
         if (action === 'connect' && method === 'POST') {
           try {
             const payload = JSON.parse(body || '{}');
