@@ -1586,6 +1586,7 @@ html, body {
    IC2 核电站配置 GUI
    ============================================================ */
 .mod-badge.reactor { color: #e0d66a; border-color: #6b642a; }
+.mod-badge.machine { color: #8fd6a8; border-color: #2f6b45; }
 
 .ic2-reactor {
   background: linear-gradient(#c9c9c9, #b3b3b3);
@@ -1970,3 +1971,29 @@ body.mod-fullscreen-open { overflow: hidden; }
   .ic2-info-detail { flex: 1 1 100%; }
   .ic2-info-grid { max-width: 100%; overflow: auto; }
 }
+
+/* ---------- 自定义脚本机器 ---------- */
+.machine-wrap { padding: 10px; height: 100%; overflow: auto; }
+.machine-info { display: flex; flex-direction: column; gap: 10px; }
+.machine-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.machine-status { font-size: 12px; padding: 2px 8px; border-radius: 10px; background: #999; color: #fff; }
+.machine-status.on { background: #5f9e5f; }
+.machine-conn { font-size: 12px; color: #555; }
+.machine-conn.on { color: #2f7d2f; }
+.machine-error { padding: 8px 10px; background: #f8d7d7; border: 1px solid #d66a6a; color: #7a2020; font-size: 12px; white-space: pre-wrap; }
+.machine-card { background: rgba(0, 0, 0, 0.05); border: 1px solid #8f8f8f; padding: 8px 10px; }
+.machine-card-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.machine-type { font-size: 11px; color: #666; font-family: var(--font-mono); }
+.machine-addr { margin-left: auto; font-size: 10px; color: #777; font-family: var(--font-mono); max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.machine-props { display: flex; flex-direction: column; gap: 6px; }
+.machine-prop { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.machine-prop-label { flex: 0 0 120px; color: #333; }
+.machine-prop-value { flex: 0 0 90px; font-family: var(--font-mono); color: #111; }
+.machine-prop input[type="number"], .machine-prop input[type="text"] { flex: 0 1 160px; padding: 2px 4px; font-size: 12px; }
+.machine-switch { display: flex; align-items: center; gap: 4px; font-size: 12px; }
+.machine-methods { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 6px; font-size: 12px; }
+.machine-method span { color: #666; margin-right: 4px; }
+.machine-method b { font-family: var(--font-mono); }
+.machine-actions { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+.machine-empty { color: #777; font-size: 12px; padding: 6px 0; }
+.machine-script-wrap textarea { width: 100%; min-height: 420px; font-family: var(--font-mono); font-size: 12px; line-height: 1.5; padding: 8px; box-sizing: border-box; resize: vertical; }

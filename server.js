@@ -719,6 +719,47 @@ async function handleApi(req, res, body) {
           return json(res, { error: 'Method not allowed' }, 405);
         }
 
+        if (action === 'machine') {
+          try {
+            if (method === 'GET') return json(res, modsManager.getMachine(modName));
+            if (method === 'PUT') {
+              const payload = JSON.parse(body || '{}');
+              return json(res, modsManager.saveMachineScript(modName, payload.script));
+            }
+          } catch (e) {
+            return json(res, { error: e.message }, 400);
+          }
+          return json(res, { error: 'Method not allowed' }, 405);
+        }
+
+        if (action === 'machine-state' && method === 'POST') {
+          try {
+            const payload = JSON.parse(body || '{}');
+            return json(res, modsManager.setMachineState(
+              modName,
+              Number(payload.component) || 0,
+              payload.key,
+              payload.value
+            ));
+          } catch (e) {
+            return json(res, { error: e.message }, 400);
+          }
+        }
+
+        if (action === 'machine-action' && method === 'POST') {
+          try {
+            const payload = JSON.parse(body || '{}');
+            return json(res, modsManager.runMachineAction(
+              modName,
+              Number(payload.component) || 0,
+              payload.action,
+              payload.args
+            ));
+          } catch (e) {
+            return json(res, { error: e.message }, 400);
+          }
+        }
+
         if (action === 'connect' && method === 'POST') {
           try {
             const payload = JSON.parse(body || '{}');

@@ -492,7 +492,7 @@ Mods/
     └── disk.ocd       # 自动生成的空启动盘
 ```
 
-机器类设备（核电站）只有 `mod.json`（含组件地址）与 `reactor.json`。
+核电站只有 `mod.json`（含组件地址）与 `reactor.json`；自定义机器只有 `mod.json`、`machine.lua` 与自动生成的 `machine.json`（见 9.5）。
 
 - **不需要手动寻找或制作 EFI**。创建 Mod 时，`mods-efi.lua` 会被自动复制为 `efi.lua`，并生成一份 1MB 的空启动盘。
 - 如果 `efi.lua` 或 `disk.ocd` 被删除，下一次启动会自动重新生成。
@@ -761,6 +761,121 @@ end
 
 - 有多个核电站时，`component.list("reactor_chamber")` 与 `component.list("redstone")` 会各返回对应数量。
 - 程序启动时组件即可用（设备清单在启动前写入 `devices.json`）；运行中新增或断开连接会即时同步并发出 `component_added` / `component_removed`。
+
+### 9.5 自定义脚本机器（machine 类型）
+
+除了内置类型，还可以用一个 Lua 脚本定义自己的机器，把它像原版 OC 模组一样接入组件网络、红石 I/O 和网页控制面板。
+
+**创建方式**
+
+- 控制面板「＋ New Mod」选择「自定义机器」，会自动生成 `Mods/<名称>/machine.lua` 示例脚本。
+- 也可以把现成的机器目录放进 `Mods/` 再刷新：目录里至少有 `mod.json`（`{"type":"machine"}`）与 `machine.lua`。
+
+单个机器的目录：
+
+```
+Mods/<名称>/
+  mod.json        元数据, type 必须是 machine
+  machine.lua     机器脚本 (组件 / 属性 / tick / 方法 / 动作)
+  machine.json    自动生成: 组件地址与持久化状态
+```
+
+**脚本格式**（`machine.lua` 返回一个定义表）：
+
+```lua
+return {
+  redstone = true,                  -- 可选, 默认 true; false 表示不提供红石端口
+  components = {
+    {
+      type = "solar_panel",         -- 组件类型, 计算机里用 component.solar_panel 访问
+      label = "太阳能板",
+      state = {                     -- 初始状态; 每个字段自动成为属性
+        energy = 0,
+        maxEnergy = 10000,
+        active = true,
+        efficiency = 0,
+      },
+      readonly = { "maxEnergy", "efficiency" },   -- 只读属性
+      props = {                     -- 可选: 属性展示 / 红石缩放信息
+        energy = { label = "能量", unit = "EU", min = 0, max = 10000 },
+        maxEnergy = { label = "容量", unit = "EU", min = 0, max = 100000 },
+        active = { label = "运行", type = "boolean" },
+        efficiency = { label = "效率", unit = "%", min = 0, max = 100 },
+      },
+      tick = function(self, dt)     -- 每秒调用; self 就是 state
+        if self.active then
+          self.energy = math.min(self.maxEnergy, self.energy + 5 * dt)
+        end
+        self.efficiency = math.floor(self.energy / self.maxEnergy * 100)
+      end,
+      methods = {                   -- 只读方法, 每 tick 求值后下发给计算机
+        isFull = function(self) return self.energy >= self.maxEnergy end,
+      },
+      actions = {                   -- 可调用动作, 由计算机 / HTTP 触发
+        reset = function(self) self.energy = 0 end,
+      },
+    },
+  },
+}
+```
+
+- `state` 里的每个字段都会持久化到 `machine.json`，服务器重启后恢复。
+- 脚本运行在独立 Lua 进程中，`tick` 每秒调用一次；保存脚本后自动重启并重建组件。
+- 沙箱不提供 `io` / `os.execute` / `loadfile`，只保留 `math` / `string` / `table` / `os.time` 等基础库。不要在 `tick` 里写死循环。
+
+**计算机侧的组件 API**
+
+以 `component.solar_panel` 为例：
+
+| 方法 | 说明 |
+|---|---|
+| `getEnergy()` / `setEnergy(v)` | 每个属性自动生成 getter；可写属性还会生成 setter |
+| `getValue(key)` / `setValue(key, v)` | 通用读写；只读或不存在时返回 false / nil |
+| `getState()` | 返回全部属性的副本 |
+| `isFull()` | `methods` 里的只读方法，返回值来自最近一次 tick |
+| `reset()` | `actions` 里的动作，异步执行，结果在下一帧状态可见 |
+| `getLabel()` / `getComponentType()` / `listProps()` | 组件元数据 |
+
+**红石 I/O**
+
+`redstone = true` 时会额外注册一个 `redstone` 组件：
+
+- 通道顺序：按组件定义顺序，每个组件内按属性名字母序排列，只包含 `number` / `boolean` 属性。
+- `getInput(side)`：数值属性按 `min`/`max` 映射到 0~15；布尔属性为 15 / 0。
+- `setOutput(side, value)`：只对**可写**属性生效，数值按 `min`/`max` 反算，布尔按 `> 0`；不可写通道只记录输出值。
+- `getSides()` 返回实际通道列表。`setBundledOutput` / `getBundledInput` 在机器端口上不使用。
+
+```lua
+local component = require("component")
+local panel = component.solar_panel
+print(panel.getEnergy(), panel.getMaxEnergy(), panel.isFull())
+panel.setEnergy(5000)
+panel.reset()
+
+local redstone = component.redstone
+print(redstone.getSides())
+print(redstone.getInput(0))     -- 第一个属性对应的通道
+redstone.setOutput(0, 15)
+```
+
+**HTTP API**
+
+| 接口 | 说明 |
+|---|---|
+| `GET /api/mods/:name/machine` | 脚本内容、组件定义、当前状态、连接的目标虚拟机 |
+| `PUT /api/mods/:name/machine` | `{ script }` 保存脚本并重启机器 |
+| `POST /api/mods/:name/machine-state` | `{ component, key, value }` 写入属性 |
+| `POST /api/mods/:name/machine-action` | `{ component, action, args }` 调用动作 |
+| `POST /api/mods/:name/connect` | `{ vm }` 连接到虚拟机；机器只对这台虚拟机可见 |
+
+**前端**
+
+设备页新增「机器」页签：按脚本定义自动生成属性编辑控件、只读方法与动作按钮，并提供「编辑脚本」弹窗。脚本报错会显示在面板顶部。
+
+**注意**
+
+- 组件地址保存在 `machine.json` 的 `addresses` 中，重命名/调整脚本顺序时旧地址仍会保留。
+- 修改脚本后组件会重新注册，计算机会收到 `component_removed` / `component_added` 事件。
 
 ## 10. 无线控制协议（T1 / T2 均可）
 

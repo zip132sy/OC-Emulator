@@ -91,7 +91,8 @@ print(mods.help())          -- 查看完整的 OC 原版 API 映射
 
 控制面板左侧新增「Mods」列表：
 
-- 点击「＋ New Mod」创建无人机 / 机器人 / 单片机 / 核电站；也可以把 Mod 文件夹放进项目根目录的 `Mods/` 后点刷新。
+- 点击「＋ New Mod」创建无人机 / 机器人 / 单片机 / 核电站 / 自定义机器；也可以把 Mod 文件夹放进项目根目录的 `Mods/` 后点刷新。
+- 自定义机器用一个 `machine.lua` 定义组件、属性、`tick`、只读方法与动作，保存后自动重启脚本；组件 API、红石 I/O、HTTP 和网页控制面板都会按定义生成。详见 [MODS.md](./MODS.md#95-自定义脚本机器machine-类型)。
 - 计算机类设备（机器人 / 无人机 / 单片机）可切换 **3D 场景**、**物品 / 状态**、**控制台 / EFI** 三个标签页。
 - 3D 场景显示坐标轴、网格、设备位置、目标点、朝向、速度与 `mod.json` 中配置的标记点。
 - 计算机类设备自动安装内置 EFI 和启动盘，不需要手动准备固件。
@@ -125,7 +126,8 @@ OC-Emulator/
 ├── server.js                 # 主服务端入口 (HTTP + WebSocket, 端口探测, 静态资源)
 ├── oc-emulator.lua           # 核心 VM 运行时 (OpenComputers 组件 / 屏幕 / 事件模型)
 ├── mods.lua                  # Mods 统一组件 (机器人 / 无人机 / 单片机 + 虚拟世界)
-├── mods-efi.lua              # Mods 设备内置 EFI 模板
+├── mods-efi.lua              # Mods 设备的 EFI
+├── machine-host.lua          # 自定义脚本机器的宿主 (加载 machine.lua 并执行 tick)
 ├── disk.lua                  # .ocd 磁盘格式读写模块
 ├── json.lua                  # Lua JSON 编解码
 ├── lua_check.lua             # Lua 环境检测脚本
@@ -135,9 +137,10 @@ OC-Emulator/
 │   ├── vmManager.js              # VM 进程管理（启动 / 暂停 / 重启 / 消息路由）
 │   ├── diskIO.js                 # 磁盘 / 软盘 I/O（.ocd / .ocf）
 │   ├── luaCheck.js               # Lua 解释器检测与缓存
-│   ├── deviceBus.js              # 外部设备总线 (核电站等以组件形式暴露给虚拟机)
+│   ├── deviceBus.js              # 外部设备总线 (核电站 / 自定义机器以组件形式暴露给虚拟机)
 │   ├── modemHub.js               # 网卡 / 调制解调器信号路由
 │   ├── modsManager.js            # Mods 设备管理 (创建 / 启动 / 状态 / 无线桥接)
+│   ├── machineHost.js            # 自定义脚本机器的 Lua 宿主进程管理
 │   ├── reactor.js                # IC2 核电站网格 / 组件 / EU 与热量计算
 │   ├── internetProxy.js          # Internet 组件 HTTP/HTTPS 代理
 │   ├── floppyTemplates.js        # 软盘模板读取
@@ -155,6 +158,7 @@ OC-Emulator/
 │   ├── console.js                # 屏幕渲染（位图字体 / 脏更新 / 输入事件 / 滚轮兼容）
 │   ├── modView.js                # Mods 设备视图（3D 场景 / 物品状态 / EFI 控制台）
 │   ├── reactorView.js            # IC2 核电站配置 GUI
+│   ├── machineView.js            # 自定义机器的通用控制面板
 │   ├── diskEditor.js             # 磁盘编辑器
 │   ├── wizard.js                 # 新建虚拟机向导
 │   ├── exportWizard.js           # 导入 / 导出向导

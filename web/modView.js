@@ -44,6 +44,7 @@ const ModView = (() => {
   function typeInfo(type) {
     if (type === 'drone') return { label: T('mods.type.drone', '无人机'), icon: '🛸', cls: 'drone' };
     if (type === 'reactor') return { label: T('mods.type.reactor', '核电站'), icon: '☢️', cls: 'reactor' };
+    if (type === 'machine') return { label: T('mods.type.machine', '自定义机器'), icon: '⚙️', cls: 'machine' };
     if (type === 'microcontroller') return { label: T('mods.type.mcu', '单片机'), icon: '🧩', cls: 'robot' };
     return { label: T('mods.type.robot', '机器人'), icon: '🤖', cls: 'robot' };
   }
@@ -78,6 +79,7 @@ const ModView = (() => {
         <div class="mod-tabs">
           <button class="mod-tab active" data-tab="scene">${T('mods.tab.scene')}</button>
           <button class="mod-tab" data-tab="reactor" style="display:none">☢ ${T('reactor.tab', '反应堆')}</button>
+          <button class="mod-tab" data-tab="machine" style="display:none">⚙ ${T('mods.tab.machine', '机器')}</button>
           <button class="mod-tab" data-tab="items">${T('mods.tab.items')}</button>
           <button class="mod-tab" data-tab="console">${T('mods.tab.console')}</button>
         </div>
@@ -146,6 +148,9 @@ const ModView = (() => {
           </div>
           <div class="mod-pane" data-pane="reactor">
             <div class="ic2-info-wrap" data-role="reactor-info"></div>
+          </div>
+          <div class="mod-pane" data-pane="machine">
+            <div class="machine-wrap" data-role="machine-info"></div>
           </div>
           <div class="mod-pane" data-pane="items">
             <div class="mod-items-wrap" data-role="items"></div>
@@ -727,19 +732,25 @@ const ModView = (() => {
     scheduleDraw(view);
   }
 
-  // 核电站显示 2D 反应堆面板
+  // 核电站 / 自定义机器显示专用面板
   function applyTypeLayout(view) {
     const type = (view.meta && view.meta.type) || 'robot';
     const isReactor = type === 'reactor';
+    const isMachine = type === 'machine';
+    const machineLike = isReactor || isMachine;
     const sceneTab = $('[data-tab="scene"]', view.pane);
     const reactorTab = $('[data-tab="reactor"]', view.pane);
+    const machineTab = $('[data-tab="machine"]', view.pane);
+    const itemsTab = $('[data-tab="items"]', view.pane);
     const consoleTab = $('[data-tab="console"]', view.pane);
     if (!sceneTab || !reactorTab) return;
 
-    sceneTab.style.display = isReactor ? 'none' : '';
+    sceneTab.style.display = machineLike ? 'none' : '';
     reactorTab.style.display = isReactor ? '' : 'none';
-    // 核电站没有程序, 控制台标签页也没有意义
-    if (consoleTab) consoleTab.style.display = isReactor ? 'none' : '';
+    if (machineTab) machineTab.style.display = isMachine ? '' : 'none';
+    if (itemsTab) itemsTab.style.display = isMachine ? 'none' : '';
+    // 机器类设备没有程序, 控制台标签页也没有意义
+    if (consoleTab) consoleTab.style.display = machineLike ? 'none' : '';
 
     if (isReactor && !view.reactorTabApplied) {
       view.reactorTabApplied = true;
@@ -749,13 +760,26 @@ const ModView = (() => {
       $$('.mod-pane', view.pane).forEach(p => p.classList.toggle('active', p.dataset.pane === 'reactor'));
     }
 
-    if (!isReactor) {
+    if (isMachine && !view.machineTabApplied) {
+      view.machineTabApplied = true;
+      sceneTab.classList.remove('active');
+      if (consoleTab) consoleTab.classList.remove('active');
+      if (machineTab) machineTab.classList.add('active');
+      $$('.mod-pane', view.pane).forEach(p => p.classList.toggle('active', p.dataset.pane === 'machine'));
+    }
+
+    if (!machineLike) {
       stopReactorPolling(view);
       return;
     }
 
-    // 核电站的数值每秒都在变, 打开面板期间持续刷新
+    // 机器类设备的数值每秒都在变, 打开面板期间持续刷新
     ensureReactorPolling(view, true);
+
+    if (isMachine) {
+      renderMachine(view);
+      return;
+    }
 
     if (!window.ReactorView) return;
     const data = view.meta && view.meta.reactor;
@@ -784,6 +808,74 @@ const ModView = (() => {
     if (!runtime) return '';
     return [runtime.running ? 1 : 0, runtime.elapsed, Math.round(runtime.hullHeat),
       Math.round(runtime.remainingCapacity || 0), Math.round(runtime.generatedEu || 0), runtime.status].join('|');
+  }
+
+  // 自定义机器: 通用属性面板 + 脚本编辑
+  function renderMachine(view) {
+    if (!window.MachineView) return;
+    const data = view.meta && view.meta.machine;
+    const infoRoot = $('[data-role="machine-info"]', view.pane);
+    if (!data || !infoRoot) return;
+    const opts = {
+      modName: view.name,
+      onConnect: () => openConnectDialog(view),
+      onEditScript: () => openMachineScriptDialog(view.name),
+    };
+    if (!infoRoot.dataset.machineRendered) {
+      infoRoot.dataset.machineRendered = '1';
+      MachineView.render(infoRoot, data, opts);
+    } else {
+      MachineView.update(infoRoot, data);
+    }
+  }
+
+  async function openMachineScriptDialog(modName) {
+    let script = '';
+    try {
+      const machine = await App.api(`mods/${encodeURIComponent(modName)}/machine`);
+      script = (machine && machine.script) || '';
+    } catch (e) {
+      alert(`${T('machine.load-failed', '读取脚本失败')}: ${e.message}`);
+      return;
+    }
+
+    Modal.open({
+      title: `${T('machine.script-title', '编辑机器脚本')} · ${modName}`,
+      size: 'large',
+      bodyHTML: `
+        <div class="machine-script-wrap">
+          <textarea id="machine-script-source" spellcheck="false"></textarea>
+          <p class="hint">${escapeHTML(T('machine.script-hint', '脚本返回组件定义表；保存后会重启机器脚本并重建组件。'))}</p>
+        </div>
+      `,
+      footerHTML: `
+        <button class="btn" data-action="modal-close">${T('wizard.cancel', '取消')}</button>
+        <button class="btn btn-primary" id="machine-script-save">${T('machine.save', '保存并重启')}</button>
+      `,
+      onMount(body, footer) {
+        const area = body.querySelector('#machine-script-source');
+        if (area) area.value = script;
+        const cancel = footer.querySelector('[data-action="modal-close"]');
+        if (cancel) cancel.addEventListener('click', () => Modal.close());
+        const save = footer.querySelector('#machine-script-save');
+        save.addEventListener('click', async () => {
+          save.disabled = true;
+          try {
+            const result = await App.api(`mods/${encodeURIComponent(modName)}/machine`, {
+              method: 'PUT',
+              body: { script: area ? area.value : '' },
+            });
+            if (result && result.error) throw new Error(result.error);
+            Modal.close();
+            if (window.App && App.setStatus) App.setStatus(T('machine.saved', '机器脚本已保存'));
+            reload(modName);
+          } catch (e) {
+            save.disabled = false;
+            alert(`${T('machine.save-failed', '保存失败')}: ${e.message}`);
+          }
+        });
+      },
+    });
   }
 
   // 启动 / 停止 / 复位堆芯
@@ -852,7 +944,7 @@ const ModView = (() => {
       return;
     }
 
-    const current = (view.meta && view.meta.reactor && view.meta.reactor.connectedVm) || '';
+    const current = (view.meta && ((view.meta.reactor && view.meta.reactor.connectedVm) || view.meta.connectedVm)) || '';
     const options = vms.map(vm => {
       const selected = vm.name === current ? ' selected' : '';
       return `<option value="${escapeHTML(vm.name)}"${selected}>${escapeHTML(vm.name)} ${escapeHTML(stateLabel(vm.state))}</option>`;
@@ -1224,8 +1316,9 @@ const ModView = (() => {
     try {
       mod = await App.api(`mods/${encodeURIComponent(modName)}`) || {};
       if (mod.error) throw new Error(mod.error);
-      // 机器类设备 (核电站) 没有程序与硬件, 只配置设备本身
+      // 机器类设备没有程序与硬件, 只配置设备本身
       if (mod.type === 'reactor') return openReactorConfig(modName, mod);
+      if (mod.type === 'machine') return openMachineScriptDialog(modName);
       efi = await App.api(`mods/${encodeURIComponent(modName)}/efi`) || {};
       if (efi.error) throw new Error(efi.error);
     } catch (e) {

@@ -3783,8 +3783,98 @@ extComponents.makeReactorChamber = function(address)
   return dev
 end
 
-extComponents.makeRedstone = function(address)
-  local dev = { address = address, type = "redstone", _state = {}, _out = {}, _bout = {} }
+-- 自定义脚本机器的组件: 属性 / 只读方法 / 动作由 machine.lua 定义,
+-- 服务端在 ext_devices 的 meta 中下发属性表与方法名。
+extComponents.makeMachineComponent = function(address, meta)
+  meta = type(meta) == "table" and meta or {}
+  local dev = { address = address, type = "machine_component", _state = {}, _meta = meta }
+  local function S() return dev._state end
+  local function props() return type(meta.props) == "table" and meta.props or {} end
+
+  local function capitalize(key)
+    return string.upper(string.sub(key, 1, 1)) .. string.sub(key, 2)
+  end
+
+  function dev.getValue(key)
+    if type(key) ~= "string" then return nil end
+    return S()[key]
+  end
+
+  function dev.setValue(key, value)
+    if type(key) ~= "string" then return false end
+    for _, prop in ipairs(props()) do
+      if prop.key == key then
+        if prop.writable ~= true then return false end
+        sendToServer({ type = "ext_command", address = address, method = "setValue", args = { key, value } })
+        S()[key] = value
+        return true
+      end
+    end
+    return false
+  end
+
+  function dev.getState()
+    local copy = {}
+    for _, prop in ipairs(props()) do
+      local key = prop.key
+      if type(key) == "string" then copy[key] = S()[key] end
+    end
+    return copy
+  end
+
+  function dev.listProps() return props() end
+  function dev.getLabel() return meta.label or "" end
+  function dev.getComponentType() return dev.type end
+  dev.getType = dev.getComponentType
+
+  -- 每个可写属性自动生成 getXxx() / setXxx()
+  for _, prop in ipairs(props()) do
+    if type(prop.key) == "string" and prop.key:match("^[%a_][%w_]*$") then
+      local suffix = capitalize(prop.key)
+      local getter = "get" .. suffix
+      local setter = "set" .. suffix
+      if dev[getter] == nil then
+        dev[getter] = function() return S()[prop.key] end
+      end
+      if prop.writable == true and dev[setter] == nil then
+        dev[setter] = function(value) return dev.setValue(prop.key, value) end
+      end
+    end
+  end
+
+  -- 只读方法: 脚本每 tick 计算一次, 结果随状态快照下发
+  if type(meta.methods) == "table" then
+    for _, name in ipairs(meta.methods) do
+      if type(name) == "string" and name:match("^[%a_][%w_]*$") and dev[name] == nil then
+        dev[name] = function() return S()[name] end
+      end
+    end
+  end
+
+  -- 动作: 异步发回脚本执行, 结果在下一帧状态里可见
+  if type(meta.actions) == "table" then
+    for _, name in ipairs(meta.actions) do
+      if type(name) == "string" and name:match("^[%a_][%w_]*$") and dev[name] == nil then
+        dev[name] = function(...)
+          local callArgs = { ... }
+          sendToServer({ type = "ext_command", address = address, method = "action", args = { name, callArgs } })
+        end
+      end
+    end
+  end
+
+  return dev
+end
+
+extComponents.makeRedstone = function(address, meta)
+  local dev = {
+    address = address,
+    type = "redstone",
+    _state = {},
+    _out = {},
+    _bout = {},
+    _meta = type(meta) == "table" and meta or {},
+  }
   local function S() return dev._state end
 
   local STATUS_CODE = { off = 0, idle = 3, stable = 8, warning = 12, critical = 15 }
@@ -3870,8 +3960,27 @@ extComponents.makeRedstone = function(address)
   --   8: 冷凝模块最低耐久 9: 全部组件最低耐久 (均为百分比 × 15)
   --  10: 燃料棒最高温度  11: 冷却单元最高温度
   --  12: 冷凝模块最高温度 13: 全部组件最高温度 (均为温度比例 × 15)
+  -- 自定义脚本机器的红石端口: 状态里带 machine = true,
+  -- inputs / outputs 是按属性顺序排列的 0~15 数组。
+  local function isMachine() return S().machine == true or dev._meta.machine == true end
+
+  local function machineSideCount()
+    local count = tonumber(S().sideCount) or 0
+    if count > 0 then return count end
+    local inputs = S().inputs
+    if type(inputs) == "table" then return #inputs end
+    return 0
+  end
+
+  local function machineInput(side)
+    local inputs = S().inputs
+    if type(inputs) ~= "table" then return 0 end
+    return clamp(inputs[(tonumber(side) or 0) + 1])
+  end
+
   function dev.getInput(side)
     side = tonumber(side) or 0
+    if isMachine() then return machineInput(side) end
     local s = S()
     if side == 0 then
       return ratio(s.hullHeat, s.hullHeatCapacity)
@@ -3907,16 +4016,24 @@ extComponents.makeRedstone = function(address)
   dev.getComparatorInput = dev.getInput
 
   function dev.getOutput(side)
-    return dev._out[tonumber(side) or 0] or 0
+    side = tonumber(side) or 0
+    if isMachine() then
+      local outputs = S().outputs
+      if type(outputs) == "table" then
+        local value = tonumber(outputs[side + 1])
+        if value then return clamp(value) end
+      end
+    end
+    return dev._out[side] or 0
   end
 
-  -- 输出通道 (计算机 -> 反应堆): 任一通道都可控制开关, > 0 为运行
+  -- 输出通道 (计算机 -> 机器): 任一通道都可控制开关, > 0 为运行
   function dev.setOutput(side, value)
     side = tonumber(side) or 0
     value = clamp(value)
     dev._out[side] = value
     sendToServer({ type = "ext_command", address = address, method = "setOutput", args = { side, value } })
-    dev._state.active = value > 0
+    if not isMachine() then dev._state.active = value > 0 end
     return value
   end
 
@@ -3928,6 +4045,7 @@ extComponents.makeRedstone = function(address)
   function dev.setBundledOutput(side, mask)
     side = tonumber(side) or 0
     mask = tonumber(mask) or 0
+    if isMachine() then return 0 end
     dev._bout[side] = mask
     sendToServer({ type = "ext_command", address = address, method = "setBundledOutput", args = { side, mask } })
     dev._state.active = (mask % 2) == 1
@@ -3937,6 +4055,7 @@ extComponents.makeRedstone = function(address)
   -- 0 号通道的 bit0..bit3: 运行 / 稳定 / 注意 / 危险
   function dev.getBundledInput(side)
     side = tonumber(side) or 0
+    if isMachine() then return 0 end
     if side ~= 0 then return 0 end
     local s = S()
     local mask = 0
@@ -3948,6 +4067,12 @@ extComponents.makeRedstone = function(address)
   end
 
   function dev.getSides()
+    if isMachine() then
+      local count = machineSideCount()
+      local sides = {}
+      for i = 0, count - 1 do sides[#sides + 1] = i end
+      return sides
+    end
     return { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13 }
   end
 
@@ -3965,7 +4090,8 @@ extComponents.apply = function(list)
       if not extComponents.devices[address] then
         local proxy = nil
         if ctype == "reactor_chamber" then proxy = extComponents.makeReactorChamber(address)
-        elseif ctype == "redstone" then proxy = extComponents.makeRedstone(address) end
+        elseif ctype == "redstone" then proxy = extComponents.makeRedstone(address, entry.meta)
+        else proxy = extComponents.makeMachineComponent(address, entry.meta) end
         if proxy then
           extComponents.devices[address] = proxy
           componentRegistry[address] = { type = ctype, proxy = proxy }

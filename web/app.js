@@ -687,6 +687,7 @@ const App = (() => {
   function modTypeInfo(type) {
     if (type === 'drone') return { icon: '🛸', label: I18N.t('mods.type.drone') };
     if (type === 'reactor') return { icon: '☢️', label: I18N.t('mods.type.reactor') };
+    if (type === 'machine') return { icon: '⚙️', label: I18N.t('mods.type.machine') };
     if (type === 'microcontroller') return { icon: '🧩', label: I18N.t('mods.type.mcu') };
     return { icon: '🤖', label: I18N.t('mods.type.robot') };
   }
@@ -867,6 +868,7 @@ const App = (() => {
             <option value="drone">${I18N.t('mods.type.drone')}</option>
             <option value="robot">${I18N.t('mods.type.robot')}</option>
             <option value="reactor">${I18N.t('mods.type.reactor')}</option>
+            <option value="machine">${I18N.t('mods.type.machine')}</option>
           </select>
         </div>
         <div class="form-row"><label>${I18N.t('mods.new.description')}</label><input id="new-mod-desc" value=""></div>
