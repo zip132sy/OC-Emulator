@@ -557,12 +557,12 @@ Mods/
 
 创建 Mod 时类型选择 **核电站**，或在 `mod.json` 中设置 `"type": "reactor"`。
 
-核电站是**机器类设备**，不是计算机：`Mods/<名称>/` 下只有 `mod.json` 与 `reactor.json`，没有 EFI、启动盘、APU、内存或屏幕，也不会启动 Lua 进程。它在组件总线上以 `reactor` 组件的形式出现，由其它计算机访问（见 9.4）。
+核电站是**机器类设备**，不是计算机：`Mods/<名称>/` 下只有 `mod.json` 与 `reactor.json`，没有 EFI、启动盘、APU、内存或屏幕，也不会启动 Lua 进程。它通过红石 I/O 端口接入已连接的虚拟机（见 9.4）。
 
 - 配置弹窗只有反应堆 GUI，没有「EFI 程序」与「硬件」页签。
 - 设备页的页签为「☢ 反应堆」与「物品 / 状态」；地址显示为「组件地址」（双击可复制）。
 - 设备页与顶部工具栏都提供启动 / 停止（对应反应堆运行开关）
-- 「连接到虚拟机」可选择一台虚拟机接上设备（相当于有线连接）：连接后只有该虚拟机的 `component.list("reactor")` 能看到它；选「不连接」即可断开。连接关系保存在 `mod.json` 的 `connectedVm` 字段。
+- 「连接到虚拟机」可选择一台虚拟机接上设备（相当于把红石 I/O 端口接到该计算机）：连接后只有该虚拟机能看到对应组件；选「不连接」即可断开。连接关系保存在 `mod.json` 的 `connectedVm` 字段。
 
 - 配置弹窗显示 IC2 原版风格的灰色反应堆 GUI。
 - 设备页第一个标签页是 **☢ 反应堆**：只读 2D 面板，展示每个格子的组件、等级、脉冲、产电、发热、吸热与生效状态，点击格子可查看该位置的完整信息；下方还有一张全部组件的明细表。
@@ -661,34 +661,64 @@ print(mods.getOffhand())            -- 副手工具
 
 相关接口：`GET /api/mods/:name` 返回 `profile`（`{ type, value, tools, limits }`），`PUT /api/mods/:name/config` 接受 `profile` 字段。
 
-### 9.4 核电站组件 API（component reactor）
+### 9.4 核电站红石 I/O API（component redstone）
 
-核电站通过设备总线暴露给**已连接的虚拟机**（相当于用线接到那台计算机）：只有该虚拟机的 `component.list("reactor")` 能看到它，`component.reactor` 是主组件。未连接时任何虚拟机都看不到该组件。
+核电站通过**红石 I/O 端口**接入已连接的虚拟机：只有该虚拟机的 `component.list("redstone")` 能看到它，`component.redstone` 是主组件。未连接时任何虚拟机都看不到该组件；也不再直接暴露 `reactor` 组件。
 
-```lua
-local component = require("component")
-local reactor = component.reactor
-print(reactor.getHeat(), reactor.getMaxHeat(), reactor.getReactorEUOutput())
-```
+所有通道都是 0~15 的模拟红石信号，读写都走标准 `redstone` 组件 API。
+
+**输入通道（反应堆 → 计算机，`getInput(side)`）**
+
+| 通道 | 含义 | 取值 |
+|---|---|---|
+| 0 | 堆芯热量 | 当前热量 / 上限 × 15 |
+| 1 | 发电量 | 每 100 EU/t 一档，上限 15 |
+| 2 | 燃料棒数量 | 0~15（超出按 15） |
+| 3 | 反应堆状态 | off 0 / idle 3 / stable 8 / warning 12 / critical 15 |
+| 4 | 剩余吸热 | 剩余容量 / 总容量 × 15 |
+| 5 | 是否运行 | 运行 15，停止 0 |
+
+`getBundledInput(0)` 用位表示状态：bit0 运行、bit1 稳定、bit2 注意、bit3 危险；其它通道为 0。`getComparatorInput(side)` 与 `getInput(side)` 相同。
+
+**输出通道（计算机 → 反应堆，`setOutput(side, value)`）**
+
+| 通道 | 含义 |
+|---|---|
+| 0 | 反应堆开关：> 0 运行，0 停止（写回 `reactor.json`） |
+| 1~5 | 预留，记录数值但不影响反应堆 |
+
+`setBundledOutput(0, mask)` 同样可控制开关：bit0 为 1 表示运行。`getOutput(side)` / `getBundledOutput(side)` 返回最近一次写入的值。
+
+**API 一览**
 
 | 方法 | 返回 | 说明 |
 |---|---|---|
-| `getHeat()` | number | 堆芯当前热量 |
-| `getMaxHeat()` | number | 堆芯热量上限 |
-| `getReactorEUOutput()` / `getReactorEUEnergyOutput()` | number | 每 tick 发电量（EU/t） |
-| `getEnergyOutput()` | number | 同 `getReactorEUOutput()` |
-| `getHeatOutput()` | number | 每 tick 发热量 |
-| `isActive()` / `getActive()` | boolean | 反应堆开关 |
-| `setActive(on)` / `activate()` / `deactivate()` | boolean | 切换开关，写回 `reactor.json` |
-| `getSize()` | columns, rows | 网格尺寸 |
-| `slotCount()` / `getSlotCount()` | number | 槽位总数（columns × rows） |
-| `getStackInSlot(slot)` | table / nil | 0 基槽位内容：`id`、`label`、`category`、`tier`、`rods`、`pulses`、`eu`、`heat`、`capacity`、`active` |
-| `getStats()` | table | 运行快照：热量、吸热余量、累计发电、状态等 |
+| `getInput(side)` / `getComparatorInput(side)` | number | 读取反应堆状态对应的红石信号 |
+| `getBundledInput(side)` | number | 读取状态位（仅通道 0 有值） |
+| `setOutput(side, value)` | number | 写输出信号；通道 0 控制开关 |
+| `getOutput(side)` | number | 最近写入的输出值 |
+| `setBundledOutput(side, mask)` | number | 写捆绑输出；通道 0 的 bit0 控制开关 |
+| `getBundledOutput(side)` | number | 最近写入的捆绑输出 |
+| `getSides()` | table | `{0,1,2,3,4,5}` |
 
-- 方法命名沿用社区 IC2 反应堆适配器的常用写法，并另外提供 `getReactorEUEnergyOutput` 等别名。
-- 读操作读取虚拟机内的状态快照（服务端每秒推送）；写操作通过消息回到服务端执行。
-- 程序启动时组件即可用（设备清单在启动前写入 `devices.json`），运行中新增或删除设备会即时同步。
-- 与真实环境一致，`component.reactor` 只指向其中一个反应堆；有多个时用 `component.list("reactor")` 遍历。
+读操作使用服务端每秒推送的状态快照；写操作通过消息回到服务端执行。
+
+```lua
+local component = require("component")
+local redstone = component.redstone
+
+local heat = redstone.getInput(0)          -- 0..15
+local status = redstone.getInput(3)        -- 0/3/8/12/15
+if status >= 12 then
+  redstone.setOutput(0, 0)                 -- 危险时停机
+else
+  redstone.setOutput(0, 15)                -- 正常时运行
+end
+print("heat signal:", heat)
+```
+
+- 有多个核电站时，用 `component.list("redstone")` 遍历，每个设备对应一个红石 I/O 组件。
+- 程序启动时组件即可用（设备清单在启动前写入 `devices.json`）；运行中新增或断开连接会即时同步并发出 `component_added` / `component_removed`。
 
 ## 10. 无线控制协议（T1 / T2 均可）
 
