@@ -75,6 +75,7 @@ const ReactorView = (() => {
         category: c.category || 'fuel',
         label: c.label || id,
         rods: Number(c.rods) || 0,
+        kind: c.kind || '',
         eu: Number(c.eu) || 0,
         heat: Number(c.heat) || 0,
         capacity: Number(c.capacity) || 0,
@@ -119,13 +120,13 @@ const ReactorView = (() => {
     const { columns, grid } = config;
     const cells = [];
     let euPerTick = 0;
-    let heatPerTick = 0;
+    let heatPerSecond = 0;
     let fuelRods = 0;
     let heatCapacity = 0;
     let effectiveHeatCapacity = 0;
 
-    const pulsesAt = (r, c) => {
-      let pulses = 1;
+    const pulsesAt = (r, c, selfRods) => {
+      let pulses = selfRods;
       for (const [dr, dc] of DIRS) {
         const nr = r + dr;
         const nc = c + dc;
@@ -154,29 +155,35 @@ const ReactorView = (() => {
         if (!p) continue;
 
         if (p.category === 'fuel') {
-          const pulses = pulsesAt(r, c);
+          const pulses = pulsesAt(r, c, p.rods);
           const eu = p.eu * pulses;
-          const heat = p.heat * pulses;
+          // IC2: 单根燃料棒 p 脉冲时每秒产生 2 * p * (p + 1) 点热量
+          const factor = p.kind === 'mox' ? 1.5 : 1;
+          const heat = 2 * pulses * (pulses + 1) * p.rods * factor;
           euPerTick += eu;
-          heatPerTick += heat;
+          heatPerSecond += heat;
           fuelRods += p.rods;
-          cells.push({ r, c, id, category: 'fuel', tier: p.tier, rods: p.rods, pulses, neighbors: pulses - 1, eu, heat, active: true });
+          cells.push({
+            r, c, id, category: 'fuel', tier: p.tier, rods: p.rods, pulses,
+            neighbors: pulses - p.rods, eu, heat, heatPerSecond: heat, active: true,
+          });
         } else if (p.category === 'coolant') {
           const active = nearFuel(r, c);
           heatCapacity += p.capacity;
           if (active) effectiveHeatCapacity += p.capacity;
           cells.push({ r, c, id, category: 'coolant', tier: p.tier, capacity: p.capacity, active });
         } else if (p.category === 'condensator') {
+          const active = nearFuel(r, c);
           heatCapacity += p.capacity;
-          effectiveHeatCapacity += p.capacity;
-          cells.push({ r, c, id, category: 'condensator', tier: p.tier, capacity: p.capacity, active: true });
+          if (active) effectiveHeatCapacity += p.capacity;
+          cells.push({ r, c, id, category: 'condensator', tier: p.tier, capacity: p.capacity, active });
         }
       }
     }
 
     if (!config.active) {
       euPerTick = 0;
-      heatPerTick = 0;
+      heatPerSecond = 0;
     }
 
     let status = 'idle';
@@ -185,11 +192,11 @@ const ReactorView = (() => {
       status = 'off';
     } else if (fuelRods === 0) {
       status = 'idle';
-    } else if (heatPerTick > 0 && effectiveHeatCapacity <= 0) {
+    } else if (heatPerSecond > 0 && effectiveHeatCapacity <= 0) {
       status = 'critical';
       safeSeconds = 0;
-    } else if (heatPerTick > 0) {
-      safeSeconds = effectiveHeatCapacity / heatPerTick;
+    } else if (heatPerSecond > 0) {
+      safeSeconds = effectiveHeatCapacity / heatPerSecond;
       if (safeSeconds < 60) status = 'critical';
       else if (safeSeconds < 600) status = 'warning';
       else status = 'stable';
@@ -203,7 +210,8 @@ const ReactorView = (() => {
       counts: countByCategory(cells),
       fuelRods,
       euPerTick,
-      heatPerTick,
+      heatPerSecond,
+      heatPerTick: heatPerSecond / 20,
       heatCapacity,
       effectiveHeatCapacity,
       hullHeatCapacity: 10000 + (columns - MIN_COLUMNS) * 1000,
@@ -369,7 +377,7 @@ const ReactorView = (() => {
               <b data-stat="eu">0</b>
             </div>
             <div class="ic2-gauge">
-              <span>${escapeHTML(T('reactor.heat', '热量/t'))}</span>
+              <span>${escapeHTML(T('reactor.heat', '热量/秒'))}</span>
               <b data-stat="heat">0</b>
             </div>
             <div class="ic2-gauge">
@@ -399,7 +407,7 @@ const ReactorView = (() => {
         </div>
         <div class="ic2-hint">${escapeHTML(T('reactor.hint', '选择组件后点击格子放置；右键清除；修改大小后可用格子会相应增减。'))}</div>
         <div class="ic2-hint">${escapeHTML(T('reactor.component-hint', '燃料棒 ×1/×2/×4 · 冷却单元 10k/30k/60k · 冷凝模块 20k/100k'))}</div>
-        <div class="ic2-hint">${escapeHTML(T('reactor.coolant-adjacency', '冷却单元只有与燃料棒相邻时才计入吸热容量；冷凝模块放在任意位置都生效。'))}</div>
+        <div class="ic2-hint">${escapeHTML(T('reactor.coolant-adjacency', '冷却单元与冷凝模块只有和燃料棒相邻时才会吸热；冷却单元每秒自行散去 1 点热量。'))}</div>
         <div class="ic2-actions">
           <span class="ic2-save-state" data-role="save-state"></span>
           <span class="ic2-save-hint">${escapeHTML(T('reactor.save-hint', '保存后立即生效，不需要重启设备。'))}</span>
@@ -498,7 +506,9 @@ const ReactorView = (() => {
     function updateStats() {
       const stats = computeStats(state, parts);
       root.querySelector('[data-stat="eu"]').textContent = String(stats.euPerTick);
-      root.querySelector('[data-stat="heat"]').textContent = String(stats.heatPerTick);
+      root.querySelector('[data-stat="heat"]').textContent = String(
+        Number.isFinite(stats.heatPerSecond) ? stats.heatPerSecond : stats.heatPerTick * 20
+      );
       root.querySelector('[data-stat="capacity"]').textContent = fmtNum(stats.effectiveHeatCapacity);
       root.querySelector('[data-stat="safe"]').textContent = formatSafeTime(stats.safeSeconds);
       statusEl.className = `ic2-status ${stats.status}`;
@@ -556,18 +566,15 @@ const ReactorView = (() => {
     }
 
     function fillSample() {
-      const fuelId = hasPart(parts, 'uranium_2x') ? 'uranium_2x' : firstPartId(parts, 'fuel');
+      const fuelId = hasPart(parts, 'uranium_1x') ? 'uranium_1x' : firstPartId(parts, 'fuel');
       const coolantId = hasPart(parts, 'coolant_30k') ? 'coolant_30k' : firstPartId(parts, 'coolant');
-      const condId = hasPart(parts, 'condensator_20k') ? 'condensator_20k' : firstPartId(parts, 'condensator');
+      const condId = hasPart(parts, 'condensator_100k') ? 'condensator_100k' : firstPartId(parts, 'condensator');
       state.grid = emptyGrid(state.columns);
       state.grid[0][0] = fuelId;
+      // 只有与燃料棒正交相邻的组件才会吸热
       if (state.columns >= 2) {
-        state.grid[0][1] = coolantId;
-        state.grid[1][0] = coolantId;
-        state.grid[1][1] = coolantId;
-      }
-      if (state.columns >= 3) {
-        state.grid[0][2] = condId;
+        if (coolantId) state.grid[0][1] = coolantId;
+        if (condId) state.grid[1][0] = condId;
       }
       refresh();
       markDirty();
@@ -658,7 +665,9 @@ const ReactorView = (() => {
     function updateStatsFrom(stats) {
       if (!stats) return;
       root.querySelector('[data-stat="eu"]').textContent = String(stats.euPerTick);
-      root.querySelector('[data-stat="heat"]').textContent = String(stats.heatPerTick);
+      root.querySelector('[data-stat="heat"]').textContent = String(
+        Number.isFinite(stats.heatPerSecond) ? stats.heatPerSecond : stats.heatPerTick * 20
+      );
       root.querySelector('[data-stat="capacity"]').textContent = fmtNum(stats.effectiveHeatCapacity);
       root.querySelector('[data-stat="safe"]').textContent = formatSafeTime(stats.safeSeconds);
       statusEl.className = `ic2-status ${stats.status}`;
@@ -737,7 +746,9 @@ const ReactorView = (() => {
     };
 
     const liveEu = runtime && Number.isFinite(runtime.euPerTick) ? runtime.euPerTick : stats.euPerTick;
-    const liveHeat = runtime && Number.isFinite(runtime.heatPerTick) ? runtime.heatPerTick : stats.heatPerTick;
+    const liveHeat = runtime && Number.isFinite(runtime.heatPerSecond)
+      ? runtime.heatPerSecond
+      : (Number.isFinite(stats.heatPerSecond) ? stats.heatPerSecond : stats.heatPerTick * 20);
     const activeRods = runtime && Number.isFinite(runtime.activeRods) ? runtime.activeRods : stats.fuelRods;
     set('eu', String(liveEu));
     set('heat', String(liveHeat));
@@ -803,7 +814,9 @@ const ReactorView = (() => {
     root.__ic2Cells = stats.cells;
     root.__ic2Runtime = runtime;
     const liveEu = runtime && Number.isFinite(runtime.euPerTick) ? runtime.euPerTick : stats.euPerTick;
-    const liveHeat = runtime && Number.isFinite(runtime.heatPerTick) ? runtime.heatPerTick : stats.heatPerTick;
+    const liveHeat = runtime && Number.isFinite(runtime.heatPerSecond)
+      ? runtime.heatPerSecond
+      : (Number.isFinite(stats.heatPerSecond) ? stats.heatPerSecond : stats.heatPerTick * 20);
     const activeRods = runtime && Number.isFinite(runtime.activeRods) ? runtime.activeRods : stats.fuelRods;
     const byPos = new Map(stats.cells.map(cell => [`${cell.r}:${cell.c}`, cell]));
 
@@ -820,7 +833,7 @@ const ReactorView = (() => {
         </div>
         <div class="ic2-info-gauges">
           <div class="ic2-info-gauge"><span>${escapeHTML(T('reactor.eu', 'EU/t'))}</span><b data-info="eu">${liveEu}</b></div>
-          <div class="ic2-info-gauge"><span>${escapeHTML(T('reactor.heat', '热量/t'))}</span><b data-info="heat">${liveHeat}</b></div>
+          <div class="ic2-info-gauge"><span>${escapeHTML(T('reactor.heat', '热量/秒'))}</span><b data-info="heat">${liveHeat}</b></div>
           <div class="ic2-info-gauge"><span>${escapeHTML(T('reactor.heat-capacity', '吸热容量'))}</span><b data-info="capacity">${fmtNum(stats.effectiveHeatCapacity)}</b></div>
           <div class="ic2-info-gauge"><span>${escapeHTML(T('reactor.safe-time', '安全时间'))}</span><b data-info="safe">${formatSafeTime(runtime && runtime.running ? runtime.safeSeconds : stats.safeSeconds)}</b></div>
           <div class="ic2-info-gauge"><span>${escapeHTML(T('reactor.info.active-rods', '活跃燃料棒'))}</span><b data-info="rods">${activeRods} / ${stats.fuelRods}</b></div>
@@ -859,7 +872,7 @@ const ReactorView = (() => {
                 <th>${escapeHTML(T('reactor.info.tier', '等级'))}</th>
                 <th>${escapeHTML(T('reactor.info.pulses', '脉冲'))}</th>
                 <th>${escapeHTML(T('reactor.eu', 'EU/t'))}</th>
-                <th>${escapeHTML(T('reactor.heat', '热量/t'))}</th>
+                <th>${escapeHTML(T('reactor.heat', '热量/秒'))}</th>
                 <th>${escapeHTML(T('reactor.info.absorb', '吸热'))}</th>
                 <th>${escapeHTML(T('reactor.info.temperature', '温度'))}</th>
                 <th>${escapeHTML(T('reactor.info.state', '状态'))}</th>
@@ -927,7 +940,7 @@ const ReactorView = (() => {
           rows.push([T('reactor.info.pulses', '脉冲'), String(cell.pulses)]);
           rows.push([T('reactor.info.neighbors', '相邻燃料棒'), String(cell.neighbors)]);
           rows.push([T('reactor.eu', 'EU/t'), String(cell.eu)]);
-          rows.push([T('reactor.heat', '热量/t'), String(cell.heat)]);
+          rows.push([T('reactor.heat', '热量/秒'), String(cell.heat)]);
           if (cell.depleted) {
             rows.push([T('reactor.info.state', '状态'), T('reactor.info.depleted', '已耗尽')]);
           }

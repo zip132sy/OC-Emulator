@@ -3681,7 +3681,11 @@ extComponents.makeReactorChamber = function(address)
   function dev.getReactorEUOutput() return tonumber(S().euPerTick) or 0 end
   dev.getReactorEUEnergyOutput = dev.getReactorEUOutput
   function dev.getEnergyOutput() return tonumber(S().euPerTick) or 0 end
-  function dev.getHeatOutput() return tonumber(S().heatPerTick) or 0 end
+  -- 每秒发热量 (IC2 反应堆按秒推进热量)
+  function dev.getHeatOutput()
+    local s = S()
+    return tonumber(s.heatPerSecond) or ((tonumber(s.heatPerTick) or 0) * 20)
+  end
   function dev.isActive() return S().active == true end
   function dev.getActive() return S().active == true end
   function dev.getSize() return tonumber(S().columns) or 0, tonumber(S().rows) or 0 end
@@ -3769,6 +3773,9 @@ extComponents.makeReactorChamber = function(address)
       rows = tonumber(s.rows) or 0,
       euPerTick = tonumber(s.euPerTick) or 0,
       heatPerTick = tonumber(s.heatPerTick) or 0,
+      heatPerSecond = tonumber(s.heatPerSecond) or ((tonumber(s.heatPerTick) or 0) * 20),
+      fuelRods = tonumber(s.fuelRods) or 0,
+      activeRods = tonumber(s.activeRods) or 0,
       hullHeat = tonumber(s.hullHeat) or 0,
       hullHeatCapacity = tonumber(s.hullHeatCapacity) or 0,
       temperature = tonumber(s.temperature) or tonumber(s.hullHeat) or 0,

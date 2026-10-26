@@ -1165,7 +1165,7 @@ const ModView = (() => {
       const rs = reactor.stats;
       cards.push({ k: T('reactor.title', '核电站'), v: `${rs.columns} × ${rs.rows}` });
       cards.push({ k: T('reactor.eu', 'EU/t'), v: String(rs.euPerTick) });
-      cards.push({ k: T('reactor.heat', '热量/t'), v: String(rs.heatPerTick) });
+      cards.push({ k: T('reactor.heat', '热量/秒'), v: String(rs.heatPerSecond || 0) });
       cards.push({ k: T('reactor.heat-capacity', '吸热容量'), v: Number(rs.effectiveHeatCapacity || rs.heatCapacity || 0).toLocaleString() });
       cards.push({ k: T('reactor.status', '状态'), v: T(`reactor.status.${rs.status}`, rs.status) });
     }
@@ -1263,7 +1263,7 @@ const ModView = (() => {
     if (stats) {
       cards.push({ k: T('reactor.size', '大小'), v: `${stats.columns} × ${stats.rows}` });
       cards.push({ k: T('reactor.eu', 'EU/t'), v: String(stats.euPerTick) });
-      cards.push({ k: T('reactor.heat', '热量/t'), v: String(stats.heatPerTick) });
+      cards.push({ k: T('reactor.heat', '热量/秒'), v: String(stats.heatPerSecond || 0) });
       cards.push({ k: T('reactor.heat-capacity', '吸热容量'), v: Number(stats.effectiveHeatCapacity || 0).toLocaleString() });
       cards.push({ k: T('reactor.info.fuel-rods', '燃料棒'), v: String(stats.fuelRods) });
     }
