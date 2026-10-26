@@ -674,9 +674,9 @@ print(mods.getOffhand())            -- 副手工具
 |---|---|---|
 | `getHeat()` | number | 堆芯当前热量 |
 | `getMaxHeat()` | number | 堆芯热量上限 |
-| `getTemperature()` | number | 当前温度（°C，与堆芯热量同刻度） |
-| `getMaxTemperature()` | number | 温度上限（°C，即外壳热容量） |
-| `setTemperature(value)` | number | 设置温度，越界自动夹在 0 ~ 上限；返回实际写入值 |
+| `getTemperature()` | number | 当前温度（°C）：环境温度 20 °C + 堆芯热量 |
+| `getMaxTemperature()` | number | 温度上限（°C）：外壳热容量 + 20 °C |
+| `setTemperature(value)` | number | 设置温度，越界自动夹在 20 °C ~ 上限；返回实际温度 |
 | `getReactorEUOutput()` / `getReactorEUEnergyOutput()` | number | 每 tick 发电量（EU/t） |
 | `getEnergyOutput()` | number | 同 `getReactorEUOutput()` |
 | `getHeatOutput()` | number | 每 tick 发热量 |
@@ -691,7 +691,7 @@ print(mods.getOffhand())            -- 副手工具
 | `getComponentTemperatureRatio(slot)` | number | 组件温度占比（0 ~ 1） |
 | `getStats()` | table | 运行快照 |
 
-- 每个组件单独记录耐久与温度：组件温度 = 堆芯温度 + (温度上限 − 堆芯温度) × 已损耗耐久比例，因此每个格位的温度都不同。
+- 每个组件单独记录耐久与温度：反应堆温度 = 20 °C + 堆芯热量；组件温度 = 反应堆温度 + (温度上限 − 反应堆温度) × 已损耗耐久比例，因此每个格位的温度都不同，普通运行时也不会显示 0 °C。
 - 燃料棒按自身脉冲数消耗耐久（模拟寿命 10000 tick，运行时每 tick 消耗脉冲数），脉冲越高耗尽越快，耗尽后不再发电放热。
 - 冷却单元 / 冷凝模块各自吸收热量并减少剩余容量；热量先分给相邻的冷却单元，再分给冷凝模块，分不完的进入堆芯；未生效（不相邻燃料棒）的冷却单元保持满耐久。
 - 设备页的格位按「电池电量」样式用背景填充显示剩余耐久，悬浮可看具体数值；点击格子也会在「格位详情」中列出耐久与百分比。

@@ -3663,11 +3663,11 @@ extComponents.makeReactorChamber = function(address)
 
   function dev.getHeat() return tonumber(S().hullHeat) or 0 end
   function dev.getMaxHeat() return tonumber(S().hullHeatCapacity) or 0 end
-  -- 温度: 与堆芯热量同刻度, 上限为外壳热容量
-  function dev.getTemperature() return tonumber(S().temperature) or tonumber(S().hullHeat) or 0 end
-  function dev.getMaxTemperature() return tonumber(S().maxTemperature) or tonumber(S().hullHeatCapacity) or 0 end
+  -- 温度: 环境温度 + 堆芯热量, 上限为外壳热容量 + 环境温度
+  function dev.getTemperature() return tonumber(S().temperature) or 0 end
+  function dev.getMaxTemperature() return tonumber(S().maxTemperature) or 0 end
   function dev.getHeatCapacity() return dev.getMaxTemperature() end
-  -- 设置温度 (自动夹在 0 ~ 上限), 返回设置后的温度
+  -- 设置温度 (自动夹在环境温度 ~ 上限), 返回设置后的温度
   function dev.setTemperature(value)
     local v = tonumber(value) or 0
     local max = dev.getMaxTemperature()
@@ -3675,7 +3675,6 @@ extComponents.makeReactorChamber = function(address)
     if max > 0 and v > max then v = max end
     sendToServer({ type = "ext_command", address = address, method = "setTemperature", args = { v } })
     S().temperature = v
-    S().hullHeat = v
     S().overheated = (max > 0 and v >= max) or false
     return v
   end

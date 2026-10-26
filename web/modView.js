@@ -1146,7 +1146,9 @@ const ModView = (() => {
       cards.push({ k: T('reactor.info.fuel-rods', '燃料棒'), v: String(stats.fuelRods) });
     }
     if (runtime) {
-      cards.push({ k: T('reactor.info.temperature', '温度'), v: `${Math.round(runtime.temperature || 0).toLocaleString()} / ${Math.round(runtime.maxTemperature || 0).toLocaleString()} °C` });
+      cards.push({ k: T('reactor.info.temperature', '温度'), v: window.ReactorView && ReactorView.temperatureRangeText
+        ? ReactorView.temperatureRangeText(runtime)
+        : `${Math.round(runtime.temperature || 0)} °C` });
       cards.push({ k: T('reactor.info.generated', '累计发电'), v: `${Math.round(runtime.generatedEu).toLocaleString()} EU` });
       cards.push({ k: T('reactor.info.elapsed', '运行时长'), v: String(Math.floor(runtime.elapsed)) + 's' });
     }

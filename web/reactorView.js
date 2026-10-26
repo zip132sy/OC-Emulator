@@ -17,6 +17,8 @@ const ReactorView = (() => {
   const MIN_COLUMNS = 3;
   const MAX_COLUMNS = 9;
   const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  // 与后端一致: 显示温度 = 环境温度 + 堆芯热量
+  const AMBIENT_TEMPERATURE = 20;
 
   // 后端未提供组件表时的最小回退 (正常情况下组件表由 /reactor 接口下发)
   const FALLBACK_PARTS = {
@@ -274,6 +276,24 @@ const ReactorView = (() => {
   function temperatureText(cell) {
     if (!cell || !Number.isFinite(cell.temperature)) return '-';
     return `${fmtNum(Math.round(cell.temperature))} °C`;
+  }
+
+  // 反应堆温度: 后端已提供 temperature/maxTemperature 时直接使用,
+  // 旧数据缺少字段时按 环境温度 + 堆芯热量 计算
+  function temperatureRange(runtime) {
+    if (!runtime) return null;
+    const hullCapacity = Number(runtime.hullHeatCapacity) || 0;
+    const max = Number(runtime.maxTemperature) || (hullCapacity > 0 ? hullCapacity + AMBIENT_TEMPERATURE : 0);
+    const value = Number.isFinite(runtime.temperature)
+      ? runtime.temperature
+      : (hullCapacity > 0 ? (Number(runtime.hullHeat) || 0) + AMBIENT_TEMPERATURE : 0);
+    return { value: Math.round(value), max: Math.round(max) };
+  }
+
+  function temperatureRangeText(runtime) {
+    const t = temperatureRange(runtime);
+    if (!t) return '-';
+    return t.max > 0 ? `${fmtNum(t.value)} / ${fmtNum(t.max)} °C` : `${fmtNum(t.value)} °C`;
   }
 
   // 格位悬浮提示: 组件信息 + 区间 + 具体耐久 + 自身温度
@@ -640,13 +660,13 @@ const ReactorView = (() => {
     if (!runtime) return '';
     const hullPct = Math.round(Math.max(0, Math.min(1, runtime.hullRatio || 0)) * 100);
     const capPct = Math.round(Math.max(0, Math.min(1, runtime.capacityRatio || 0)) * 100);
-    const tempPct = Math.round(Math.max(0, Math.min(1, runtime.temperatureRatio || 0)) * 100);
+    const tempPct = Math.round(Math.max(0, Math.min(1, runtime.temperatureRatio || runtime.hullRatio || 0)) * 100);
     return `
       <div class="ic2-runtime" data-role="runtime">
         <div class="ic2-rt-row">
           <span>${escapeHTML(T('reactor.info.temperature', '温度'))}</span>
           <div class="ic2-bar"><i data-info="temp-bar" style="width:${tempPct}%"></i></div>
-          <b data-info="temp-text">${fmtNum(Math.round(runtime.temperature || 0))} / ${fmtNum(runtime.maxTemperature || 0)} °C</b>
+          <b data-info="temp-text">${temperatureRangeText(runtime)}</b>
         </div>
         <div class="ic2-rt-row">
           <span>${escapeHTML(T('reactor.info.hull-heat', '堆芯热量'))}</span>
@@ -699,18 +719,16 @@ const ReactorView = (() => {
     set('capacity', fmtNum(stats.effectiveHeatCapacity));
     set('safe', formatSafeTime(runtime && runtime.running ? runtime.safeSeconds : stats.safeSeconds));
     set('running', runtime && runtime.running ? T('reactor.info.on', '是') : T('reactor.info.off', '否'));
-    set('temperature', runtime
-      ? `${fmtNum(Math.round(runtime.temperature || 0))} / ${fmtNum(runtime.maxTemperature || 0)} °C`
-      : '-');
+    set('temperature', temperatureRangeText(runtime));
 
     if (runtime) {
-      set('temp-text', `${fmtNum(Math.round(runtime.temperature || 0))} / ${fmtNum(runtime.maxTemperature || 0)} °C`);
+      set('temp-text', temperatureRangeText(runtime));
       set('hull-text', `${fmtNum(Math.round(runtime.hullHeat))} / ${fmtNum(runtime.hullHeatCapacity)}`);
       set('cap-text', `${fmtNum(runtime.remainingCapacity)} / ${fmtNum(runtime.totalCapacity)}`);
       set('generated', `${fmtNum(Math.round(runtime.generatedEu))} EU`);
       set('elapsed', formatDuration(runtime.elapsed));
       set('absorbed', fmtNum(Math.round(runtime.absorbed)));
-      setBar('temp-bar', runtime.temperatureRatio);
+      setBar('temp-bar', runtime.temperatureRatio || runtime.hullRatio);
       setBar('hull-bar', runtime.hullRatio);
       setBar('cap-bar', runtime.capacityRatio);
     }
@@ -775,9 +793,7 @@ const ReactorView = (() => {
           <div class="ic2-info-gauge"><span>${escapeHTML(T('reactor.safe-time', '安全时间'))}</span><b data-info="safe">${formatSafeTime(runtime && runtime.running ? runtime.safeSeconds : stats.safeSeconds)}</b></div>
           <div class="ic2-info-gauge"><span>${escapeHTML(T('reactor.info.fuel-rods', '燃料棒'))}</span><b>${stats.fuelRods}</b></div>
           <div class="ic2-info-gauge"><span>${escapeHTML(T('reactor.info.used', '占用'))}</span><b>${stats.usedSlots} / ${stats.totalSlots}</b></div>
-          <div class="ic2-info-gauge"><span>${escapeHTML(T('reactor.info.temperature', '温度'))}</span><b data-info="temperature">${runtime
-            ? `${fmtNum(Math.round(runtime.temperature || 0))} / ${fmtNum(runtime.maxTemperature || 0)} °C`
-            : '-'}</b></div>
+          <div class="ic2-info-gauge"><span>${escapeHTML(T('reactor.info.temperature', '温度'))}</span><b data-info="temperature">${temperatureRangeText(runtime)}</b></div>
           <div class="ic2-info-gauge"><span>${escapeHTML(T('reactor.active', '反应堆运行'))}</span><b data-info="running">${runtime && runtime.running ? T('reactor.info.on', '是') : T('reactor.info.off', '否')}</b></div>
         </div>
         ${runtimeBlockHTML(runtime)}
@@ -950,7 +966,7 @@ const ReactorView = (() => {
     return id || null;
   }
 
-  return { render, renderInfo, updateInfo, partsFrom, computeStats, formatSafeTime };
+  return { render, renderInfo, updateInfo, partsFrom, computeStats, formatSafeTime, temperatureRangeText };
 })();
 
 window.ReactorView = ReactorView;
