@@ -3743,6 +3743,25 @@ extComponents.makeReactorChamber = function(address)
     local r = lowestDurability(category)
     return r or 0
   end
+
+  -- 单个组件的当前温度 (°C); 空槽返回 0
+  function dev.getComponentTemperature(slot)
+    local item = slotAt(slot)
+    if not item then return 0 end
+    return tonumber(item.temperature) or 0
+  end
+  dev.getSlotTemperature = dev.getComponentTemperature
+
+  -- 单个组件的温度比例 (0 ~ 1); 空槽返回 0
+  function dev.getComponentTemperatureRatio(slot)
+    local item = slotAt(slot)
+    if not item then return 0 end
+    local max = tonumber(item.maxTemperature) or tonumber(S().maxTemperature) or 0
+    if max <= 0 then return 0 end
+    local t = tonumber(item.temperature) or 0
+    if t < 0 then t = 0 elseif t > max then t = max end
+    return t / max
+  end
   function dev.getStats()
     local s = S()
     return {
@@ -3815,12 +3834,43 @@ extComponents.makeRedstone = function(address)
     return clamp(r * 15 + 0.5)
   end
 
+  -- 同类组件中最高的温度比例; 无对应组件返回 nil
+  local function highestTemperatureRatio(category)
+    local s = S()
+    local slots = s.slots
+    if type(slots) ~= "table" then return nil end
+    local max = tonumber(s.maxTemperature) or tonumber(s.hullHeatCapacity) or 0
+    if max <= 0 then return nil end
+    local total = (tonumber(s.columns) or 0) * (tonumber(s.rows) or 0)
+    local highest
+    for i = 1, total do
+      local item = slots[i]
+      if type(item) == "table" and (category == nil or item.category == category) then
+        local t = tonumber(item.temperature) or 0
+        if highest == nil or t > highest then highest = t end
+      end
+    end
+    if highest == nil then return nil end
+    local r = highest / max
+    if r < 0 then r = 0 elseif r > 1 then r = 1 end
+    return r
+  end
+
+  -- 温度比例换算成 0~15 信号; 没有对应组件时返回 0
+  local function temperatureSignal(category)
+    local r = highestTemperatureRatio(category)
+    if r == nil then return 0 end
+    return clamp(r * 15 + 0.5)
+  end
+
   -- 输入通道 (反应堆 -> 计算机)
   --   0: 堆芯热量百分比   1: EU/t (每 100 EU/t 一档, 上限 15)
   --   2: 燃料棒数量       3: 状态 (off 0 / idle 3 / stable 8 / warning 12 / critical、overheat 15)
   --   4: 剩余吸热百分比   5: 是否运行 (0 / 15)
   --   6: 燃料棒最低耐久   7: 冷却单元最低耐久
   --   8: 冷凝模块最低耐久 9: 全部组件最低耐久 (均为百分比 × 15)
+  --  10: 燃料棒最高温度  11: 冷却单元最高温度
+  --  12: 冷凝模块最高温度 13: 全部组件最高温度 (均为温度比例 × 15)
   function dev.getInput(side)
     side = tonumber(side) or 0
     local s = S()
@@ -3844,6 +3894,14 @@ extComponents.makeRedstone = function(address)
       return durabilitySignal("condensator")
     elseif side == 9 then
       return durabilitySignal(nil)
+    elseif side == 10 then
+      return temperatureSignal("fuel")
+    elseif side == 11 then
+      return temperatureSignal("coolant")
+    elseif side == 12 then
+      return temperatureSignal("condensator")
+    elseif side == 13 then
+      return temperatureSignal(nil)
     end
     return 0
   end
@@ -3891,7 +3949,7 @@ extComponents.makeRedstone = function(address)
   end
 
   function dev.getSides()
-    return { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9 }
+    return { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13 }
   end
 
   return dev

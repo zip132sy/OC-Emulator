@@ -271,11 +271,20 @@ const ReactorView = (() => {
     return `${name} · ${fmtNum(cell.capacity)}`;
   }
 
-  // 格位悬浮提示: 组件信息 + 区间 + 具体耐久
+  function temperatureText(cell) {
+    if (!cell || !Number.isFinite(cell.temperature)) return '-';
+    return `${fmtNum(Math.round(cell.temperature))} °C`;
+  }
+
+  // 格位悬浮提示: 组件信息 + 区间 + 具体耐久 + 自身温度
   function slotTipText(parts, cell, r, c) {
+    const lines = [`${cellSummary(parts, cell)} (${r + 1}, ${c + 1})`];
     const dur = durabilityLabel(cell);
-    const base = `${cellSummary(parts, cell)} (${r + 1}, ${c + 1})`;
-    return dur ? `${base}\n${dur}` : base;
+    if (dur) lines.push(dur);
+    if (cell && Number.isFinite(cell.temperature)) {
+      lines.push(`${T('reactor.info.temperature', '温度')} ${temperatureText(cell)}`);
+    }
+    return lines.join('\n');
   }
 
   function cellClass(parts, id) {
@@ -725,6 +734,13 @@ const ReactorView = (() => {
       }
       btn.title = slotTipText(parts, cell, r, c);
     });
+    // 组件明细表里的温度也随运行变化
+    root.querySelectorAll('[data-role="tbody"] tr[data-r]').forEach(tr => {
+      const r = parseInt(tr.dataset.r, 10);
+      const c = parseInt(tr.dataset.c, 10);
+      const td = tr.querySelector('[data-info="temp"]');
+      if (td) td.textContent = temperatureText(byPos.get(`${r}:${c}`) || null);
+    });
     // 耐久随运行时间变化, 重绘当前选中格子的详情
     if (typeof root.__ic2Detail === 'function') root.__ic2Detail();
     return stats;
@@ -793,6 +809,7 @@ const ReactorView = (() => {
                 <th>${escapeHTML(T('reactor.eu', 'EU/t'))}</th>
                 <th>${escapeHTML(T('reactor.heat', '热量/t'))}</th>
                 <th>${escapeHTML(T('reactor.info.absorb', '吸热'))}</th>
+                <th>${escapeHTML(T('reactor.info.temperature', '温度'))}</th>
                 <th>${escapeHTML(T('reactor.info.state', '状态'))}</th>
               </tr>
             </thead>
@@ -849,6 +866,9 @@ const ReactorView = (() => {
           const pct = Math.round((cur / cell.maxDurability) * 100);
           rows.push([T('reactor.info.durability', '耐久'), `${fmtNum(cur)} / ${fmtNum(cell.maxDurability)} (${pct}%)`]);
         }
+        if (Number.isFinite(cell.temperature)) {
+          rows.push([T('reactor.info.temperature', '温度'), temperatureText(cell)]);
+        }
         if (cell.category === 'fuel') {
           rows.push([T('reactor.info.rods', '联数'), String(cell.rods)]);
           rows.push([T('reactor.info.pulses', '脉冲'), String(cell.pulses)]);
@@ -872,7 +892,7 @@ const ReactorView = (() => {
 
     function renderTable() {
       if (!stats.cells.length) {
-        tbodyEl.innerHTML = `<tr><td colspan="8" class="ic2-empty-row">${escapeHTML(T('reactor.info.no-parts', '还没有放置任何组件'))}</td></tr>`;
+        tbodyEl.innerHTML = `<tr><td colspan="9" class="ic2-empty-row">${escapeHTML(T('reactor.info.no-parts', '还没有放置任何组件'))}</td></tr>`;
         return;
       }
       tbodyEl.innerHTML = stats.cells.map(cell => {
@@ -889,6 +909,7 @@ const ReactorView = (() => {
           <td class="num">${isFuel ? cell.eu : '-'}</td>
           <td class="num">${isFuel ? cell.heat : '-'}</td>
           <td class="num">${isFuel ? '-' : fmtNum(cell.capacity || 0)}</td>
+          <td class="num" data-info="temp">${temperatureText(cell)}</td>
           <td>${escapeHTML(state)}</td>
         </tr>`;
       }).join('');

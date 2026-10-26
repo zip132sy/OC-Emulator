@@ -687,9 +687,12 @@ print(mods.getOffhand())            -- 副手工具
 | `getComponentDurability(slot)` / `getSlotDurability(slot)` | current, max | 组件当前耐久与最大耐久；空槽为 0, 0 |
 | `getComponentDurabilityRatio(slot)` | number | 组件剩余耐久比例（0 ~ 1）；空槽为 0 |
 | `getDurabilityRatio(category)` | number | 同类组件中最低的剩余耐久比例（0 ~ 1）；`category` 可省略表示全部组件 |
+| `getComponentTemperature(slot)` / `getSlotTemperature(slot)` | number | 组件自身温度（°C）；空槽为 0 |
+| `getComponentTemperatureRatio(slot)` | number | 组件温度占比（0 ~ 1） |
 | `getStats()` | table | 运行快照 |
 
-- 每个组件单独记录耐久：燃料棒按自身脉冲数消耗（模拟寿命 10000 tick，运行时每 tick 消耗脉冲数），脉冲越高耗尽越快，耗尽后不再发电放热。
+- 每个组件单独记录耐久与温度：组件温度 = 堆芯温度 + (温度上限 − 堆芯温度) × 已损耗耐久比例，因此每个格位的温度都不同。
+- 燃料棒按自身脉冲数消耗耐久（模拟寿命 10000 tick，运行时每 tick 消耗脉冲数），脉冲越高耗尽越快，耗尽后不再发电放热。
 - 冷却单元 / 冷凝模块各自吸收热量并减少剩余容量；热量先分给相邻的冷却单元，再分给冷凝模块，分不完的进入堆芯；未生效（不相邻燃料棒）的冷却单元保持满耐久。
 - 设备页的格位按「电池电量」样式用背景填充显示剩余耐久，悬浮可看具体数值；点击格子也会在「格位详情」中列出耐久与百分比。
 - 温度达到上限时反应堆会自动停机（`status` 变为 `overheat`），堆芯温度保留；先复位堆芯再启动。
@@ -709,8 +712,12 @@ print(mods.getOffhand())            -- 副手工具
 | 7 | 冷却单元最低耐久 | 最低剩余耐久比例 × 15 |
 | 8 | 冷凝模块最低耐久 | 最低剩余耐久比例 × 15 |
 | 9 | 全部组件最低耐久 | 最低剩余耐久比例 × 15 |
+| 10 | 燃料棒最高温度 | 最高温度占比 × 15 |
+| 11 | 冷却单元最高温度 | 最高温度占比 × 15 |
+| 12 | 冷凝模块最高温度 | 最高温度占比 × 15 |
+| 13 | 全部组件最高温度 | 最高温度占比 × 15 |
 
-通道 6~9 在没有对应组件时返回 0。
+通道 6~13 在没有对应组件时返回 0。
 
 `getBundledInput(0)` 用位表示状态：bit0 运行、bit1 稳定、bit2 注意、bit3 危险/过热；其它通道为 0。`getComparatorInput(side)` 与 `getInput(side)` 相同。
 
@@ -732,7 +739,7 @@ IC2Reactors.app 会为每台核电站选择一个 I/O 端口和侧面，因此�
 | `getOutput(side)` | number | 最近写入的输出值 |
 | `setBundledOutput(side, mask)` | number | 写捆绑输出控制开关 |
 | `getBundledOutput(side)` | number | 最近写入的捆绑输出 |
-| `getSides()` | table | `{0,1,2,3,4,5,6,7,8,9}` |
+| `getSides()` | table | `{0,1,2,3,4,5,6,7,8,9,10,11,12,13}` |
 
 温度也可以通过 HTTP 读写：`GET /api/mods/:name/reactor-temperature` 返回 `{ temperature, maxTemperature, overheated, running }`，`POST` 同一路径（`{ temperature }`）写入温度。
 
