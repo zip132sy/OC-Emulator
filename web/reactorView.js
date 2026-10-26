@@ -705,6 +705,8 @@ const ReactorView = (() => {
         </div>
         ${runtimeBlockHTML(runtime)}
         <div class="ic2-info-actions">
+          <button type="button" class="ic2-tool-btn" data-role="reactor-start" ${config.active ? 'disabled' : ''}>${escapeHTML(T('vm.start', '▶ 启动'))}</button>
+          <button type="button" class="ic2-tool-btn" data-role="reactor-stop" ${config.active ? '' : 'disabled'}>${escapeHTML(T('vm.stop', '■ 停止'))}</button>
           <button type="button" class="ic2-tool-btn" data-role="reset-core">${escapeHTML(T('reactor.info.reset-core', '复位堆芯'))}</button>
         </div>
         <div class="ic2-info-body">

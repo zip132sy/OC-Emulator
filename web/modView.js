@@ -786,8 +786,38 @@ const ModView = (() => {
       Math.round(runtime.remainingCapacity || 0), Math.round(runtime.generatedEu || 0), runtime.status].join('|');
   }
 
-  // 复位堆芯: 相当于更换冷却单元并把堆芯热量清零
+  // 启动 / 停止 / 复位堆芯
   function bindReactorActions(infoRoot, view) {
+    const setActive = async (active, btn) => {
+      btn.disabled = true;
+      try {
+        const r = await App.api(`mods/${encodeURIComponent(view.name)}/reactor-active`, {
+          method: 'POST',
+          body: { active },
+        });
+        if (r && r.error) throw new Error(r.error);
+        if (window.App && App.setStatus) {
+          App.setStatus(T(active ? 'reactor.info.started' : 'reactor.info.stopped',
+            active ? '反应堆已启动' : '反应堆已停止'));
+        }
+        reload(view.name);
+        if (window.App && App.refreshMods) App.refreshMods();
+      } catch (e) {
+        appendLog(view.name, {
+          ts: Date.now(),
+          level: 'error',
+          msg: `${T('mods.request-failed', '请求失败: ')}${e.message}`,
+        });
+      } finally {
+        btn.disabled = false;
+      }
+    };
+
+    const startBtn = infoRoot.querySelector('[data-role="reactor-start"]');
+    if (startBtn) startBtn.addEventListener('click', () => setActive(true, startBtn));
+    const stopBtn = infoRoot.querySelector('[data-role="reactor-stop"]');
+    if (stopBtn) stopBtn.addEventListener('click', () => setActive(false, stopBtn));
+
     const btn = infoRoot.querySelector('[data-role="reset-core"]');
     if (!btn) return;
     btn.addEventListener('click', async () => {

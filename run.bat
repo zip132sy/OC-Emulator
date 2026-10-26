@@ -48,58 +48,19 @@ if !ERRORLEVEL! neq 0 goto :dep_failed
 echo.
 
 REM ============================================================
-REM 2. 依赖文件自检与联网修复
-REM    强依赖文件缺失时从远端仓库下载恢复 (GitHub 优先, Gitee 回退)
+REM 2. Dependency integrity check + auto update (lib/startupPrep.js)
+REM    - Integrity check can be skipped in the web settings panel.
+REM    - Every network step has its own timeout, so a slow or
+REM      unreachable network is skipped instead of blocking startup.
+REM    - The first run measures GitHub / Gitee speed and caches the
+REM      faster source; later runs reuse it.
 REM ============================================================
 echo.
-echo [INFO] 检查依赖文件完整性...
-node "%~dp0lib\repair.js"
+node "%~dp0lib\startupPrep.js"
 if !ERRORLEVEL! neq 0 goto :dep_failed
 
 REM ============================================================
-REM 3. Auto update (enabled by default; toggle in the web settings panel)
-REM    Pull the latest version from the remote before starting.
-REM ============================================================
-set "AUTO_UPDATE=on"
-if not exist settings.json goto :update_read_done
-
-set "PS_AU=%TEMP%\read_autoupdate.ps1"
-set "AU_OUT=%TEMP%\read_autoupdate.txt"
-echo try { $s = Get-Content 'settings.json' ^| ConvertFrom-Json; if ($s.autoUpdate -eq $false) { 'off' } else { 'on' } } catch { 'on' } > "%PS_AU%"
-"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "%PS_AU%" > "%AU_OUT%" 2>nul
-del "%PS_AU%" >nul 2>nul
-for /f "usebackq delims=" %%u in ("%AU_OUT%") do set "AUTO_UPDATE=%%u"
-del "%AU_OUT%" >nul 2>nul
-
-:update_read_done
-if /i "!AUTO_UPDATE!"=="off" (
-    echo [INFO] Auto update is OFF ^(enable it in the web settings panel^).
-    goto :update_done
-)
-if not exist ".git" (
-    echo [INFO] Not a git repository, skipping auto update.
-    goto :update_done
-)
-where git >nul 2>nul
-if %ERRORLEVEL% neq 0 (
-    echo [INFO] git not found, skipping auto update.
-    goto :update_done
-)
-echo [INFO] Checking for updates...
-git pull --ff-only --quiet
-if !ERRORLEVEL! neq 0 (
-    echo [INFO] Pull from default remote failed, trying 'github'...
-    git pull --ff-only --quiet github main
-)
-if !ERRORLEVEL! neq 0 (
-    echo [WARNING] Auto update failed ^(ignored, continuing^).
-) else (
-    echo [OK] Update check finished.
-)
-:update_done
-
-REM ============================================================
-REM 4. Start server with process guardian
+REM 3. Start server with process guardian
 REM    - Auto-restart on crash
 REM    - Auto-restart on hang (health check timeout)
 REM    - Exponential backoff on repeated failures

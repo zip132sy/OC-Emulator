@@ -57,6 +57,7 @@ function loadSettings() {
     sysInfoPolling: true,
     showConsole: true,   // 是否显示服务器所在的命令行窗口 (可在前端设置里随时切换)
     autoUpdate: true,    // 启动脚本是否自动从远端仓库拉取更新 (可在前端设置里随时切换)
+    skipIntegrityCheck: false, // 启动时跳过依赖文件完整性检查 (可在前端设置里随时切换)
   };
   if (fs.existsSync(settingsPath)) {
     try {
@@ -550,6 +551,7 @@ async function handleApi(req, res, body) {
           logLevel: settings.logLevel || 'full',
           showConsole: settings.showConsole !== false,
           autoUpdate: settings.autoUpdate !== false,
+          skipIntegrityCheck: settings.skipIntegrityCheck === true,
         });
       }
       if (method === 'PUT') {
@@ -571,6 +573,7 @@ async function handleApi(req, res, body) {
           logLevel: settings.logLevel,
           showConsole: settings.showConsole !== false,
           autoUpdate: settings.autoUpdate !== false,
+          skipIntegrityCheck: settings.skipIntegrityCheck === true,
           consoleResult,
         });
       }
@@ -684,6 +687,15 @@ async function handleApi(req, res, body) {
             return json(res, { error: e.message }, 400);
           }
           return json(res, { error: 'Method not allowed' }, 405);
+        }
+
+        if (action === 'reactor-active' && method === 'POST') {
+          try {
+            const payload = JSON.parse(body || '{}');
+            return json(res, modsManager.setReactorActive(modName, !!payload.active));
+          } catch (e) {
+            return json(res, { error: e.message }, 400);
+          }
         }
       }
     }

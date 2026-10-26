@@ -2,18 +2,18 @@
 <html lang="zh-CN"><head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>OC Emulator - Web 控制面板</title>
+  <title>OC Emulator</title>
   <link rel="stylesheet" href="styles.css?v=15">
 </head>
 <body>
   <div id="app" class="app">
     <!-- 顶部菜单栏 (VMware Workstation 风格) -->
     <header class="top-bar">
-      <button class="menu-btn nav-toggle" data-action="toggle-nav" aria-label="虚拟机库">☰</button>
+      <button class="menu-btn nav-toggle" data-action="toggle-nav" aria-label="VM Library">☰</button>
       <div class="brand">
         <span class="brand-logo">⬣</span>
         <span class="brand-name">OC Emulator</span>
-        <span class="brand-sub err" id="lua-badge" title="Lua 解释器状态">Lua: 错误</span>
+        <span class="brand-sub err" id="lua-badge" title="Lua Interpreter Status">Lua: error</span>
       </div>
       <nav class="menu">
         <button class="menu-btn" id="menu-new-vm" data-action="new-vm">＋ New VM</button>
@@ -64,7 +64,7 @@
 
     <!-- 底部状态栏 -->
     <footer class="status-bar">
-      <span id="status-text">加载虚拟机列表失败: Failed to fetch</span>
+      <span id="status-text"></span>
       <span class="status-right" id="status-right"></span>
     </footer>
 
@@ -77,8 +77,8 @@
     <div class="modal-backdrop"></div>
     <div class="modal-dialog" role="dialog" aria-modal="true">
       <div class="modal-header">
-        <h3 id="modal-title">标题</h3>
-        <button class="modal-close" data-action="modal-close" aria-label="关闭">×</button>
+        <h3 id="modal-title"></h3>
+        <button class="modal-close" data-action="modal-close" aria-label="Close">×</button>
       </div>
       <div class="modal-body" id="modal-body"></div>
       <div class="modal-footer" id="modal-footer"></div>
@@ -86,14 +86,14 @@
   </div>
 
   <script src="errorReporter.js?v=2"></script>
-  <script src="i18n.js?v=19"></script>
-  <script src="app.js?v=19"></script>
+  <script src="i18n.js?v=21"></script>
+  <script src="app.js?v=21"></script>
   <script src="wizard.js?v=4"></script>
   <script src="exportWizard.js?v=3"></script>
   <script src="console.js?v=53"></script>
   <script src="diskEditor.js?v=4"></script>
-  <script src="reactorView.js?v=6"></script>
-  <script src="modView.js?v=11"></script>
+  <script src="reactorView.js?v=7"></script>
+  <script src="modView.js?v=12"></script>
 
 
 </body></html>

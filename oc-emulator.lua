@@ -2529,6 +2529,9 @@ do
   local function tryLoadFrom(address)
     local handle, reason = boot_invoke(address, "open", "/init.lua")
     if not handle then
+      handle, reason = boot_invoke(address, "open", "/OS.lua")
+    end
+    if not handle then
       handle, reason = boot_invoke(address, "open", "/BIOS/Manager.lua")
       if not handle then return nil, reason end
     end
@@ -2562,7 +2565,7 @@ do
     local gpu = component.list("gpu")()
     if gpu then
       boot_invoke(gpu, "set", 1, 1, "No bootable medium found")
-      boot_invoke(gpu, "set", 1, 2, "Insert a disk with /init.lua and press any key")
+      boot_invoke(gpu, "set", 1, 2, "Insert a disk with /init.lua or /OS.lua and press any key")
       boot_invoke(gpu, "set", 1, 4, "Press Ctrl+Alt+Insert in the web panel to restart")
     end
     computer.beep(200, 0.5)
@@ -4180,13 +4183,16 @@ end
 -- 检测操作系统类型 (仅用于日志显示)
 dlog("/BIOS/Manager.lua exists:", vfsExists("/BIOS/Manager.lua"))
 dlog("/init.lua exists:", vfsExists("/init.lua"))
+dlog("/OS.lua exists:", vfsExists("/OS.lua"))
 if vfsExists("/BIOS/Manager.lua") then
   _stderr:write("[emulator] detected: /BIOS/Manager.lua\n")
 elseif vfsExists("/init.lua") then
   _stderr:write("[emulator] detected: OpenOS (/init.lua)\n")
+elseif vfsExists("/OS.lua") then
+  _stderr:write("[emulator] detected: MineOS (/OS.lua)\n")
 else
   _stderr:write("[emulator] WARNING: no bootable OS found on disk\n")
-  showScreenMessage("No bootable OS found\nNo /init.lua on disk")
+  showScreenMessage("No bootable OS found\nNo /init.lua or /OS.lua on disk")
 end
 
 -- ============================================================

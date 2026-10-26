@@ -162,6 +162,17 @@ const App = (() => {
             <span class="hint">${I18N.t('settings.auto-update-hint')}</span>
           </div>
           <div class="form-row">
+            <label for="settings-skipintegrity">${I18N.t('settings.skip-integrity')}</label>
+            <label class="checkbox-line">
+              <input type="checkbox" id="settings-skipintegrity" ${cur.skipIntegrityCheck === true ? 'checked' : ''}>
+              <span id="settings-skipintegrity-state">${cur.skipIntegrityCheck === true ? I18N.t('settings.auto-update-on') : I18N.t('settings.auto-update-off')}</span>
+            </label>
+          </div>
+          <div class="form-row">
+            <label></label>
+            <span class="hint">${I18N.t('settings.skip-integrity-hint')}</span>
+          </div>
+          <div class="form-row">
             <label>${I18N.t('settings.rollback')}</label>
             <div style="display:flex;align-items:center;gap:8px;flex:1;">
               <button class="btn" id="settings-rollback" type="button">${I18N.t('settings.rollback-btn')}</button>
@@ -235,6 +246,22 @@ const App = (() => {
               }
             });
           }
+          // 跳过完整性检测 (写入 settings.json, 下次启动脚本启动时生效)
+          const skipIntegrityBox = body.querySelector('#settings-skipintegrity');
+          const skipIntegrityState = body.querySelector('#settings-skipintegrity-state');
+          if (skipIntegrityBox) {
+            skipIntegrityBox.addEventListener('change', async () => {
+              const on = skipIntegrityBox.checked;
+              if (skipIntegrityState) {
+                skipIntegrityState.textContent = on ? I18N.t('settings.auto-update-on') : I18N.t('settings.auto-update-off');
+              }
+              try {
+                await api('settings', { method: 'PUT', body: { skipIntegrityCheck: on } });
+              } catch (e) {
+                if (skipIntegrityState) skipIntegrityState.textContent = I18N.t('settings.save-failed');
+              }
+            });
+          }
           // 版本回退
           const rollbackBtn = body.querySelector('#settings-rollback');
           if (rollbackBtn) rollbackBtn.addEventListener('click', () => openRollbackDialog());
@@ -260,13 +287,19 @@ const App = (() => {
             if (!newPath) { alert(I18N.t('settings.lua-empty')); return; }
             // 保存语言
             const newLang = langSelect.value;
-            I18N.setLang(newLang);
+            const langChanged = newLang !== I18N.getLang();
             // 日志级别
             const newLogLevel = logLevelSelect.value;
             try {
               const r = await api('settings', { method: 'PUT', body: { luaExe: newPath, logLevel: newLogLevel } });
               if (r && r.ok) {
                 state.logLevel = newLogLevel;
+                if (langChanged) {
+                  // 语言切换后整页重载, 保证已经渲染的视图/徽章/弹窗全部换用新语言
+                  I18N.setLang(newLang);
+                  location.reload();
+                  return;
+                }
                 Modal.close();
                 setStatus(I18N.t('settings.saved'));
                 checkLua();
@@ -1250,12 +1283,12 @@ const App = (() => {
         body.querySelector('#lang-zh').addEventListener('click', () => {
           I18N.setLang('zh');
           Modal.close();
-          applyLanguage();
+          location.reload();
         });
         body.querySelector('#lang-en').addEventListener('click', () => {
           I18N.setLang('en');
           Modal.close();
-          applyLanguage();
+          location.reload();
         });
       },
     });
@@ -1264,6 +1297,9 @@ const App = (() => {
   function applyLanguage() {
     const t = I18N.t;
     document.title = t('app.page-title');
+    document.documentElement.lang = I18N.getLang() === 'en' ? 'en' : 'zh-CN';
+    const luaBadge = $('#lua-badge');
+    if (luaBadge) luaBadge.title = t('lua.badge-title');
     // 连接状态与无障碍标签
     setConnStatus(state.connText, state.connKind);
     const navToggle = $('.nav-toggle');

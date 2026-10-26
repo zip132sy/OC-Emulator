@@ -152,12 +152,25 @@ fi
 echo ""
 
 # ============================================================
-# 3. Verify required files, repair missing ones from the remote
-#    (GitHub raw first, Gitee raw as fallback)
+# 3. Dependency integrity check + auto update (lib/startupPrep.js)
+#    - Integrity check can be skipped in the web settings panel.
+#    - Every network step has its own timeout; a slow or unreachable
+#      network is skipped instead of blocking startup.
+#    - The first run measures GitHub / Gitee speed and caches the
+#      faster source; later runs reuse it.
 # ============================================================
 echo ""
-echo "[INFO] Checking required files..."
-if ! node lib/repair.js; then
+echo "[INFO] Checking dependency files and updates..."
+if command -v timeout >/dev/null 2>&1; then
+    timeout 150 node lib/startupPrep.js
+    PREP_CODE=$?
+else
+    node lib/startupPrep.js
+    PREP_CODE=$?
+fi
+if [ "$PREP_CODE" -eq 124 ]; then
+    echo "[WARNING] Startup pre-check timed out; continuing."
+elif [ "$PREP_CODE" -ne 0 ]; then
     echo ""
     echo "[ERROR] Some required files are missing and could not be repaired."
     echo "        Check your network and retry, or re-clone the repository."
@@ -165,34 +178,7 @@ if ! node lib/repair.js; then
 fi
 
 # ============================================================
-# 4. Auto update (enabled by default; toggle in the web settings panel)
-#    Pull the latest version from the remote before starting.
-# ============================================================
-AUTO_UPDATE="on"
-if [ -f settings.json ]; then
-    AUTO_UPDATE=$(node -e "try{const s=JSON.parse(require('fs').readFileSync('settings.json','utf8'));process.stdout.write(s.autoUpdate===false?'off':'on')}catch(e){process.stdout.write('on')}" 2>/dev/null)
-fi
-[ -z "$AUTO_UPDATE" ] && AUTO_UPDATE="on"
-
-if [ "$AUTO_UPDATE" = "off" ]; then
-    echo "[INFO] Auto update is OFF (enable it in the web settings panel)."
-elif [ ! -d .git ]; then
-    echo "[INFO] Not a git repository, skipping auto update."
-elif ! command -v git >/dev/null 2>&1; then
-    echo "[INFO] git not found, skipping auto update."
-else
-    echo "[INFO] Checking for updates..."
-    if git pull --ff-only --quiet; then
-        echo "[OK] Update check finished."
-    elif git pull --ff-only --quiet github main; then
-        echo "[OK] Update check finished."
-    else
-        echo "[WARNING] Auto update failed (ignored, continuing)."
-    fi
-fi
-
-# ============================================================
-# 5. Start server with process guardian
+# 4. Start server with process guardian
 #    - Auto-restart on crash
 #    - Auto-restart on hang (health check timeout)
 #    - Exponential backoff on repeated failures
