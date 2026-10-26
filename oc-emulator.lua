@@ -3723,6 +3723,7 @@ extComponents.apply = function(list)
           extComponents.devices[address] = proxy
           componentRegistry[address] = { type = ctype, proxy = proxy }
           if not component._primaries[ctype] then component._primaries[ctype] = address end
+          pushSignal("component_added", address, ctype)
         end
       end
     end
@@ -3733,6 +3734,7 @@ extComponents.apply = function(list)
       extComponents.devices[address] = nil
       componentRegistry[address] = nil
       if component._primaries[proxy.type] == address then component._primaries[proxy.type] = nil end
+      pushSignal("component_removed", address, proxy.type)
     end
   end
 end

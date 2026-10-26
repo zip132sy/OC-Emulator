@@ -701,6 +701,7 @@ const App = (() => {
     if (mod.type === 'reactor' && mod.reactor) {
       parts.push(`${mod.reactor.euPerTick || 0} EU/t`);
     }
+    if (mod.connectedVm) parts.push(`→ ${mod.connectedVm}`);
     if (mod.address) parts.push(mod.address.slice(0, 8));
     return parts.join(' · ');
   }
@@ -737,7 +738,7 @@ const App = (() => {
     try {
       const mods = await api('mods');
       const list = mods || [];
-      const sig = JSON.stringify(list.map(m => [m.name, m.type, m.state, m.address]));
+      const sig = JSON.stringify(list.map(m => [m.name, m.type, m.state, m.address, m.connectedVm || null]));
       const changed = sig !== state._modsSig;
       state._modsSig = sig;
       state.mods = list;

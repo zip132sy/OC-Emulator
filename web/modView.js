@@ -765,7 +765,7 @@ const ModView = (() => {
     // 布局或运行块结构变化时重建面板; 仅数值变化时原地更新
     const cfg = data.config || {};
     const runtime = data.runtime || null;
-    const layoutSig = JSON.stringify([cfg.columns, cfg.active, cfg.grid, !!runtime]);
+    const layoutSig = JSON.stringify([cfg.columns, cfg.active, cfg.grid, !!runtime, data.connectedVm || null]);
     if (infoRoot.dataset.layoutSig !== layoutSig) {
       infoRoot.dataset.layoutSig = layoutSig;
       ReactorView.renderInfo(infoRoot, data);
@@ -818,6 +818,9 @@ const ModView = (() => {
     const stopBtn = infoRoot.querySelector('[data-role="reactor-stop"]');
     if (stopBtn) stopBtn.addEventListener('click', () => setActive(false, stopBtn));
 
+    const connectBtn = infoRoot.querySelector('[data-role="connect"]');
+    if (connectBtn) connectBtn.addEventListener('click', () => openConnectDialog(view));
+
     const btn = infoRoot.querySelector('[data-role="reset-core"]');
     if (!btn) return;
     btn.addEventListener('click', async () => {
@@ -832,6 +835,76 @@ const ModView = (() => {
       } finally {
         btn.disabled = false;
       }
+    });
+  }
+
+  // 连接到虚拟机: 相当于接一根线, 只有选中的虚拟机能看到该组件
+  async function openConnectDialog(view) {
+    let vms = [];
+    try {
+      const list = await App.api('vms');
+      vms = Array.isArray(list) ? list : [];
+    } catch {
+      vms = [];
+    }
+    if (!vms.length) {
+      alert(T('reactor.connect.no-vm', '暂无可连接的虚拟机'));
+      return;
+    }
+
+    const current = (view.meta && view.meta.reactor && view.meta.reactor.connectedVm) || '';
+    const options = vms.map(vm => {
+      const selected = vm.name === current ? ' selected' : '';
+      return `<option value="${escapeHTML(vm.name)}"${selected}>${escapeHTML(vm.name)} ${escapeHTML(stateLabel(vm.state))}</option>`;
+    }).join('');
+
+    Modal.open({
+      title: T('reactor.connect.title', '连接到虚拟机'),
+      size: 'small',
+      bodyHTML: `
+        <div class="form-row">
+          <label>${T('reactor.connect.select', '选择虚拟机')}</label>
+          <select id="reactor-connect-vm">
+            <option value="">${T('reactor.connect.disconnect', '不连接')}</option>
+            ${options}
+          </select>
+        </div>
+        <p class="hint" style="margin:8px 0 0;color:var(--fg-muted);font-size:12px;line-height:1.6;">
+          ${escapeHTML(T('reactor.connect.hint', '连接后该设备只会出现在所选虚拟机的组件列表中，相当于接上一条线。'))}
+        </p>
+      `,
+      footerHTML: `
+        <button class="btn" data-action="modal-close">${T('wizard.cancel', '取消')}</button>
+        <button class="btn btn-primary" id="reactor-connect-save">${T('reactor.connect.save', '连接')}</button>
+      `,
+      onMount(body, footer) {
+        const cancel = footer.querySelector('[data-action="modal-close"]');
+        if (cancel) cancel.addEventListener('click', () => Modal.close());
+
+        const save = footer.querySelector('#reactor-connect-save');
+        save.addEventListener('click', async () => {
+          const vm = body.querySelector('#reactor-connect-vm').value || null;
+          save.disabled = true;
+          try {
+            const r = await App.api(`mods/${encodeURIComponent(view.name)}/connect`, {
+              method: 'POST',
+              body: { vm },
+            });
+            if (r && r.error) throw new Error(r.error);
+            Modal.close();
+            if (window.App && App.setStatus) {
+              App.setStatus(vm
+                ? I18N.t('reactor.connect.done', { vm })
+                : T('reactor.connect.cleared', '已断开连接'));
+            }
+            reload(view.name);
+            if (window.App && App.refreshMods) App.refreshMods();
+          } catch (e) {
+            save.disabled = false;
+            alert(`${T('reactor.connect.failed', '连接失败')}: ${e.message}`);
+          }
+        });
+      },
     });
   }
 

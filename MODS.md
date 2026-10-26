@@ -560,7 +560,9 @@ Mods/
 核电站是**机器类设备**，不是计算机：`Mods/<名称>/` 下只有 `mod.json` 与 `reactor.json`，没有 EFI、启动盘、APU、内存或屏幕，也不会启动 Lua 进程。它在组件总线上以 `reactor` 组件的形式出现，由其它计算机访问（见 9.4）。
 
 - 配置弹窗只有反应堆 GUI，没有「EFI 程序」与「硬件」页签。
-- 设备页的页签为「☢ 反应堆」与「物品 / 状态」；工具栏没有启动 / 停止 / 重启，地址显示为「组件地址」（双击可复制）。
+- 设备页的页签为「☢ 反应堆」与「物品 / 状态」；地址显示为「组件地址」（双击可复制）。
+- 设备页与顶部工具栏都提供启动 / 停止（对应反应堆运行开关）
+- 「连接到虚拟机」可选择一台虚拟机接上设备（相当于有线连接）：连接后只有该虚拟机的 `component.list("reactor")` 能看到它；选「不连接」即可断开。连接关系保存在 `mod.json` 的 `connectedVm` 字段。
 
 - 配置弹窗显示 IC2 原版风格的灰色反应堆 GUI。
 - 设备页第一个标签页是 **☢ 反应堆**：只读 2D 面板，展示每个格子的组件、等级、脉冲、产电、发热、吸热与生效状态，点击格子可查看该位置的完整信息；下方还有一张全部组件的明细表。
@@ -603,7 +605,7 @@ Mods/
 
 旧布局里的 `fuel_rod` / `coolant_cell` / `condensator` 会在读取时自动升级为 `uranium_1x` / `coolant_10k` / `condensator_20k`。
 
-相关 API：`GET/PUT /api/mods/:name/reactor`，响应中的 `stats.cells` 是逐格信息、`runtime` 是运行时快照；`POST /api/mods/:name/reactor` 复位堆芯。计算采用适合模拟器的简化规则，用于配置验证和状态展示；真实 IC2 的完整热传导/脉冲公式更复杂。
+相关 API：`GET/PUT /api/mods/:name/reactor`，响应中的 `stats.cells` 是逐格信息、`runtime` 是运行时快照；`POST /api/mods/:name/reactor` 复位堆芯；`POST /api/mods/:name/reactor-active`（`{ active }`）切换运行开关；`POST /api/mods/:name/connect`（`{ vm }`，传 `null` 断开）设置连接的目标虚拟机。计算采用适合模拟器的简化规则，用于配置验证和状态展示；真实 IC2 的完整热传导/脉冲公式更复杂。
 
 ### 9.3 设备专属配置（机器人 / 无人机）
 
@@ -661,7 +663,7 @@ print(mods.getOffhand())            -- 副手工具
 
 ### 9.4 核电站组件 API（component reactor）
 
-核电站通过设备总线暴露给所有虚拟机（相当于适配器接入组件网络）：`component.list("reactor")` 能看到它，`component.reactor` 是主组件。
+核电站通过设备总线暴露给**已连接的虚拟机**（相当于用线接到那台计算机）：只有该虚拟机的 `component.list("reactor")` 能看到它，`component.reactor` 是主组件。未连接时任何虚拟机都看不到该组件。
 
 ```lua
 local component = require("component")

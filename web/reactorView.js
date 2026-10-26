@@ -705,9 +705,13 @@ const ReactorView = (() => {
         </div>
         ${runtimeBlockHTML(runtime)}
         <div class="ic2-info-actions">
+          <span class="ic2-conn ${data && data.connectedVm ? 'on' : ''}" data-role="conn-state">${data && data.connectedVm
+            ? escapeHTML(T('reactor.connect.connected', '已连接: {vm}').replace('{vm}', data.connectedVm))
+            : escapeHTML(T('reactor.connect.none', '未连接'))}</span>
           <button type="button" class="ic2-tool-btn" data-role="reactor-start" ${config.active ? 'disabled' : ''}>${escapeHTML(T('vm.start', '▶ 启动'))}</button>
           <button type="button" class="ic2-tool-btn" data-role="reactor-stop" ${config.active ? '' : 'disabled'}>${escapeHTML(T('vm.stop', '■ 停止'))}</button>
           <button type="button" class="ic2-tool-btn" data-role="reset-core">${escapeHTML(T('reactor.info.reset-core', '复位堆芯'))}</button>
+          <button type="button" class="ic2-tool-btn" data-role="connect">${escapeHTML(T('reactor.connect.button', '连接到虚拟机'))}</button>
         </div>
         <div class="ic2-info-body">
           <div class="ic2-info-grid-wrap">

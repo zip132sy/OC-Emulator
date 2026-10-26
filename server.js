@@ -697,6 +697,15 @@ async function handleApi(req, res, body) {
             return json(res, { error: e.message }, 400);
           }
         }
+
+        if (action === 'connect' && method === 'POST') {
+          try {
+            const payload = JSON.parse(body || '{}');
+            return json(res, modsManager.connectDevice(modName, payload.vm || null));
+          } catch (e) {
+            return json(res, { error: e.message }, 400);
+          }
+        }
       }
     }
 
@@ -945,6 +954,8 @@ async function handleApi(req, res, body) {
         }
         if (method === 'DELETE') {
           vmManager.delete(vmName);
+          // 断开指向这台虚拟机的设备接线, 避免悬空连接
+          try { modsManager.clearVmConnections(vmName); } catch { /* 忽略清理失败 */ }
           return json(res, { ok: true });
         }
       }
