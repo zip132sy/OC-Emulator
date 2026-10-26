@@ -98,7 +98,7 @@ print(mods.help())          -- 查看完整的 OC 原版 API 映射
 - 「⚙ 配置」对计算机类设备可编辑 EFI 程序和硬件（APU / 内存 / 屏幕 / 扩展卡 / 无线强度），保存后可自动重启生效。
 - 机器人和无人机各有专属配置页：机器人可设置主手 / 副手工具、物品栏格数与内部储罐；无人机可设置最大速度、加速度与物品栏格数。
 - 电脑使用扩展卡中的无线网卡（T1 / T2 均可）连接计算机类设备的 7777 端口即可远程控制；双击工具栏中的无线地址即可复制。
-- 核电站是机器类设备：没有 EFI / 硬盘，只有 **☢ 反应堆** 与 **物品 / 状态** 两个页签；面板与顶部工具栏都提供启动 / 停止。点击「连接到虚拟机」选择一台虚拟机后，它通过**红石 I/O 端口**接到那台计算机，同时提供一个 `reactor_chamber` 组件（兼容 MineOS 的 IC2Reactors.app）。设备页点击任意格子可以看到该组件的耐久，也可通过 `getComponentDurability(slot)` 读取。温度达到上限时反应堆会自动停机。控制与遥测示例：
+- 核电站是机器类设备：没有 EFI / 硬盘，只有 **☢ 反应堆** 与 **物品 / 状态** 两个页签；面板与顶部工具栏都提供启动 / 停止。点击「连接到虚拟机」选择一台虚拟机后，它通过**红石 I/O 端口**接到那台计算机，同时提供一个 `reactor_chamber` 组件（兼容 MineOS 的 IC2Reactors.app）。设备页的格位按剩余耐久填充背景（类似电池电量），悬浮或点击可看具体数值，也可通过 `getComponentDurability(slot)` 读取；红石 I/O 的 6~9 号输入通道同样输出耐久比例。温度达到上限时反应堆会自动停机。控制与遥测示例：
 
   ```lua
   local component = require("component")
@@ -106,6 +106,8 @@ print(mods.help())          -- 查看完整的 OC 原版 API 映射
   local redstone = component.redstone
   print(chamber.getHeat(), chamber.getMaxHeat(), chamber.getReactorEUOutput())
   print(chamber.getTemperature(), chamber.getMaxTemperature())
+  print(chamber.getComponentDurabilityRatio(0), chamber.getDurabilityRatio("fuel"))
+  print(redstone.getInput(6), redstone.getInput(9)) -- 燃料棒 / 全部组件最低耐久
   chamber.setTemperature(5000)             -- 写入堆芯温度（°C），越界自动夹取
   redstone.setOutput(3, 15)                -- 任意通道均可：> 0 启动，0 停止
   ```

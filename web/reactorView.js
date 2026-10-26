@@ -241,6 +241,20 @@ const ReactorView = (() => {
     return stats.status;
   }
 
+  // 组件耐久: 没有最大耐久的组件返回 null
+  function durabilityInfo(cell) {
+    if (!cell || !Number.isFinite(cell.maxDurability) || cell.maxDurability <= 0) return null;
+    const max = cell.maxDurability;
+    const cur = Math.max(0, Math.min(max, Number(cell.durability) || 0));
+    return { cur, max, ratio: cur / max, pct: Math.round((cur / max) * 100) };
+  }
+
+  function durabilityLabel(cell) {
+    const d = durabilityInfo(cell);
+    if (!d) return '';
+    return `${T('reactor.info.durability', '耐久')} ${fmtNum(d.cur)} / ${fmtNum(d.max)} (${d.pct}%)`;
+  }
+
   // 单个格子的信息文本 (配置 GUI 的 tooltip 与 2D 面板的明细共用)
   function cellSummary(parts, cell) {
     if (!cell) return T('reactor.cell-empty', '空槽');
@@ -255,6 +269,13 @@ const ReactorView = (() => {
       return `${name} · ${fmtNum(cell.capacity)} · ${state}`;
     }
     return `${name} · ${fmtNum(cell.capacity)}`;
+  }
+
+  // 格位悬浮提示: 组件信息 + 区间 + 具体耐久
+  function slotTipText(parts, cell, r, c) {
+    const dur = durabilityLabel(cell);
+    const base = `${cellSummary(parts, cell)} (${r + 1}, ${c + 1})`;
+    return dur ? `${base}\n${dur}` : base;
   }
 
   function cellClass(parts, id) {
@@ -684,6 +705,26 @@ const ReactorView = (() => {
       setBar('hull-bar', runtime.hullRatio);
       setBar('cap-bar', runtime.capacityRatio);
     }
+    // 格位背景的耐久填充与悬浮提示随运行时间变化
+    const byPos = new Map(stats.cells.map(cell => [`${cell.r}:${cell.c}`, cell]));
+    root.querySelectorAll('.ic2-slot[data-r]').forEach(btn => {
+      const r = parseInt(btn.dataset.r, 10);
+      const c = parseInt(btn.dataset.c, 10);
+      const cell = byPos.get(`${r}:${c}`) || null;
+      const dur = durabilityInfo(cell);
+      let fill = btn.querySelector('.ic2-slot-fill');
+      if (dur) {
+        if (!fill) {
+          fill = document.createElement('i');
+          fill.className = 'ic2-slot-fill';
+          btn.insertBefore(fill, btn.firstChild);
+        }
+        fill.style.height = (dur.ratio * 100).toFixed(1) + '%';
+      } else if (fill) {
+        fill.remove();
+      }
+      btn.title = slotTipText(parts, cell, r, c);
+    });
     // 耐久随运行时间变化, 重绘当前选中格子的详情
     if (typeof root.__ic2Detail === 'function') root.__ic2Detail();
     return stats;
@@ -771,10 +812,12 @@ const ReactorView = (() => {
       const info = byPos.get(`${r}:${c}`);
       const sel = root.__ic2Sel;
       const isSel = sel && sel.r === r && sel.c === c;
-      const tip = `${cellSummary(parts, info)} (${r + 1}, ${c + 1})`;
+      const dur = durabilityInfo(info);
+      const fill = dur ? `<i class="ic2-slot-fill" style="height:${(dur.ratio * 100).toFixed(1)}%"></i>` : '';
       return `<button type="button" class="ic2-slot ${cellClass(parts, id)} ${isSel ? 'selected' : ''}"
-        data-r="${r}" data-c="${c}" title="${escapeHTML(tip)}" aria-label="${escapeHTML(partLabel(parts, id))}">
-        ${p ? p.icon : ''}
+        data-r="${r}" data-c="${c}" title="${escapeHTML(slotTipText(parts, info, r, c))}" aria-label="${escapeHTML(partLabel(parts, id))}">
+        ${fill}
+        <span class="ic2-slot-icon">${p ? p.icon : ''}</span>
         ${p && p.tier ? `<span class="ic2-slot-tier">${escapeHTML(p.tier)}</span>` : ''}
       </button>`;
     }

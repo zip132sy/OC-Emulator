@@ -3688,24 +3688,61 @@ extComponents.makeReactorChamber = function(address)
   function dev.getSize() return tonumber(S().columns) or 0, tonumber(S().rows) or 0 end
   function dev.slotCount() return (tonumber(S().columns) or 0) * (tonumber(S().rows) or 0) end
   dev.getSlotCount = dev.slotCount
-  function dev.getStackInSlot(slot)
+  local function slotAt(slot)
     local index = tonumber(slot)
-    if not index then return nil end
     local slots = S().slots
-    if type(slots) ~= "table" then return nil end
+    if not index or type(slots) ~= "table" then return nil end
     local item = slots[index + 1]
     if type(item) ~= "table" then return nil end
     return item
   end
+
+  function dev.getStackInSlot(slot) return slotAt(slot) end
   dev.getComponentInfo = dev.getStackInSlot
 
   -- 组件耐久: 返回当前耐久, 最大耐久; 空槽返回 0, 0
   function dev.getComponentDurability(slot)
-    local item = dev.getStackInSlot(slot)
+    local item = slotAt(slot)
     if not item then return 0, 0 end
     return tonumber(item.durability) or 0, tonumber(item.maxDurability) or 0
   end
   dev.getSlotDurability = dev.getComponentDurability
+
+  -- 组件剩余耐久比例 (0 ~ 1); 空槽或没有耐久的组件返回 0
+  function dev.getComponentDurabilityRatio(slot)
+    local item = slotAt(slot)
+    if not item then return 0 end
+    local max = tonumber(item.maxDurability) or 0
+    if max <= 0 then return 0 end
+    local cur = tonumber(item.durability) or 0
+    if cur < 0 then cur = 0 elseif cur > max then cur = max end
+    return cur / max
+  end
+
+  local function lowestDurability(category)
+    local s = S()
+    local slots = s.slots
+    if type(slots) ~= "table" then return nil end
+    local total = (tonumber(s.columns) or 0) * (tonumber(s.rows) or 0)
+    local min
+    for i = 1, total do
+      local item = slots[i]
+      local max = type(item) == "table" and (tonumber(item.maxDurability) or 0) or 0
+      if max > 0 and (category == nil or item.category == category) then
+        local cur = tonumber(item.durability) or 0
+        local r = cur / max
+        if r < 0 then r = 0 elseif r > 1 then r = 1 end
+        if min == nil or r < min then min = r end
+      end
+    end
+    return min
+  end
+
+  -- 同类组件中最低的耐久比例 (0 ~ 1); category 省略表示全部组件, 无对应组件返回 0
+  function dev.getDurabilityRatio(category)
+    local r = lowestDurability(category)
+    return r or 0
+  end
   function dev.getStats()
     local s = S()
     return {
@@ -3751,10 +3788,39 @@ extComponents.makeRedstone = function(address)
     return math.floor(r * 15 + 0.5)
   end
 
+  -- 同类组件中最低的耐久比例; 无对应组件返回 nil
+  local function lowestDurability(category)
+    local s = S()
+    local slots = s.slots
+    if type(slots) ~= "table" then return nil end
+    local total = (tonumber(s.columns) or 0) * (tonumber(s.rows) or 0)
+    local min
+    for i = 1, total do
+      local item = slots[i]
+      local max = type(item) == "table" and (tonumber(item.maxDurability) or 0) or 0
+      if max > 0 and (category == nil or item.category == category) then
+        local cur = tonumber(item.durability) or 0
+        local r = cur / max
+        if r < 0 then r = 0 elseif r > 1 then r = 1 end
+        if min == nil or r < min then min = r end
+      end
+    end
+    return min
+  end
+
+  -- 耐久比例换算成 0~15 信号; 没有对应组件时返回 0
+  local function durabilitySignal(category)
+    local r = lowestDurability(category)
+    if r == nil then return 0 end
+    return clamp(r * 15 + 0.5)
+  end
+
   -- 输入通道 (反应堆 -> 计算机)
   --   0: 堆芯热量百分比   1: EU/t (每 100 EU/t 一档, 上限 15)
-  --   2: 燃料棒数量       3: 状态 (off 0 / idle 3 / stable 8 / warning 12 / critical 15)
+  --   2: 燃料棒数量       3: 状态 (off 0 / idle 3 / stable 8 / warning 12 / critical、overheat 15)
   --   4: 剩余吸热百分比   5: 是否运行 (0 / 15)
+  --   6: 燃料棒最低耐久   7: 冷却单元最低耐久
+  --   8: 冷凝模块最低耐久 9: 全部组件最低耐久 (均为百分比 × 15)
   function dev.getInput(side)
     side = tonumber(side) or 0
     local s = S()
@@ -3770,6 +3836,14 @@ extComponents.makeRedstone = function(address)
       return ratio(s.remainingCapacity, s.totalCapacity)
     elseif side == 5 then
       return (s.active == true) and 15 or 0
+    elseif side == 6 then
+      return durabilitySignal("fuel")
+    elseif side == 7 then
+      return durabilitySignal("coolant")
+    elseif side == 8 then
+      return durabilitySignal("condensator")
+    elseif side == 9 then
+      return durabilitySignal(nil)
     end
     return 0
   end
@@ -3812,12 +3886,12 @@ extComponents.makeRedstone = function(address)
     if s.active == true then mask = mask + 1 end
     if s.status == "stable" then mask = mask + 2 end
     if s.status == "warning" then mask = mask + 4 end
-    if s.status == "critical" then mask = mask + 8 end
+    if s.status == "critical" or s.status == "overheat" then mask = mask + 8 end
     return mask
   end
 
   function dev.getSides()
-    return { 0, 1, 2, 3, 4, 5 }
+    return { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9 }
   end
 
   return dev

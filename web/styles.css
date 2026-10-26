@@ -1642,7 +1642,22 @@ html, body {
 .ic2-slot.filled.condensator { background: #b78fd6; }
 .ic2-slot:focus { outline: 2px solid #ffd700; outline-offset: -2px; }
 .ic2-slot.selected { outline: 2px solid #ffd700; outline-offset: -2px; }
+/* 耐久填充: 从底部按剩余耐久比例向上填充 */
+.ic2-slot-fill {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 0;
+  background: rgba(255, 255, 255, 0.55);
+  pointer-events: none;
+}
+.ic2-slot-icon {
+  position: relative;
+  z-index: 1;
+}
 .ic2-slot-tier {
+  z-index: 1;
   position: absolute;
   right: 1px;
   bottom: 0;
