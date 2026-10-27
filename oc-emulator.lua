@@ -2083,8 +2083,7 @@ gpu.setDepth = function(d)
   end
   return d
 end
--- 离屏缓冲 (OC 1.7 GPU API): 记录每一块缓冲的分辨率与当前绑定状态。
--- 模拟器的绘制始终输出到屏幕, 缓冲只提供分配 / 释放 / 切换的接口。
+-- 离屏缓冲 (OC 1.7 GPU API): 记录分辨率与绑定状态, 绘制仍输出到屏幕
 gpu._buffers = {}
 gpu._nextBuffer = 1
 gpu._activeBuffer = 0
@@ -3841,7 +3840,7 @@ extComponents.makeReactorChamber = function(address)
 end
 
 -- 传动器组件: 侧面 0 = 反应堆堆芯, 1 = 燃料箱, 2 = 废料箱
--- 库存快照随 ext_state 每秒下发, transferItem 通过 ext_command 交给服务端执行
+-- 库存内容随 ext_state 每秒刷新, transferItem 通过 ext_command 交给服务端执行
 extComponents.makeTransposer = function(address)
   local dev = { address = address, type = "transposer", _state = {} }
 

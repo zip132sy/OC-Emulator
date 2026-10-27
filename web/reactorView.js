@@ -548,7 +548,7 @@ const ReactorView = (() => {
       updateStats();
     }
 
-    // ---------- 燃料箱 / 废料箱 (传动器的两个虚拟库存) ----------
+    // ---------- 燃料箱 / 废料箱 ----------
     const invEl = root.querySelector('[data-role="inventory"]');
     const inventory = { items: null, fuel: [], waste: [] };
 
@@ -613,7 +613,7 @@ const ReactorView = (() => {
         inventory.waste = data.waste;
         renderInventory();
       } catch {
-        /* 请求失败时保留当前显示 */
+        /* 保持当前显示 */
       }
     }
 
@@ -626,7 +626,7 @@ const ReactorView = (() => {
         inventory.waste = Array.isArray(data.waste) ? data.waste : [];
         renderInventory();
       } catch {
-        /* 离线时隐藏库存区域 */
+        /* 库存区留空 */
       }
     }
 
