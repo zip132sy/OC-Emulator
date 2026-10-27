@@ -4030,6 +4030,11 @@ extComponents.makeRedstone = function(address, meta)
         local value = tonumber(outputs[side + 1])
         if value then return clamp(value) end
       end
+      return 0
+    end
+    -- 反应堆端口: 输出值跟随实际开关状态, 便于 IC2Reactors 初始化按钮
+    if S().active ~= nil then
+      return S().active == true and 15 or 0
     end
     return dev._out[side] or 0
   end

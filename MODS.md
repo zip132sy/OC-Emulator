@@ -730,9 +730,9 @@ print(mods.getOffhand())            -- 副手工具
 
 - `setOutput(side, value)`：**任意通道**都可以控制开关，`value > 0` 运行、`0` 停止（写回 `reactor.json`）。
 - `setBundledOutput(side, mask)`：任意通道的 bit0 为 1 表示运行。
-- `getOutput(side)` / `getBundledOutput(side)` 返回最近一次写入的值。
+- `getOutput(side)` 返回 `15 / 0`，跟随反应堆实际开关状态；`getBundledOutput(side)` 返回最近一次写入的值。
 
-IC2Reactors.app 会为每台核电站选择一个 I/O 端口和侧面，因此这里不限定 side。
+IC2Reactors.app 会为每台核电站选择一个 I/O 端口和侧面，因此这里不限定 side。使用时需要先在每台反应堆面板的 I/O 下拉框里选中本反应堆的 redstone 地址；未选择时单机按钮是灰的，MASTER ENABLE / DISABLE 也会跳过它。
 
 **redstone API 一览**
 
@@ -741,7 +741,7 @@ IC2Reactors.app 会为每台核电站选择一个 I/O 端口和侧面，因此�
 | `getInput(side)` / `getComparatorInput(side)` | number | 读取反应堆状态对应的红石信号 |
 | `getBundledInput(side)` | number | 读取状态位（仅通道 0 有值） |
 | `setOutput(side, value)` | number | 写输出信号控制开关 |
-| `getOutput(side)` | number | 最近写入的输出值 |
+| `getOutput(side)` | number | `15 / 0`，跟随反应堆开关状态 |
 | `setBundledOutput(side, mask)` | number | 写捆绑输出控制开关 |
 | `getBundledOutput(side)` | number | 最近写入的捆绑输出 |
 | `getSides()` | table | `{0,1,2,3,4,5,6,7,8,9,10,11,12,13}` |
