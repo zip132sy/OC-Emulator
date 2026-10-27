@@ -188,18 +188,22 @@ const ReactorView = (() => {
 
     let status = 'idle';
     let safeSeconds = null;
+    // 外壳自身散热: 本体 1 + 每个扩展舱 2
+    const netHeat = heatPerSecond - (1 + (columns - MIN_COLUMNS) * 2);
     if (!config.active) {
       status = 'off';
     } else if (fuelRods === 0) {
       status = 'idle';
-    } else if (heatPerSecond > 0 && effectiveHeatCapacity <= 0) {
+    } else if (netHeat > 0 && effectiveHeatCapacity <= 0) {
       status = 'critical';
       safeSeconds = 0;
-    } else if (heatPerSecond > 0) {
-      safeSeconds = effectiveHeatCapacity / heatPerSecond;
+    } else if (netHeat > 0) {
+      safeSeconds = effectiveHeatCapacity / netHeat;
       if (safeSeconds < 60) status = 'critical';
       else if (safeSeconds < 600) status = 'warning';
       else status = 'stable';
+    } else {
+      status = 'stable';
     }
 
     return {
@@ -215,6 +219,7 @@ const ReactorView = (() => {
       heatCapacity,
       effectiveHeatCapacity,
       hullHeatCapacity: 10000 + (columns - MIN_COLUMNS) * 1000,
+      hullCooling: 1 + (columns - MIN_COLUMNS) * 2,
       safeSeconds,
       status,
       totalSlots: columns * ROWS,
@@ -385,6 +390,10 @@ const ReactorView = (() => {
               <b data-stat="capacity">0</b>
             </div>
             <div class="ic2-gauge">
+              <span>${escapeHTML(T('reactor.hull-cooling', '外壳散热'))}</span>
+              <b data-stat="hull-cooling">0</b>
+            </div>
+            <div class="ic2-gauge">
               <span>${escapeHTML(T('reactor.safe-time', '安全时间'))}</span>
               <b data-stat="safe">∞</b>
             </div>
@@ -510,6 +519,8 @@ const ReactorView = (() => {
         Number.isFinite(stats.heatPerSecond) ? stats.heatPerSecond : stats.heatPerTick * 20
       );
       root.querySelector('[data-stat="capacity"]').textContent = fmtNum(stats.effectiveHeatCapacity);
+      const coolingEl = root.querySelector('[data-stat="hull-cooling"]');
+      if (coolingEl) coolingEl.textContent = `${stats.hullCooling} /s`;
       root.querySelector('[data-stat="safe"]').textContent = formatSafeTime(stats.safeSeconds);
       statusEl.className = `ic2-status ${stats.status}`;
       statusEl.textContent = T(`reactor.status.${stats.status}`, stats.status);
@@ -669,6 +680,8 @@ const ReactorView = (() => {
         Number.isFinite(stats.heatPerSecond) ? stats.heatPerSecond : stats.heatPerTick * 20
       );
       root.querySelector('[data-stat="capacity"]').textContent = fmtNum(stats.effectiveHeatCapacity);
+      const coolingEl = root.querySelector('[data-stat="hull-cooling"]');
+      if (coolingEl) coolingEl.textContent = `${stats.hullCooling} /s`;
       root.querySelector('[data-stat="safe"]').textContent = formatSafeTime(stats.safeSeconds);
       statusEl.className = `ic2-status ${stats.status}`;
       statusEl.textContent = T(`reactor.status.${stats.status}`, stats.status);
@@ -835,6 +848,7 @@ const ReactorView = (() => {
           <div class="ic2-info-gauge"><span>${escapeHTML(T('reactor.eu', 'EU/t'))}</span><b data-info="eu">${liveEu}</b></div>
           <div class="ic2-info-gauge"><span>${escapeHTML(T('reactor.heat', '热量/秒'))}</span><b data-info="heat">${liveHeat}</b></div>
           <div class="ic2-info-gauge"><span>${escapeHTML(T('reactor.heat-capacity', '吸热容量'))}</span><b data-info="capacity">${fmtNum(stats.effectiveHeatCapacity)}</b></div>
+          <div class="ic2-info-gauge"><span>${escapeHTML(T('reactor.hull-cooling', '外壳散热'))}</span><b>${1 + (stats.columns - MIN_COLUMNS) * 2} /s</b></div>
           <div class="ic2-info-gauge"><span>${escapeHTML(T('reactor.safe-time', '安全时间'))}</span><b data-info="safe">${formatSafeTime(runtime && runtime.running ? runtime.safeSeconds : stats.safeSeconds)}</b></div>
           <div class="ic2-info-gauge"><span>${escapeHTML(T('reactor.info.active-rods', '活跃燃料棒'))}</span><b data-info="rods">${activeRods} / ${stats.fuelRods}</b></div>
           <div class="ic2-info-gauge"><span>${escapeHTML(T('reactor.info.used', '占用'))}</span><b>${stats.usedSlots} / ${stats.totalSlots}</b></div>
