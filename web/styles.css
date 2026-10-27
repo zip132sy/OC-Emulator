@@ -1775,6 +1775,39 @@ html, body {
 }
 .ic2-tool-btn:hover { background: #aaa; }
 .ic2-hint { margin-top: 5px; font-size: 10px; line-height: 1.5; color: #555; }
+/* 燃料箱 / 废料箱 */
+.ic2-inventory {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid #8a8a8a;
+}
+.ic2-inv-head {
+  font-size: 10px;
+  font-weight: 700;
+  color: #444;
+  letter-spacing: 0.5px;
+}
+.ic2-inv-grid { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 6px; }
+.ic2-inv-box { flex: 1 1 220px; display: flex; flex-direction: column; gap: 4px; }
+.ic2-inv-title { font-size: 11px; font-weight: 700; color: #222; }
+.ic2-inv-list { display: flex; flex-direction: column; gap: 3px; min-height: 28px; }
+.ic2-inv-row { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #222; }
+.ic2-inv-row span { flex: 1; }
+.ic2-inv-row b { color: #555; font-family: var(--font-mono); }
+.ic2-inv-empty { font-size: 10px; color: #777; }
+.ic2-inv-add { display: flex; gap: 4px; }
+.ic2-inv-add select { flex: 1; min-width: 0; font-size: 11px; }
+.ic2-inv-btn {
+  padding: 1px 7px;
+  font-size: 11px;
+  color: #222;
+  background: #b0b0b0;
+  border: 2px solid #555;
+  border-top-color: #e0e0e0;
+  border-left-color: #e0e0e0;
+  cursor: pointer;
+}
+.ic2-inv-btn:hover { background: #c0c0c0; }
 .ic2-actions {
   display: flex;
   align-items: center;

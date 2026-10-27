@@ -409,6 +409,7 @@ const ReactorView = (() => {
           </div>
         </div>
         <div class="ic2-palette" data-role="palette"></div>
+        <div class="ic2-inventory" data-role="inventory"></div>
         <div class="ic2-hint">${escapeHTML(T('reactor.design-hint', '统计按冷却单元满容量计算；实际运行状态请看设备页的「反应堆」面板。'))}</div>
         <div class="ic2-actions">
           <button type="button" class="ic2-tool-btn" data-action="clear">${escapeHTML(T('reactor.clear', '清空'))}</button>
@@ -546,6 +547,103 @@ const ReactorView = (() => {
       renderGrid();
       updateStats();
     }
+
+    // ---------- 燃料箱 / 废料箱 (传动器的两个虚拟库存) ----------
+    const invEl = root.querySelector('[data-role="inventory"]');
+    const inventory = { items: null, fuel: [], waste: [] };
+
+    function invList(box) {
+      return box === 'waste' ? inventory.waste : inventory.fuel;
+    }
+
+    function invCounts(list) {
+      const map = {};
+      for (const entry of list) {
+        if (!entry || !inventory.items || !inventory.items[entry.id]) continue;
+        map[entry.id] = (map[entry.id] || 0) + 1;
+      }
+      return map;
+    }
+
+    function renderInventory() {
+      if (!inventory.items) {
+        invEl.innerHTML = '';
+        return;
+      }
+      const ids = Object.keys(inventory.items);
+      const options = ids.map(id =>
+        `<option value="${id}">${escapeHTML(inventory.items[id].label || id)}</option>`).join('');
+      const boxHTML = (key, title) => {
+        const counts = invCounts(invList(key));
+        const rows = ids.filter(id => counts[id]).map(id => `
+          <div class="ic2-inv-row">
+            <span>${escapeHTML(inventory.items[id].label || id)}</span>
+            <b>×${counts[id]}</b>
+            <button type="button" class="ic2-inv-btn" data-box="${key}" data-remove="${id}"
+              title="${escapeHTML(T('reactor.inventory.remove', '取出一个'))}">−</button>
+          </div>`).join('')
+          || `<div class="ic2-inv-empty">${escapeHTML(T('reactor.inventory.empty', '空'))}</div>`;
+        return `<div class="ic2-inv-box">
+          <div class="ic2-inv-title">${escapeHTML(title)}</div>
+          <div class="ic2-inv-list">${rows}</div>
+          <div class="ic2-inv-add">
+            <select data-add-select="${key}">${options}</select>
+            <button type="button" class="ic2-inv-btn" data-box="${key}" data-add="1"
+              title="${escapeHTML(T('reactor.inventory.add', '放入一个'))}">＋</button>
+          </div>
+        </div>`;
+      };
+      invEl.innerHTML = `
+        <div class="ic2-inv-head">${escapeHTML(T('reactor.inventory.title', '燃料箱 / 废料箱'))}</div>
+        <div class="ic2-inv-grid">
+          ${boxHTML('fuel', T('reactor.inventory.fuel', '燃料箱'))}
+          ${boxHTML('waste', T('reactor.inventory.waste', '废料箱'))}
+        </div>
+        <div class="ic2-hint">${escapeHTML(T('reactor.inventory.hint', '传动器可以在这两个箱子和堆芯之间搬运物品；侧面 0 = 堆芯，1 = 燃料箱，2 = 废料箱。'))}</div>`;
+    }
+
+    async function postInventory(payload) {
+      try {
+        const data = await App.api(`mods/${encodeURIComponent(modName)}/reactor-inventory`, {
+          method: 'POST',
+          body: payload,
+        });
+        if (!data || !Array.isArray(data.fuel) || !Array.isArray(data.waste)) return;
+        inventory.fuel = data.fuel;
+        inventory.waste = data.waste;
+        renderInventory();
+      } catch {
+        /* 请求失败时保留当前显示 */
+      }
+    }
+
+    async function loadInventory() {
+      try {
+        const data = await App.api(`mods/${encodeURIComponent(modName)}/reactor-inventory`);
+        if (!data || !data.items) return;
+        inventory.items = data.items;
+        inventory.fuel = Array.isArray(data.fuel) ? data.fuel : [];
+        inventory.waste = Array.isArray(data.waste) ? data.waste : [];
+        renderInventory();
+      } catch {
+        /* 离线时隐藏库存区域 */
+      }
+    }
+
+    invEl.addEventListener('click', (e) => {
+      const btn = e.target.closest('button[data-box]');
+      if (!btn) return;
+      const box = btn.dataset.box === 'waste' ? 'waste' : 'fuel';
+      if (btn.dataset.add) {
+        const select = invEl.querySelector(`[data-add-select="${box}"]`);
+        if (select && select.value) postInventory({ box, id: select.value });
+        return;
+      }
+      const id = btn.dataset.remove;
+      if (!id) return;
+      const index = invList(box).findIndex(entry => entry && entry.id === id);
+      if (index >= 0) postInventory({ box, slot: index + 1 });
+    });
 
     function changeColumns(next) {
       const newColumns = clampColumns(next);
@@ -693,6 +791,7 @@ const ReactorView = (() => {
     buildPalette();
     selectPart(state.selectedPart);
     refresh();
+    loadInventory();
     return state;
   }
 

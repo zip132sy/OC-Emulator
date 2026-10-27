@@ -707,6 +707,20 @@ async function handleApi(req, res, body) {
           }
         }
 
+        // 燃料箱 / 废料箱: 传动器可访问的虚拟库存
+        if (action === 'reactor-inventory') {
+          try {
+            if (method === 'GET') return json(res, modsManager.getReactorInventory(modName));
+            if (method === 'POST') {
+              const payload = JSON.parse(body || '{}');
+              return json(res, modsManager.setReactorInventory(modName, payload));
+            }
+          } catch (e) {
+            return json(res, { error: e.message }, 400);
+          }
+          return json(res, { error: 'Method not allowed' }, 405);
+        }
+
         if (action === 'reactor-temperature') {
           try {
             if (method === 'GET') {

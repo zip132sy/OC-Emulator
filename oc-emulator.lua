@@ -2083,6 +2083,50 @@ gpu.setDepth = function(d)
   end
   return d
 end
+-- 离屏缓冲 (OC 1.7 GPU API): 记录每一块缓冲的分辨率与当前绑定状态。
+-- 模拟器的绘制始终输出到屏幕, 缓冲只提供分配 / 释放 / 切换的接口。
+gpu._buffers = {}
+gpu._nextBuffer = 1
+gpu._activeBuffer = 0
+
+gpu.allocateBuffer = function(w, h)
+  local id = gpu._nextBuffer
+  gpu._nextBuffer = id + 1
+  gpu._buffers[id] = {
+    w = math.max(1, math.min(tonumber(w) or gpu._resolution[1], gpuMaxW)),
+    h = math.max(1, math.min(tonumber(h) or gpu._resolution[2], gpuMaxH)),
+  }
+  return id
+end
+
+gpu.freeBuffer = function(id)
+  id = tonumber(id)
+  if not id or not gpu._buffers[id] then return false end
+  gpu._buffers[id] = nil
+  if gpu._activeBuffer == id then gpu._activeBuffer = 0 end
+  return true
+end
+
+gpu.freeAllBuffers = function()
+  gpu._buffers = {}
+  gpu._activeBuffer = 0
+end
+
+gpu.setActiveBuffer = function(id)
+  id = tonumber(id) or 0
+  if id ~= 0 and not gpu._buffers[id] then return false end
+  gpu._activeBuffer = id
+  return true
+end
+
+gpu.getActiveBuffer = function() return gpu._activeBuffer end
+
+gpu.getBufferSize = function(id)
+  local buffer = gpu._buffers[tonumber(id) or 0]
+  if not buffer then return gpu._resolution[1], gpu._resolution[2] end
+  return buffer.w, buffer.h
+end
+
 gpu.get = function(x, y)
   if x < 1 or x > Screen.width or y < 1 or y > Screen.height then return nil, nil end
   local ch = Screen.char[y][x]
@@ -3688,6 +3732,12 @@ extComponents.makeReactorChamber = function(address)
   end
   function dev.isActive() return S().active == true end
   function dev.getActive() return S().active == true end
+  -- 是否正在发电: 开关打开且仍有未耗尽的燃料棒
+  function dev.producesEnergy()
+    local s = S()
+    if s.active ~= true then return false end
+    return (tonumber(s.activeRods) or 0) > 0
+  end
   function dev.getSize() return tonumber(S().columns) or 0, tonumber(S().rows) or 0 end
   function dev.slotCount() return (tonumber(S().columns) or 0) * (tonumber(S().rows) or 0) end
   dev.getSlotCount = dev.slotCount
@@ -3787,6 +3837,69 @@ extComponents.makeReactorChamber = function(address)
       status = s.status,
     }
   end
+  return dev
+end
+
+-- 传动器组件: 侧面 0 = 反应堆堆芯, 1 = 燃料箱, 2 = 废料箱
+-- 库存快照随 ext_state 每秒下发, transferItem 通过 ext_command 交给服务端执行
+extComponents.makeTransposer = function(address)
+  local dev = { address = address, type = "transposer", _state = {} }
+
+  local function sideData(side)
+    local sides = type(dev._state.sides) == "table" and dev._state.sides or {}
+    return sides[tostring(tonumber(side) or 0)]
+  end
+
+  local function sideSlots(data)
+    if type(data) ~= "table" then return {}, 0 end
+    local slots = type(data.slots) == "table" and data.slots or {}
+    return slots, tonumber(data.size) or 0
+  end
+
+  function dev.getSize(side)
+    local _, size = sideSlots(sideData(side))
+    return size
+  end
+
+  function dev.getStackInSlot(side, slot)
+    local slots = sideSlots(sideData(side))
+    local index = tonumber(slot) or 1
+    if index < 1 then return nil end
+    return slots[tostring(index - 1)]
+  end
+
+  -- 库存控制器: 与 OC 的 InventoryController 一样提供 getAll / getSize / getStackInSlot
+  function dev.getAllStacks(side)
+    local slots, size = sideSlots(sideData(side))
+    local controller = { address = address .. "-" .. tostring(tonumber(side) or 0) }
+    function controller.getSize() return size end
+    -- getAll 使用 0 基槽位
+    function controller.getAll()
+      local out = {}
+      for i = 0, size - 1 do out[i] = slots[tostring(i)] end
+      return out
+    end
+    function controller.getStackInSlot(slot)
+      local index = tonumber(slot) or 1
+      if index < 1 then return nil end
+      return slots[tostring(index - 1)]
+    end
+    function controller.addItems() return 0 end
+    function controller.removeItems() return 1 end
+    return controller
+  end
+
+  -- 在侧面之间搬运一个物品; 槽位为 1 基编号, 传 0 或省略表示自动选择
+  function dev.transferItem(from, to, count, fromSlot, toSlot)
+    sendToServer({
+      type = "ext_command",
+      address = address,
+      method = "transferItem",
+      args = { from, to, count, fromSlot, toSlot },
+    })
+    return true
+  end
+
   return dev
 end
 
@@ -4102,6 +4215,7 @@ extComponents.apply = function(list)
       if not extComponents.devices[address] then
         local proxy = nil
         if ctype == "reactor_chamber" then proxy = extComponents.makeReactorChamber(address)
+        elseif ctype == "transposer" then proxy = extComponents.makeTransposer(address)
         elseif ctype == "redstone" then proxy = extComponents.makeRedstone(address, entry.meta)
         else proxy = extComponents.makeMachineComponent(address, entry.meta) end
         if proxy then

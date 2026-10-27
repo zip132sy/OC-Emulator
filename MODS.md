@@ -608,6 +608,8 @@ Mods/
 
 旧布局里的 `fuel_rod` / `coolant_cell` / `condensator` 会在读取时自动升级为 `uranium_1x` / `coolant_10k` / `condensator_20k`。
 
+`reactor.json` 还保存 `inventories.fuel` 与 `inventories.waste`：传动器可访问的两个 54 槽虚拟库存，对应配置面板下方的「燃料箱 / 废料箱」，通过 `GET/POST /api/mods/:name/reactor-inventory` 编辑。
+
 相关 API：`GET/PUT /api/mods/:name/reactor`，响应中的 `stats.cells` 是逐格信息、`runtime` 是运行时快照（含实时的 `euPerTick` / `heatPerTick` / `activeRods`）；`POST /api/mods/:name/reactor` 复位堆芯；`POST /api/mods/:name/reactor-active`（`{ active }`）切换运行开关；`POST /api/mods/:name/reactor-options`（`{ stopWhenDepleted }`）设置燃料耗尽自动停机；`POST /api/mods/:name/connect`（`{ vm }`，传 `null` 断开）设置连接的目标虚拟机。计算采用适合模拟器的简化规则，用于配置验证和状态展示；真实 IC2 的完整热传导/脉冲公式更复杂。
 
 燃料棒完全耗尽后不再发电放热，`euPerTick` / `heatPerTick` 会降为 0，状态变为 `depleted`。反应堆默认在燃料耗尽后自动停机（`reactor.json` 的 `stopWhenDepleted`，默认 `true`），可在设备页的反应堆面板关闭。
@@ -666,12 +668,13 @@ print(mods.getOffhand())            -- 副手工具
 
 相关接口：`GET /api/mods/:name` 返回 `profile`（`{ type, value, tools, limits }`），`PUT /api/mods/:name/config` 接受 `profile` 字段。
 
-### 9.4 核电站组件 API（reactor_chamber + redstone）
+### 9.4 核电站组件 API（reactor_chamber + redstone + transposer）
 
-核电站接入已连接的虚拟机后会暴露**两个组件**（都只对该虚拟机可见，未连接时不存在）：
+核电站接入已连接的虚拟机后会暴露**三个组件**（都只对该虚拟机可见，未连接时不存在）：
 
 - `reactor_chamber`：仪表，兼容 MineOS 的 **IC2Reactors.app** 等程序；另提供温度读写。
 - `redstone`：红石 I/O 控制端口，用标准 `redstone` 组件 API 读写 0~15 模拟信号。
+- `transposer`：物品搬运，用于在堆芯、燃料箱、废料箱之间移动组件。
 
 **reactor_chamber**
 
@@ -686,6 +689,7 @@ print(mods.getOffhand())            -- 副手工具
 | `getEnergyOutput()` | number | 同 `getReactorEUOutput()` |
 | `getHeatOutput()` | number | 每秒发热量（与面板「热量/秒」一致） |
 | `isActive()` / `getActive()` | boolean | 反应堆开关 |
+| `producesEnergy()` | boolean | 开关打开且仍有未耗尽的燃料棒 |
 | `getSize()` | columns, rows | 网格尺寸 |
 | `slotCount()` / `getSlotCount()` | number | 槽位总数 |
 | `getStackInSlot(slot)` / `getComponentInfo(slot)` | table / nil | 0 基槽位内容，含 `durability` / `maxDurability` |
@@ -704,6 +708,20 @@ print(mods.getOffhand())            -- 副手工具
 - 设备页的格位按「电池电量」样式用背景填充显示剩余耐久，悬浮可看具体数值；点击格子也会在「格位详情」中列出耐久与百分比。
 - 温度达到上限时反应堆会自动停机（`status` 变为 `overheat`），堆芯随后按外壳散热速率冷却；冷却到 0 后状态变为 `off`，也可以直接复位堆芯。冷却单元 / 冷凝模块在停机时不会自行冷却，会保留已存热量。
 - 运行开关可通过面板、红石 I/O 或 API 控制；`setTemperature` 只改变堆芯温度。
+
+**transposer**
+
+| 方法 | 返回 | 说明 |
+|---|---|---|
+| `getAllStacks(side)` | table | 库存控制器：`getAll()`（0 基槽位）、`getSize()`、`getStackInSlot(slot)` |
+| `getSize(side)` | number | 该侧面的槽位数 |
+| `getStackInSlot(side, slot)` | table / nil | 1 基槽位内容 |
+| `transferItem(from, to, count, fromSlot, toSlot)` | boolean | 搬运一个物品；槽位 1 基，传 0 或省略表示自动选择 |
+
+- 侧面映射固定：`0` = 反应堆堆芯（当前列数 × 6 格），`1` = 燃料箱，`2` = 废料箱。
+- 物品使用 IC2 名称：燃料棒为 `ic2:nuclear`，metadata 11~16 对应铀 / MOX 的单 / 双 / 四联；冷却单元 `ic2:coolant10k` / `coolant30k` / `coolant60k`；冷凝模块 `ic2:rsh_condensator` / `ic2:lzh_condensator`。
+- 燃料棒的 `damage` 是 metadata、`maxDamage` 为 0；其它组件的 `damage` 是已损耗耐久、`maxDamage` 是蓄热容量。每个栈还附带 `durability` / `maxDurability` 便于直接读取剩余耐久。
+- 燃料箱 / 废料箱在反应堆配置面板下方编辑，也可以通过 `GET/POST /api/mods/:name/reactor-inventory` 操作：`{ box: "fuel" | "waste", slot, id, durability }`，不传 `id` 表示清空该槽。
 
 **redstone 输入通道（反应堆 → 计算机，`getInput(side)`）**
 
@@ -766,7 +784,7 @@ else
 end
 ```
 
-- 有多个核电站时，`component.list("reactor_chamber")` 与 `component.list("redstone")` 会各返回对应数量。
+- 有多个核电站时，`component.list("reactor_chamber")`、`component.list("redstone")` 与 `component.list("transposer")` 会各返回对应数量。
 - 程序启动时组件即可用（设备清单在启动前写入 `devices.json`）；运行中新增或断开连接会即时同步并发出 `component_added` / `component_removed`。
 
 ### 9.5 自定义脚本机器（machine 类型）
