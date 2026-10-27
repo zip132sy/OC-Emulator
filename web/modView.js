@@ -1254,23 +1254,56 @@ const ModView = (() => {
     const reactor = meta.reactor || null;
     const stats = reactor && reactor.stats ? reactor.stats : null;
     const runtime = reactor && reactor.runtime ? reactor.runtime : null;
+    const config = reactor && reactor.config ? reactor.config : null;
+    const components = reactor && reactor.components ? reactor.components : {};
+    const inventories = config && config.inventories ? config.inventories : null;
+    const connectedVm = (reactor && reactor.connectedVm) || meta.connectedVm || '';
+
+    const componentLabel = (id) => {
+      const comp = components[id];
+      return comp && comp.label ? comp.label : String(id || '-');
+    };
+    // 燃料棒寿命固定为 10000 秒, 其它组件用蓄热容量
+    const componentMaxDurability = (id) => {
+      const comp = components[id];
+      if (!comp) return 0;
+      return comp.category === 'fuel' ? 10000 : (comp.capacity || 0);
+    };
 
     const cards = [
       { k: T('mods.card.type'), v: typeInfo(meta.type || 'reactor').label },
       { k: T('mods.card.state'), v: stateLabel(view.runtimeState), cls: view.runtimeState === 'running' ? 'ok' : '' },
       { k: T('mods.component-address', '组件地址'), v: view.address || '-' },
+      { k: T('reactor.info.connected-vm', '连接虚拟机'), v: connectedVm || T('reactor.connect.none', '未连接') },
     ];
     if (stats) {
       cards.push({ k: T('reactor.size', '大小'), v: `${stats.columns} × ${stats.rows}` });
       cards.push({ k: T('reactor.eu', 'EU/t'), v: String(stats.euPerTick) });
       cards.push({ k: T('reactor.heat', '热量/秒'), v: String(stats.heatPerSecond || 0) });
+      cards.push({ k: T('reactor.hull-cooling', '外壳散热'), v: `${stats.hullCooling || 0} /s` });
       cards.push({ k: T('reactor.heat-capacity', '吸热容量'), v: Number(stats.effectiveHeatCapacity || 0).toLocaleString() });
       cards.push({ k: T('reactor.info.fuel-rods', '燃料棒'), v: String(stats.fuelRods) });
+      cards.push({
+        k: T('reactor.info.active-rods', '活跃燃料棒'),
+        v: `${runtime ? runtime.activeRods : stats.fuelRods} / ${stats.fuelRods}`,
+      });
+      cards.push({ k: T('reactor.info.state', '状态'), v: T(`reactor.status.${stats.status}`, stats.status) });
     }
     if (runtime) {
       cards.push({ k: T('reactor.info.temperature', '温度'), v: window.ReactorView && ReactorView.temperatureRangeText
         ? ReactorView.temperatureRangeText(runtime)
         : `${Math.round(runtime.temperature || 0)} °C` });
+      cards.push({ k: T('reactor.info.hull-heat', '堆芯热量'), v: `${fmt(runtime.hullHeat, 0)} / ${fmt(stats && stats.hullHeatCapacity, 0)}` });
+      cards.push({
+        k: T('reactor.info.remaining', '剩余吸热'),
+        v: `${fmt(runtime.remainingCapacity, 0)} / ${fmt(stats && stats.effectiveHeatCapacity, 0)}`,
+      });
+      cards.push({
+        k: T('reactor.safe-time', '安全时间'),
+        v: window.ReactorView && ReactorView.formatSafeTime
+          ? ReactorView.formatSafeTime(runtime.safeSeconds)
+          : '-',
+      });
       cards.push({ k: T('reactor.info.generated', '累计发电'), v: `${Math.round(runtime.generatedEu).toLocaleString()} EU` });
       cards.push({ k: T('reactor.info.elapsed', '运行时长'), v: String(Math.floor(runtime.elapsed)) + 's' });
     }
@@ -1282,8 +1315,66 @@ const ModView = (() => {
       </div>
     `).join('');
 
+    // 堆芯里已放置的组件
+    let coreHTML = `<div class="mod-empty">${T('reactor.info.no-parts', '还没有放置任何组件')}</div>`;
+    if (stats && Array.isArray(stats.cells)) {
+      const cells = stats.cells.filter(cell => cell && cell.id);
+      if (cells.length > 0) {
+        const rows = cells.map(cell => `
+          <tr>
+            <td>${cell.r * stats.columns + cell.c + 1}</td>
+            <td>${escapeHTML(componentLabel(cell.id))}${cell.depleted ? ` (${escapeHTML(T('reactor.info.depleted', '已耗尽'))})` : ''}</td>
+            <td class="num">${fmt(cell.durability, 0)} / ${fmt(cell.maxDurability, 0)}</td>
+            <td class="num">${fmt(cell.temperature, 0)} °C</td>
+          </tr>
+        `).join('');
+        coreHTML = `
+          <table class="mod-table">
+            <tr><th>${T('common.slot')}</th><th>${T('common.item')}</th><th>${T('common.durability')}</th><th>${T('reactor.info.temperature', '温度')}</th></tr>
+            ${rows}
+          </table>`;
+      }
+    }
+
+    // 燃料箱 / 废料箱: 只列出有物品的槽位
+    const boxHTML = (title, list) => {
+      const rows = Array.isArray(list)
+        ? list.map((entry, index) => (entry && entry.id ? { slot: index + 1, entry } : null)).filter(Boolean)
+        : [];
+      if (rows.length === 0) {
+        return `<div>
+          <div class="scene-section-title">${escapeHTML(title)} (0)</div>
+          <div class="mod-empty">${T('reactor.inventory.empty', '空')}</div>
+        </div>`;
+      }
+      const trs = rows.map(({ slot, entry }) => `
+        <tr>
+          <td>${slot}</td>
+          <td>${escapeHTML(componentLabel(entry.id))}</td>
+          <td class="num">${fmt(entry.durability, 0)} / ${fmt(componentMaxDurability(entry.id), 0)}</td>
+        </tr>
+      `).join('');
+      return `<div>
+        <div class="scene-section-title">${escapeHTML(title)} (${rows.length})</div>
+        <table class="mod-table">
+          <tr><th>${T('common.slot')}</th><th>${T('common.item')}</th><th>${T('common.durability')}</th></tr>
+          ${trs}
+        </table>
+      </div>`;
+    };
+
+    const reactorSections = reactor
+      ? `<div>
+          <div class="scene-section-title">${T('reactor.section.core', '堆芯组件')}</div>
+          ${coreHTML}
+        </div>
+        ${inventories ? boxHTML(T('reactor.inventory.fuel', '燃料箱'), inventories.fuel) : ''}
+        ${inventories ? boxHTML(T('reactor.inventory.waste', '废料箱'), inventories.waste) : ''}`
+      : '';
+
     view.itemsEl.innerHTML = `
       <div class="mod-info-grid">${cardsHTML}</div>
+      ${reactorSections}
       <div class="mod-empty" style="text-align:left;">${escapeHTML(T('mods.machine-hint', '该设备不是计算机：没有 EFI、硬盘与程序，其它计算机可以通过组件访问它。'))}</div>
     `;
   }
