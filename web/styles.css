@@ -958,6 +958,40 @@ html, body {
 /* 路径输入 + 选择按钮 */
 .path-picker-row { display: flex; gap: 6px; align-items: center; }
 .path-picker-row input { flex: 1; min-width: 0; }
+/* 上传 / 下载进度 */
+.disk-progress {
+  padding: 6px 8px;
+  background: var(--bg-input);
+  border-bottom: 1px solid var(--border);
+}
+.disk-progress-label {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+.disk-progress-bar {
+  height: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.disk-progress-fill {
+  width: 0;
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.1s linear;
+}
+.disk-progress.indeterminate .disk-progress-fill {
+  width: 40%;
+  animation: disk-progress-slide 1s linear infinite;
+}
+@keyframes disk-progress-slide {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(250%); }
+}
 /* 目录选择框 */
 .dir-picker-path { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
 .dir-picker-path span {

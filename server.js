@@ -1296,6 +1296,33 @@ async function handleApi(req, res, body) {
           const fileData = diskIO.read(diskPath, innerPath);
           return json(res, { type: fileData.type, content: fileData.content, path: innerPath, ok: fileData.ok, error: fileData.error });
         }
+        // 下载内部文件: 返回原始字节, 前端据此显示下载进度
+        if (parts[3] === 'download' && method === 'GET') {
+          const innerPath = req.query.path;
+          try {
+            if (!innerPath) return json(res, { error: 'path required' }, 400);
+            let result;
+            if (mirrorFolder && !vmRunning && fs.existsSync(mirrorFolder)) {
+              result = diskIO.readFromFolder(mirrorFolder, innerPath);
+            } else {
+              result = diskIO.read(diskPath, innerPath);
+            }
+            if (!result || result.ok === false) throw new Error((result && result.error) || 'cannot read file');
+            if (result.type !== 'file') throw new Error('target is not a file');
+            const buf = Buffer.from(result.content == null ? '' : result.content, 'utf8');
+            const filename = path.basename(innerPath) || 'download';
+            res.writeHead(200, {
+              'Content-Type': 'application/octet-stream',
+              'Content-Length': buf.length,
+              'Content-Disposition': `attachment; filename="download"; filename*=UTF-8''${encodeURIComponent(filename)}`,
+              'Cache-Control': 'no-store',
+            });
+            res.end(buf);
+          } catch (e) {
+            return json(res, { error: e.message }, 400);
+          }
+          return;
+        }
         if (parts[3] === 'write' && method === 'PUT') {
           const innerPath = req.query.path;
           const data = JSON.parse(body || '{}');

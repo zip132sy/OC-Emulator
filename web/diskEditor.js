@@ -10,6 +10,7 @@
 //   POST   /api/disks/<path>/lock       锁定磁盘
 //   GET    /api/disks/<path>/tree        文件树(仅解锁后)
 //   GET    /api/disks/<path>/read?path=  读取内部文件
+//   GET    /api/disks/<path>/download?path= 下载内部文件 (带 Content-Length)
 //   PUT    /api/disks/<path>/write?path= 写入内部文件
 //   POST   /api/disks/<path>/mkdir       新建文件夹
 //   DELETE /api/disks/<path>/remove?path= 删除内部文件
@@ -71,11 +72,19 @@ const DiskEditor = (() => {
           <div class="disk-file-toolbar" id="disk-file-info-${cssEsc(diskPath)}">
             <span>${I18N.t('disk.no-file')}</span>
           </div>
+          <div class="disk-progress" id="disk-progress-${cssEsc(diskPath)}" style="display:none">
+            <div class="disk-progress-label">
+              <span data-role="progress-text"></span>
+              <span data-role="progress-pct"></span>
+            </div>
+            <div class="disk-progress-bar"><div class="disk-progress-fill" data-role="progress-fill"></div></div>
+          </div>
           <pre class="disk-file-content" id="disk-content-${cssEsc(diskPath)}" contenteditable="false" spellcheck="false">
             <span style="color:#606060">${I18N.t('disk.select-file')}</span>
           </pre>
           <div class="disk-file-toolbar" id="disk-file-actions-${cssEsc(diskPath)}" style="display:none">
             <button class="btn btn-primary" data-action="save">${I18N.t('disk.save')}</button>
+            <button class="btn" data-action="download">${I18N.t('disk.download')}</button>
             <button class="btn" data-action="delete">${I18N.t('disk.delete')}</button>
           </div>
         </div>
@@ -90,6 +99,7 @@ const DiskEditor = (() => {
 
     const actionsBar = pane.querySelector(`#disk-file-actions-${cssEsc(diskPath)}`);
     actionsBar.querySelector('button[data-action="save"]').addEventListener('click', () => saveCurrent(diskPath));
+    actionsBar.querySelector('button[data-action="download"]').addEventListener('click', () => downloadCurrent(diskPath));
     actionsBar.querySelector('button[data-action="delete"]').addEventListener('click', () => deleteCurrent(diskPath));
 
     // 文件树操作按钮
@@ -424,6 +434,69 @@ const DiskEditor = (() => {
     }
   }
 
+  // 下载当前文件: 边读边显示进度, 完成后保存到本地
+  async function downloadCurrent(diskPath) {
+    const session = getSession(diskPath);
+    const innerPath = session.selectedPath;
+    if (!innerPath) return;
+    const name = innerPath.substring(innerPath.lastIndexOf('/') + 1) || 'download';
+    const url = `disks/${diskApiPath(diskPath)}/download?path=${encodeURIComponent(innerPath)}`;
+    try {
+      showProgress(diskPath, `${I18N.t('disk.downloading')} ${name}`, null);
+      const res = await fetch('/api/' + url);
+      if (!res.ok) {
+        let message = 'HTTP ' + res.status;
+        try {
+          const data = await res.json();
+          if (data && data.error) message = data.error;
+        } catch {
+          /* 响应不是 JSON 时保留状态码 */
+        }
+        throw new Error(message);
+      }
+      const total = Number(res.headers.get('Content-Length')) || 0;
+      let blob;
+      if (res.body && typeof res.body.getReader === 'function') {
+        const reader = res.body.getReader();
+        const chunks = [];
+        let received = 0;
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (value) {
+            chunks.push(value);
+            received += value.length;
+          }
+          const sizeText = total > 0
+            ? `${formatSize(received)} / ${formatSize(total)}`
+            : formatSize(received);
+          showProgress(diskPath, `${I18N.t('disk.downloading')} ${name} ${sizeText}`,
+            total > 0 ? (received / total) * 100 : null);
+        }
+        blob = new Blob(chunks, { type: 'application/octet-stream' });
+      } else {
+        blob = await res.blob();
+      }
+      triggerDownload(blob, name);
+      App.setStatus(I18N.t('disk.download-done', { name }));
+    } catch (e) {
+      alert(I18N.t('disk.download-failed') + ': ' + e.message);
+    } finally {
+      hideProgress(diskPath);
+    }
+  }
+
+  function triggerDownload(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
   async function unlock(diskPath) {
     try {
       await App.api(`disks/${diskApiPath(diskPath)}/unlock`, { method: 'POST' });
@@ -457,6 +530,40 @@ const DiskEditor = (() => {
 
   function setStatus(diskPath, text) {
     App.setStatus(text);
+  }
+
+  // ---------- 进度显示 ----------
+
+  function progressBox(diskPath) {
+    return document.getElementById(`disk-progress-${cssEsc(diskPath)}`);
+  }
+
+  // percent 为 null 时显示不确定进度 (滑块动画)
+  function showProgress(diskPath, text, percent) {
+    const box = progressBox(diskPath);
+    if (!box) return;
+    box.style.display = '';
+    const label = box.querySelector('[data-role="progress-text"]');
+    const pct = box.querySelector('[data-role="progress-pct"]');
+    const fill = box.querySelector('[data-role="progress-fill"]');
+    if (label) label.textContent = text;
+    const known = typeof percent === 'number' && Number.isFinite(percent);
+    box.classList.toggle('indeterminate', !known);
+    if (known) {
+      const value = Math.max(0, Math.min(100, percent));
+      if (pct) pct.textContent = Math.round(value) + '%';
+      if (fill) fill.style.width = value + '%';
+    } else {
+      if (pct) pct.textContent = '';
+      if (fill) fill.style.width = '';
+    }
+  }
+
+  function hideProgress(diskPath) {
+    const box = progressBox(diskPath);
+    if (!box) return;
+    box.style.display = 'none';
+    box.classList.remove('indeterminate');
   }
 
   // ---------- 目录选择 ----------
@@ -715,23 +822,27 @@ const DiskEditor = (() => {
     if (!files || files.length === 0) return;
 
     const dir = targetDir && targetDir !== '' ? targetDir : '/';
+    const list = Array.from(files);
     let successCount = 0;
     const errors = [];
 
-    for (const file of files) {
+    for (let i = 0; i < list.length; i++) {
+      const file = list[i];
       const innerPath = joinPath(dir, file.name);
+      const prefix = `${I18N.t('disk.uploading')} ${i + 1}/${list.length}`;
       try {
+        showProgress(diskPath, `${prefix} · ${file.name}`, null);
         const content = await readFileAsText(file);
-        const result = await App.api(`disks/${diskApiPath(diskPath)}/write?path=${encodeURIComponent(innerPath)}`, {
-          method: 'PUT',
-          body: { content },
+        await uploadContent(diskPath, innerPath, content, (loaded, total) => {
+          const overall = total > 0 ? ((i + loaded / total) / list.length) * 100 : null;
+          showProgress(diskPath, `${prefix} · ${file.name}`, overall);
         });
-        if (result && result.error) throw new Error(result.error);
         successCount++;
       } catch (e) {
         errors.push(file.name + ': ' + e.message);
       }
     }
+    hideProgress(diskPath);
 
     // 展开目标目录并刷新
     session.currentDir = dir;
@@ -747,6 +858,32 @@ const DiskEditor = (() => {
       App.setStatus(I18N.t('disk.upload-summary', { ok: successCount, fail: errors.length }));
       alert(I18N.t('disk.upload-failed') + '\n' + errors.join('\n'));
     }
+  }
+
+  // 用 XHR 上传, 以便读取上传字节进度
+  function uploadContent(diskPath, innerPath, content, onProgress) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('PUT', `/api/disks/${diskApiPath(diskPath)}/write?path=${encodeURIComponent(innerPath)}`);
+      xhr.setRequestHeader('Content-Type', 'application/json');
+      if (xhr.upload && typeof onProgress === 'function') {
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable) onProgress(e.loaded, e.total);
+        };
+      }
+      xhr.onload = () => {
+        let data = null;
+        try {
+          data = JSON.parse(xhr.responseText || 'null');
+        } catch {
+          data = null;
+        }
+        if (xhr.status >= 200 && xhr.status < 300 && !(data && data.error)) resolve(data);
+        else reject(new Error((data && data.error) || ('HTTP ' + xhr.status)));
+      };
+      xhr.onerror = () => reject(new Error(I18N.t('disk.network-error')));
+      xhr.send(JSON.stringify({ content: content == null ? '' : content }));
+    });
   }
 
   function readFileAsText(file) {
