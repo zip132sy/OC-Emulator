@@ -32,6 +32,7 @@ const DiskEditor = (() => {
         expandedDirs: new Set(), // 展开的文件夹路径
         searchQuery: '',         // 搜索关键词
         currentDir: '/',         // 当前浏览的目录 (上传 / 新建时的默认位置)
+        clipboard: null,         // 右键菜单的复制 / 剪切内容 { mode, path, type }
       });
     }
     return sessions.get(diskPath);
@@ -124,6 +125,15 @@ const DiskEditor = (() => {
       const session = getSession(diskPath);
       session.searchQuery = e.target.value;
       renderTree(diskPath);
+    });
+
+    // 文件树右键菜单
+    const treeBody = pane.querySelector(`#disk-tree-${cssEsc(diskPath)}`);
+    treeBody.addEventListener('contextmenu', (e) => {
+      const row = e.target.closest('.disk-tree-row');
+      if (!row || !row.dataset.path) return;
+      e.preventDefault();
+      openContextMenu(diskPath, e.clientX, e.clientY, row.dataset.path, row.dataset.type, row);
     });
 
     // 加载信息
@@ -407,10 +417,11 @@ const DiskEditor = (() => {
     const contentEl = document.getElementById(`disk-content-${cssEsc(diskPath)}`);
     const content = contentEl.textContent;
     try {
-      await App.api(`disks/${diskApiPath(diskPath)}/write?path=${encodeURIComponent(session.selectedPath)}`, {
+      const result = await App.api(`disks/${diskApiPath(diskPath)}/write?path=${encodeURIComponent(session.selectedPath)}`, {
         method: 'PUT',
         body: { content },
       });
+      if (result && result.error) throw new Error(result.error);
       // 刷新
       await loadTree(diskPath);
       App.setStatus(I18N.t('disk.saved').replace('{path}', session.selectedPath));
@@ -422,16 +433,40 @@ const DiskEditor = (() => {
   async function deleteCurrent(diskPath) {
     const session = getSession(diskPath);
     if (!session.selectedPath) return;
-    if (!confirm(I18N.t('disk.confirm-delete').replace('{path}', session.selectedPath))) return;
+    await deletePath(diskPath, session.selectedPath);
+  }
+
+  // 删除文件或文件夹 (文件夹连同内容一起删除), 删除后立即清空选中并刷新树
+  async function deletePath(diskPath, innerPath) {
+    if (!confirm(I18N.t('disk.confirm-delete').replace('{path}', innerPath))) return;
     try {
-      await App.api(`disks/${diskApiPath(diskPath)}/remove?path=${encodeURIComponent(session.selectedPath)}`, {
-        method: 'DELETE',
-      });
-      document.getElementById(`disk-content-${cssEsc(diskPath)}`).textContent = I18N.t('disk.deleted');
+      await removeInner(diskPath, innerPath);
+      clearSelection(diskPath, innerPath);
       await loadTree(diskPath);
+      App.setStatus(I18N.t('disk.deleted-path', { name: innerPath }));
     } catch (e) {
       alert(I18N.t('disk.delete-failed') + ': ' + e.message);
     }
+  }
+
+  // 目标被删除后清空编辑器与操作栏, 避免继续对已删除的文件操作
+  function clearSelection(diskPath, removedPath) {
+    const session = getSession(diskPath);
+    const selected = session.selectedPath;
+    if (selected && (selected === removedPath || selected.startsWith(removedPath + '/'))) {
+      session.selectedPath = null;
+      session.selectedFile = null;
+    }
+    const contentEl = document.getElementById(`disk-content-${cssEsc(diskPath)}`);
+    if (contentEl) {
+      contentEl.textContent = I18N.t('disk.select-file');
+      contentEl.setAttribute('contenteditable', 'false');
+      contentEl.dataset.path = '';
+    }
+    const infoEl = document.getElementById(`disk-file-info-${cssEsc(diskPath)}`);
+    if (infoEl) infoEl.innerHTML = `<span>${I18N.t('disk.no-file')}</span>`;
+    const actions = document.getElementById(`disk-file-actions-${cssEsc(diskPath)}`);
+    if (actions) actions.style.display = 'none';
   }
 
   // 下载当前文件: 边读边显示进度, 完成后保存到本地
@@ -495,6 +530,226 @@ const DiskEditor = (() => {
     link.click();
     link.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  // ---------- 右键菜单: 复制 / 剪切 / 粘贴 / 删除 ----------
+
+  let contextMenuEl = null;
+  let contextMenuClose = null;
+
+  function closeContextMenu() {
+    if (contextMenuEl) {
+      contextMenuEl.remove();
+      contextMenuEl = null;
+    }
+    if (contextMenuClose) {
+      document.removeEventListener('click', contextMenuClose, true);
+      document.removeEventListener('keydown', contextMenuClose, true);
+      window.removeEventListener('blur', contextMenuClose, true);
+      contextMenuClose = null;
+    }
+  }
+
+  function baseName(innerPath) {
+    const path = String(innerPath || '');
+    return path.substring(path.lastIndexOf('/') + 1) || path;
+  }
+
+  function findNode(root, targetPath) {
+    if (!root) return null;
+    if (!targetPath || targetPath === '/') return root;
+    let node = root;
+    for (const part of targetPath.split('/').filter(Boolean)) {
+      const next = getChildrenArray(node).find(child => child.name === part);
+      if (!next) return null;
+      node = next;
+    }
+    return node;
+  }
+
+  function openContextMenu(diskPath, x, y, innerPath, type, rowEl) {
+    closeContextMenu();
+    const session = getSession(diskPath);
+    const isDir = type === 'dir';
+    const items = [];
+
+    items.push({
+      label: I18N.t('disk.menu.open'),
+      action: () => {
+        if (isDir) toggleDir(diskPath, innerPath, rowEl);
+        else selectFile(diskPath, innerPath, rowEl);
+      },
+    });
+    items.push({
+      label: I18N.t('disk.menu.copy'),
+      action: () => {
+        session.clipboard = { mode: 'copy', path: innerPath, type };
+        App.setStatus(I18N.t('disk.menu.copied', { name: baseName(innerPath) }));
+      },
+    });
+    items.push({
+      label: I18N.t('disk.menu.cut'),
+      action: () => {
+        session.clipboard = { mode: 'cut', path: innerPath, type };
+        App.setStatus(I18N.t('disk.menu.cut-done', { name: baseName(innerPath) }));
+      },
+    });
+    items.push({
+      label: I18N.t('disk.menu.paste'),
+      disabled: !session.clipboard,
+      action: () => pasteInto(diskPath, isDir ? innerPath : parentOf(innerPath)),
+    });
+    items.push({ separator: true });
+    if (!isDir) {
+      items.push({
+        label: I18N.t('disk.download'),
+        action: () => {
+          session.selectedPath = innerPath;
+          session.selectedFile = innerPath;
+          downloadCurrent(diskPath);
+        },
+      });
+    } else {
+      items.push({
+        label: I18N.t('disk.new-file'),
+        action: () => {
+          session.currentDir = innerPath;
+          newItemDialog(diskPath, 'file');
+        },
+      });
+      items.push({
+        label: I18N.t('disk.new-folder'),
+        action: () => {
+          session.currentDir = innerPath;
+          newItemDialog(diskPath, 'folder');
+        },
+      });
+    }
+    items.push({ separator: true });
+    items.push({
+      label: I18N.t('disk.delete'),
+      danger: true,
+      action: () => deletePath(diskPath, innerPath),
+    });
+
+    const menu = document.createElement('div');
+    menu.className = 'disk-context-menu';
+    for (const item of items) {
+      if (item.separator) {
+        const sep = document.createElement('div');
+        sep.className = 'disk-context-sep';
+        menu.appendChild(sep);
+        continue;
+      }
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'disk-context-item' + (item.danger ? ' danger' : '');
+      btn.textContent = item.label;
+      btn.disabled = !!item.disabled;
+      btn.addEventListener('click', () => {
+        closeContextMenu();
+        item.action();
+      });
+      menu.appendChild(btn);
+    }
+    document.body.appendChild(menu);
+    const rect = menu.getBoundingClientRect();
+    menu.style.left = Math.max(4, Math.min(x, window.innerWidth - rect.width - 8)) + 'px';
+    menu.style.top = Math.max(4, Math.min(y, window.innerHeight - rect.height - 8)) + 'px';
+    contextMenuEl = menu;
+
+    contextMenuClose = (ev) => {
+      if (ev && ev.type === 'keydown' && ev.key !== 'Escape') return;
+      closeContextMenu();
+    };
+    setTimeout(() => {
+      document.addEventListener('click', contextMenuClose, true);
+      document.addEventListener('keydown', contextMenuClose, true);
+      window.addEventListener('blur', contextMenuClose, true);
+    }, 0);
+  }
+
+  // ---------- 磁盘内复制 / 粘贴 ----------
+
+  async function writeInner(diskPath, innerPath, content) {
+    const result = await App.api(`disks/${diskApiPath(diskPath)}/write?path=${encodeURIComponent(innerPath)}`, {
+      method: 'PUT',
+      body: { content },
+    });
+    if (result && result.error) throw new Error(result.error);
+  }
+
+  async function mkdirInner(diskPath, innerPath) {
+    const result = await App.api(`disks/${diskApiPath(diskPath)}/mkdir`, {
+      method: 'POST',
+      body: { path: innerPath },
+    });
+    if (result && result.error) throw new Error(result.error);
+  }
+
+  async function removeInner(diskPath, innerPath) {
+    const result = await App.api(`disks/${diskApiPath(diskPath)}/remove?path=${encodeURIComponent(innerPath)}`, {
+      method: 'DELETE',
+    });
+    if (result && result.error) throw new Error(result.error);
+  }
+
+  async function copyDir(diskPath, srcPath, destPath) {
+    const session = getSession(diskPath);
+    const node = findNode(session.tree, srcPath);
+    if (!node) throw new Error(I18N.t('disk.read-failed'));
+    await mkdirInner(diskPath, destPath);
+    for (const child of getChildrenArray(node)) {
+      const srcChild = joinPath(srcPath, child.name);
+      const destChild = joinPath(destPath, child.name);
+      if (child.type === 'dir') {
+        await copyDir(diskPath, srcChild, destChild);
+      } else {
+        const data = await App.api(`disks/${diskApiPath(diskPath)}/read?path=${encodeURIComponent(srcChild)}`);
+        if (!data || data.type !== 'file') throw new Error((data && data.error) || I18N.t('disk.read-failed'));
+        await writeInner(diskPath, destChild, data.content || '');
+      }
+    }
+  }
+
+  async function pasteInto(diskPath, targetDir) {
+    const session = getSession(diskPath);
+    const clip = session.clipboard;
+    if (!clip) return;
+    const name = baseName(clip.path);
+    const dest = joinPath(targetDir, name);
+    if (dest === clip.path) {
+      alert(I18N.t('disk.menu.paste-same'));
+      return;
+    }
+    if (clip.type === 'dir' && dest.startsWith(clip.path + '/')) {
+      alert(I18N.t('disk.menu.paste-into-self'));
+      return;
+    }
+    if (findNode(session.tree, dest)) {
+      alert(I18N.t('disk.menu.paste-exists', { name }));
+      return;
+    }
+    try {
+      if (clip.type === 'file') {
+        const data = await App.api(`disks/${diskApiPath(diskPath)}/read?path=${encodeURIComponent(clip.path)}`);
+        if (!data || data.type !== 'file') throw new Error((data && data.error) || I18N.t('disk.read-failed'));
+        await writeInner(diskPath, dest, data.content || '');
+      } else {
+        await copyDir(diskPath, clip.path, dest);
+      }
+      if (clip.mode === 'cut') {
+        await removeInner(diskPath, clip.path);
+        session.clipboard = null;
+      }
+      session.currentDir = targetDir;
+      session.expandedDirs.add(targetDir);
+      expandDirParents(diskPath, targetDir);
+      await loadTree(diskPath);
+      App.setStatus(I18N.t('disk.menu.pasted', { name }));
+    } catch (e) {
+      alert(I18N.t('disk.menu.paste-failed') + ': ' + e.message);
+    }
   }
 
   async function unlock(diskPath) {

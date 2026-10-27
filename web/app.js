@@ -46,6 +46,7 @@ const App = (() => {
   async function api(path, opts = {}) {
     const res = await fetch('/api/' + path, {
       method: opts.method || 'GET',
+      cache: 'no-store',
       headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) },
       body: opts.body ? JSON.stringify(opts.body) : undefined,
     });
