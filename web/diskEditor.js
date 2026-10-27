@@ -11,6 +11,7 @@
 //   GET    /api/disks/<path>/tree        文件树(仅解锁后)
 //   GET    /api/disks/<path>/read?path=  读取内部文件
 //   PUT    /api/disks/<path>/write?path= 写入内部文件
+//   POST   /api/disks/<path>/mkdir       新建文件夹
 //   DELETE /api/disks/<path>/remove?path= 删除内部文件
 //   POST   /api/disks/<path>/format     格式化磁盘
 // ============================================================
@@ -29,6 +30,7 @@ const DiskEditor = (() => {
         selectedFile: null,
         expandedDirs: new Set(), // 展开的文件夹路径
         searchQuery: '',         // 搜索关键词
+        currentDir: '/',         // 当前浏览的目录 (上传 / 新建时的默认位置)
       });
     }
     return sessions.get(diskPath);
@@ -78,8 +80,6 @@ const DiskEditor = (() => {
           </div>
         </div>
       </div>
-      <!-- 隐藏的文件上传 input -->
-      <input type="file" id="disk-upload-input-${cssEsc(diskPath)}" style="display:none" multiple>
     `;
 
     // 绑定工具栏按钮
@@ -95,17 +95,18 @@ const DiskEditor = (() => {
     // 文件树操作按钮
     pane.querySelector(`#disk-newfolder-${cssEsc(diskPath)}`).addEventListener('click', () => newItemDialog(diskPath, 'folder'));
     pane.querySelector(`#disk-newfile-${cssEsc(diskPath)}`).addEventListener('click', () => newItemDialog(diskPath, 'file'));
-    pane.querySelector(`#disk-upload-${cssEsc(diskPath)}`).addEventListener('click', () => {
-      document.getElementById(`disk-upload-input-${cssEsc(diskPath)}`).click();
+    pane.querySelector(`#disk-upload-${cssEsc(diskPath)}`).addEventListener('click', async () => {
+      const session = getSession(diskPath);
+      if (session.info && session.info.locked) {
+        alert(I18N.t('disk.locked-alert'));
+        return;
+      }
+      const targetDir = await pickDirectory(diskPath, session.currentDir || '/');
+      if (targetDir == null) return;
+      openFilePicker(diskPath, targetDir);
     });
     pane.querySelector(`#disk-expand-all-${cssEsc(diskPath)}`).addEventListener('click', () => expandAll(diskPath));
     pane.querySelector(`#disk-collapse-all-${cssEsc(diskPath)}`).addEventListener('click', () => collapseAll(diskPath));
-
-    // 上传文件选择
-    document.getElementById(`disk-upload-input-${cssEsc(diskPath)}`).addEventListener('change', (e) => {
-      handleFileUpload(diskPath, e.target.files);
-      e.target.value = ''; // 重置以便再次选择同一文件
-    });
 
     // 搜索框
     const searchInput = pane.querySelector(`#disk-search-${cssEsc(diskPath)}`);
@@ -325,6 +326,7 @@ const DiskEditor = (() => {
       if (childContainer) childContainer.style.display = 'none';
     } else {
       session.expandedDirs.add(dirPath);
+      session.currentDir = dirPath;
       rowEl.classList.add('expanded');
       if (childContainer) childContainer.style.display = '';
     }
@@ -359,6 +361,7 @@ const DiskEditor = (() => {
     const session = getSession(diskPath);
     session.selectedFile = innerPath;
     session.selectedPath = innerPath;
+    session.currentDir = parentOf(innerPath);
     // 标记 active
     document.querySelectorAll(`#disk-tree-${cssEsc(diskPath)} .disk-tree-row`).forEach(r => r.classList.remove('active'));
     rowEl.classList.add('active');
@@ -456,6 +459,115 @@ const DiskEditor = (() => {
     App.setStatus(text);
   }
 
+  // ---------- 目录选择 ----------
+
+  function parentOf(dirPath) {
+    if (!dirPath || dirPath === '/') return '/';
+    const index = dirPath.lastIndexOf('/');
+    return index <= 0 ? '/' : dirPath.substring(0, index);
+  }
+
+  function joinPath(dirPath, name) {
+    return (dirPath === '/' ? '' : dirPath) + '/' + name;
+  }
+
+  function nodeAtPath(root, dirPath) {
+    if (!root) return null;
+    if (!dirPath || dirPath === '/') return root;
+    let node = root;
+    for (const part of dirPath.split('/').filter(Boolean)) {
+      const next = getChildrenArray(node).find(child => child.type === 'dir' && child.name === part);
+      if (!next) return null;
+      node = next;
+    }
+    return node;
+  }
+
+  function listSubDirs(diskPath, dirPath) {
+    const node = nodeAtPath(getSession(diskPath).tree, dirPath);
+    if (!node) return [];
+    return getChildrenArray(node)
+      .filter(child => child.type === 'dir')
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  // 弹出目录选择框; 返回选中的路径, 取消时返回 null
+  function pickDirectory(diskPath, startPath) {
+    return new Promise((resolve) => {
+      let current = startPath && startPath !== '' ? startPath : '/';
+      const modal = document.createElement('div');
+      modal.className = 'modal';
+      modal.innerHTML = `
+        <div class="modal-backdrop"></div>
+        <div class="modal-dialog">
+          <div class="modal-header">
+            <h3>${I18N.t('disk.choose-dir-title')}</h3>
+            <button class="modal-close" data-action="close">×</button>
+          </div>
+          <div class="modal-body">
+            <div class="dir-picker-path">
+              <button class="btn btn-icon" data-action="up" title="${I18N.t('disk.up')}">⬆</button>
+              <span id="dir-picker-current"></span>
+            </div>
+            <div class="dir-picker-list" id="dir-picker-list"></div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn" data-action="cancel">${I18N.t('disk.cancel')}</button>
+            <button class="btn btn-primary" data-action="choose">${I18N.t('disk.choose-this-dir')}</button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(modal);
+
+      const currentEl = modal.querySelector('#dir-picker-current');
+      const listEl = modal.querySelector('#dir-picker-list');
+
+      function renderList() {
+        currentEl.textContent = current;
+        listEl.innerHTML = '';
+        const addRow = (label, target) => {
+          const row = document.createElement('div');
+          row.className = 'dir-picker-item';
+          const icon = document.createElement('span');
+          icon.textContent = '📁';
+          const name = document.createElement('span');
+          name.textContent = label;
+          row.appendChild(icon);
+          row.appendChild(name);
+          row.addEventListener('click', () => {
+            current = target;
+            renderList();
+          });
+          listEl.appendChild(row);
+        };
+        if (current !== '/') addRow('..', parentOf(current));
+        const dirs = listSubDirs(diskPath, current);
+        if (!dirs.length) {
+          const empty = document.createElement('div');
+          empty.className = 'dir-picker-empty';
+          empty.textContent = I18N.t('disk.dir-empty');
+          listEl.appendChild(empty);
+        }
+        for (const dir of dirs) addRow(dir.name, joinPath(current, dir.name));
+      }
+
+      function close(value) {
+        modal.remove();
+        resolve(value == null ? null : value);
+      }
+
+      renderList();
+      modal.querySelector('[data-action="up"]').addEventListener('click', () => {
+        current = parentOf(current);
+        renderList();
+      });
+      modal.querySelector('[data-action="choose"]').addEventListener('click', () => close(current));
+      modal.querySelector('[data-action="close"]').addEventListener('click', () => close(null));
+      modal.querySelector('[data-action="cancel"]').addEventListener('click', () => close(null));
+      modal.querySelector('.modal-backdrop').addEventListener('click', () => close(null));
+    });
+  }
+
   // ---------- 新建文件/文件夹 ----------
 
   function newItemDialog(diskPath, type) {
@@ -464,19 +576,8 @@ const DiskEditor = (() => {
       alert(I18N.t('disk.locked-alert'));
       return;
     }
-    // 默认父目录: 当前选中的目录, 或根目录
-    let parentDir = '/';
-    if (session.selectedPath) {
-      const selInfo = session.selectedFile;
-      // 如果选中的是文件, 用它的父目录
-      // 我们用路径判断: 先尝试读取选中项的类型
-      const lastPart = session.selectedPath.substring(session.selectedPath.lastIndexOf('/') + 1);
-      if (lastPart.includes('.')) {
-        parentDir = session.selectedPath.substring(0, session.selectedPath.lastIndexOf('/')) || '/';
-      } else {
-        parentDir = session.selectedPath;
-      }
-    }
+    // 默认父目录: 当前浏览的目录
+    const parentDir = session.currentDir || '/';
 
     const isFolder = type === 'folder';
     const title = isFolder ? I18N.t('disk.new-folder') : I18N.t('disk.new-file');
@@ -494,7 +595,10 @@ const DiskEditor = (() => {
         <div class="modal-body">
           <div class="form-row">
             <label>${I18N.t('disk.parent-dir')}</label>
-            <input type="text" id="new-item-parent" value="${escapeHTML(parentDir)}" readonly style="background: var(--bg-top);">
+            <div class="path-picker-row">
+              <input type="text" id="new-item-parent" value="${escapeHTML(parentDir)}">
+              <button type="button" class="btn" id="new-item-pick">${I18N.t('disk.select-dir')}</button>
+            </div>
           </div>
           <div class="form-row">
             <label>${isFolder ? I18N.t('disk.name') : I18N.t('disk.file-name')}</label>
@@ -515,6 +619,11 @@ const DiskEditor = (() => {
     const warningEl = modal.querySelector('#new-item-warning');
 
     setTimeout(() => nameInput.focus(), 100);
+
+    modal.querySelector('#new-item-pick').addEventListener('click', async () => {
+      const picked = await pickDirectory(diskPath, parentInput.value.trim() || '/');
+      if (picked != null) parentInput.value = picked;
+    });
 
     function close() { modal.remove(); }
 
@@ -541,18 +650,21 @@ const DiskEditor = (() => {
       }
       const fullPath = (parent === '/' ? '' : parent) + '/' + name;
       try {
+        let result;
         if (isFolder) {
-          await App.api(`disks/${diskApiPath(diskPath)}/mkdir`, {
+          result = await App.api(`disks/${diskApiPath(diskPath)}/mkdir`, {
             method: 'POST',
             body: { path: fullPath },
           });
         } else {
-          await App.api(`disks/${diskApiPath(diskPath)}/write?path=${encodeURIComponent(fullPath)}`, {
+          result = await App.api(`disks/${diskApiPath(diskPath)}/write?path=${encodeURIComponent(fullPath)}`, {
             method: 'PUT',
             body: { content: '' },
           });
         }
+        if (result && result.error) throw new Error(result.error);
         // 展开父目录并刷新
+        session.currentDir = parent;
         if (parent !== '/') {
           session.expandedDirs.add(parent);
           expandDirParents(diskPath, parent);
@@ -571,7 +683,30 @@ const DiskEditor = (() => {
 
   // ---------- 上传文件 ----------
 
-  async function handleFileUpload(diskPath, files) {
+  // 选择本地文件后上传到指定目录
+  let pendingFileInput = null;
+
+  function openFilePicker(diskPath, targetDir) {
+    if (pendingFileInput) {
+      pendingFileInput.remove();
+      pendingFileInput = null;
+    }
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.multiple = true;
+    input.style.display = 'none';
+    document.body.appendChild(input);
+    pendingFileInput = input;
+    input.addEventListener('change', () => {
+      const files = input.files ? Array.from(input.files) : [];
+      input.remove();
+      pendingFileInput = null;
+      if (files.length) handleFileUpload(diskPath, files, targetDir);
+    });
+    input.click();
+  }
+
+  async function handleFileUpload(diskPath, files, targetDir) {
     const session = getSession(diskPath);
     if (session.info?.locked) {
       alert(I18N.t('disk.locked-alert'));
@@ -579,54 +714,38 @@ const DiskEditor = (() => {
     }
     if (!files || files.length === 0) return;
 
-    // 确定目标目录
-    let targetDir = '/';
-    if (session.selectedPath) {
-      const sel = session.selectedPath;
-      // 判断选中的是目录还是文件
-      // 简化处理: 如果选中路径不含扩展名(粗略判断), 认为是目录
-      const lastPart = sel.substring(sel.lastIndexOf('/') + 1);
-      if (lastPart.includes('.')) {
-        targetDir = sel.substring(0, sel.lastIndexOf('/')) || '/';
-      } else {
-        targetDir = sel;
-      }
-    }
-
+    const dir = targetDir && targetDir !== '' ? targetDir : '/';
     let successCount = 0;
-    let failCount = 0;
     const errors = [];
 
     for (const file of files) {
-      const innerPath = (targetDir === '/' ? '' : targetDir) + '/' + file.name;
+      const innerPath = joinPath(dir, file.name);
       try {
-        // 读取文件内容
         const content = await readFileAsText(file);
-        await App.api(`disks/${diskApiPath(diskPath)}/write?path=${encodeURIComponent(innerPath)}`, {
+        const result = await App.api(`disks/${diskApiPath(diskPath)}/write?path=${encodeURIComponent(innerPath)}`, {
           method: 'PUT',
           body: { content },
         });
+        if (result && result.error) throw new Error(result.error);
         successCount++;
       } catch (e) {
-        failCount++;
         errors.push(file.name + ': ' + e.message);
       }
     }
 
     // 展开目标目录并刷新
-    if (targetDir !== '/') {
-      session.expandedDirs.add(targetDir);
-      expandDirParents(diskPath, targetDir);
+    session.currentDir = dir;
+    if (dir !== '/') {
+      session.expandedDirs.add(dir);
+      expandDirParents(diskPath, dir);
     }
     await loadTree(diskPath);
 
-    if (failCount === 0) {
+    if (errors.length === 0) {
       App.setStatus(I18N.t('disk.uploaded', { n: successCount }));
     } else {
-      App.setStatus(I18N.t('disk.upload-summary', { ok: successCount, fail: failCount }));
-      if (errors.length > 0) {
-        console.warn('upload errors:', errors);
-      }
+      App.setStatus(I18N.t('disk.upload-summary', { ok: successCount, fail: errors.length }));
+      alert(I18N.t('disk.upload-failed') + '\n' + errors.join('\n'));
     }
   }
 
