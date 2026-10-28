@@ -748,9 +748,10 @@ print(mods.getOffhand())            -- 副手工具
 
 **redstone 输出通道（计算机 → 反应堆）**
 
-- `setOutput(side, value)`：**任意通道**都可以控制开关，`value > 0` 运行、`0` 停止（写回 `reactor.json`）。
-- `setBundledOutput(side, mask)`：任意通道的 bit0 为 1 表示运行。
+- `setOutput(side, value)`：**任意通道**都可以控制开关，`value > 0` 运行、`0` 停止（写回 `reactor.json`）；返回写入前的值。
+- `setBundledOutput(side, mask)`：任意通道的 bit0 为 1 表示运行；返回写入前的值。
 - `getOutput(side)` 返回 `15 / 0`，跟随反应堆实际开关状态；`getBundledOutput(side)` 返回最近一次写入的值。
+- 不传 `side` 时 `getInput()` / `getOutput()` / `getBundledOutput()` 返回全部通道的读数表。
 
 IC2Reactors.app 会为每台核电站选择一个 I/O 端口和侧面，因此这里不限定 side。使用时需要先在每台反应堆面板的 I/O 下拉框里选中本反应堆的 redstone 地址；未选择时单机按钮是灰的，MASTER ENABLE / DISABLE 也会跳过它。
 
@@ -758,12 +759,12 @@ IC2Reactors.app 会为每台核电站选择一个 I/O 端口和侧面，因此�
 
 | 方法 | 返回 | 说明 |
 |---|---|---|
-| `getInput(side)` / `getComparatorInput(side)` | number | 读取反应堆状态对应的红石信号 |
+| `getInput(side)` / `getInput()` / `getComparatorInput(side)` | number / table | 读取反应堆状态对应的红石信号 |
 | `getBundledInput(side)` | number | 读取状态位（仅通道 0 有值） |
-| `setOutput(side, value)` | number | 写输出信号控制开关 |
-| `getOutput(side)` | number | `15 / 0`，跟随反应堆开关状态 |
-| `setBundledOutput(side, mask)` | number | 写捆绑输出控制开关 |
-| `getBundledOutput(side)` | number | 最近写入的捆绑输出 |
+| `setOutput(side, value)` | number | 写输出信号控制开关，返回写入前的值 |
+| `getOutput(side)` / `getOutput()` | number / table | `15 / 0`，跟随反应堆开关状态 |
+| `setBundledOutput(side, mask)` | number | 写捆绑输出控制开关，返回写入前的值 |
+| `getBundledOutput(side)` / `getBundledOutput()` | number / table | 最近写入的捆绑输出 |
 | `getSides()` | table | `{0,1,2,3,4,5,6,7,8,9,10,11,12,13}` |
 
 温度也可以通过 HTTP 读写：`GET /api/mods/:name/reactor-temperature` 返回 `{ temperature, maxTemperature, overheated, running }`，`POST` 同一路径（`{ temperature }`）写入温度。
@@ -909,10 +910,7 @@ redstone.setOutput(0, 15)
 
 | 位置 | 差异 | 影响 |
 |---|---|---|
-| `gpu` 离屏缓冲 | 只记录分辨率与激活状态，绘制仍输出到屏幕 | 依赖 `setActiveBuffer` 做后台绘制的程序画面不正确 |
-| `gpu.bitblt` | 不复制像素，只返回 `true` | 依赖位块传送做刷新优化的程序画面不更新 |
 | `gpu.get` | 只返回字符、前景、背景 3 个值 | 原版多返回两个调色板索引，读取第 4/5 个值会得到 `nil` |
-| `gpu.setDepth` | 返回设置后的深度，越界自动夹取 | 原版返回旧深度、越界报错 |
 | `gpu.setResolution` | 越界自动夹取并返回 `true` | 原版越界会报错 |
 | `internet.connect` | 不支持 TCP，返回 `nil, "TCP not supported"` | 用 socket 的程序无法运行 |
 | `internet.request` | 同步阻塞返回句柄 | 原版立即返回句柄，需要 `finishConnect()` |
@@ -922,7 +920,6 @@ redstone.setOutput(0, 15)
 | `redstone` | 0~13 号通道映射为反应堆状态，另有 `getSides()` | 原版 side 是方块六个面，非反应堆脚本取值含义不同 |
 | `transposer` | 侧面 0 / 1 / 2 对应堆芯 / 燃料箱 / 废料箱 | 原版 side 是方块朝向，真机要用实际面编号 |
 | `reactor_chamber` | 温度读写、耐久比例、`producesEnergy` 等为扩展 | 原版没有这些方法，真机调用会报 `nil` |
-| `eeprom.makeReadonly` | 未实现，返回 `false, "not supported"` | 原版行为不同，需要只读 EEPROM 的程序不可用 |
 
 ## 10. 无线控制协议（T1 / T2 均可）
 

@@ -2093,7 +2093,7 @@ gpu.setDepth = function(d)
   -- 与 OpenComputers 一致: 返回切换前的深度
   return previous
 end
--- 离屏缓冲 (OC 1.7 GPU API): 记录分辨率与绑定状态, 绘制仍输出到屏幕
+-- 离屏缓冲: 每个缓冲保存自己的字符与配色, 激活后绘制写入缓冲, 由 bitblt 搬回屏幕
 gpu._buffers = {}
 gpu._nextBuffer = 1
 gpu._activeBuffer = 0
@@ -2101,10 +2101,18 @@ gpu._activeBuffer = 0
 gpu.allocateBuffer = function(w, h)
   local id = gpu._nextBuffer
   gpu._nextBuffer = id + 1
-  gpu._buffers[id] = {
-    w = math.max(1, math.min(tonumber(w) or gpu._resolution[1], gpuMaxW)),
-    h = math.max(1, math.min(tonumber(h) or gpu._resolution[2], gpuMaxH)),
-  }
+  local bw = math.max(1, math.min(tonumber(w) or gpu._resolution[1], gpuMaxW))
+  local bh = math.max(1, math.min(tonumber(h) or gpu._resolution[2], gpuMaxH))
+  local s = { width = bw, height = bh, char = {}, fg = {}, bg = {} }
+  for y = 1, bh do
+    s.char[y], s.fg[y], s.bg[y] = {}, {}, {}
+    for x = 1, bw do
+      s.char[y][x] = " "
+      s.fg[y][x] = 0xFFFFFF
+      s.bg[y][x] = 0x000000
+    end
+  end
+  gpu._buffers[id] = s
   return id
 end
 
@@ -2133,20 +2141,33 @@ gpu.getActiveBuffer = function() return gpu._activeBuffer end
 gpu.getBufferSize = function(id)
   local buffer = gpu._buffers[tonumber(id) or 0]
   if not buffer then return gpu._resolution[1], gpu._resolution[2] end
-  return buffer.w, buffer.h
+  return buffer.width, buffer.height
+end
+
+-- 按编号取绘制面板: 0 是屏幕, 其余是离屏缓冲
+local function drawSurface(id)
+  local n = tonumber(id) or 0
+  if n == 0 then return Screen end
+  local buffer = gpu._buffers[n]
+  if buffer and buffer.char then return buffer end
+  return nil
 end
 
 gpu.get = function(x, y)
-  if x < 1 or x > Screen.width or y < 1 or y > Screen.height then return nil, nil end
-  local ch = Screen.char[y][x]
+  local s = drawSurface(gpu._activeBuffer) or Screen
+  if x < 1 or x > s.width or y < 1 or y > s.height then return nil, nil end
+  local ch = s.char[y][x]
   -- 如果当前格是宽字符续接格(空字符串), 返回前一格的字符
   if ch == "" and x > 1 then
-    ch = Screen.char[y][x - 1]
+    ch = s.char[y][x - 1]
   end
-  return ch, Screen.fg[y][x], Screen.bg[y][x]
+  return ch, s.fg[y][x], s.bg[y][x]
 end
 gpu.set = function(x, y, text, vertical)
   text = tostring(text)
+  local s = drawSurface(gpu._activeBuffer) or Screen
+  local onScreen = (s == Screen)
+  local W, H = s.width, s.height
   local i = 1
   local len = #text
   if vertical then
@@ -2159,11 +2180,11 @@ gpu.set = function(x, y, text, vertical)
       elseif b >= 0xE0 then charLen = 3
       elseif b >= 0xC0 then charLen = 2 end
       local ch = text:sub(i, i + charLen - 1)
-      if x >= 1 and x <= Screen.width and row >= 1 and row <= Screen.height then
-        Screen.char[row][x] = ch
-        Screen.bg[row][x] = gpu._bg
-        Screen.fg[row][x] = gpu._fg
-        markDirty(x, row)
+      if x >= 1 and x <= W and row >= 1 and row <= H then
+        s.char[row][x] = ch
+        s.bg[row][x] = gpu._bg
+        s.fg[row][x] = gpu._fg
+        if onScreen then markDirty(x, row) end
       end
       i = i + charLen
       row = row + 1
@@ -2179,17 +2200,17 @@ gpu.set = function(x, y, text, vertical)
       local ch = text:sub(i, i + charLen - 1)
       -- 计算字符显示宽度: 宽字符占2列 (使用缓存优化)
       local cw = isWideCharCached(ch) and 2 or 1
-      if col >= 1 and col + cw - 1 <= Screen.width and y >= 1 and y <= Screen.height then
-        Screen.char[y][col] = ch
-        Screen.bg[y][col] = gpu._bg
-        Screen.fg[y][col] = gpu._fg
-        markDirty(col, y)
+      if col >= 1 and col + cw - 1 <= W and y >= 1 and y <= H then
+        s.char[y][col] = ch
+        s.bg[y][col] = gpu._bg
+        s.fg[y][col] = gpu._fg
+        if onScreen then markDirty(col, y) end
         -- 宽字符: 第二格也标记 (存储为特殊的"续接"标记, 用空字符串表示被宽字符覆盖)
-        if cw == 2 and col + 1 <= Screen.width then
-          Screen.char[y][col + 1] = ""
-          Screen.bg[y][col + 1] = gpu._bg
-          Screen.fg[y][col + 1] = gpu._fg
-          markDirty(col + 1, y)
+        if cw == 2 and col + 1 <= W then
+          s.char[y][col + 1] = ""
+          s.bg[y][col + 1] = gpu._bg
+          s.fg[y][col + 1] = gpu._fg
+          if onScreen then markDirty(col + 1, y) end
         end
       end
       i = i + charLen
@@ -2197,23 +2218,26 @@ gpu.set = function(x, y, text, vertical)
     end
     -- 追踪 tty 文本输出位置, 用于浏览器光标渲染
     -- OpenOS 不调用硬件光标, 但浏览器需要知道光标在哪
-    if screen then
-      screen._cursorX = math.min(col, Screen.width + 1)
+    if onScreen and screen then
+      screen._cursorX = math.min(col, W + 1)
       screen._cursorY = y
     end
   end
-  scheduleRender()
+  if onScreen then scheduleRender() end
   return true
 end
 gpu.copy = function(x, y, w, h, dx, dy)
+  local s = drawSurface(gpu._activeBuffer) or Screen
+  local onScreen = (s == Screen)
+  local W, H = s.width, s.height
   -- 保存源区域
   local src = {}
   for ry = 0, h - 1 do
     src[ry] = {}
     for rx = 0, w - 1 do
       local sx, sy = x + rx, y + ry
-      if sx >= 1 and sx <= Screen.width and sy >= 1 and sy <= Screen.height then
-        src[ry][rx] = { char = Screen.char[sy][sx], fg = Screen.fg[sy][sx], bg = Screen.bg[sy][sx] }
+      if sx >= 1 and sx <= W and sy >= 1 and sy <= H then
+        src[ry][rx] = { char = s.char[sy][sx], fg = s.fg[sy][sx], bg = s.bg[sy][sx] }
       else
         src[ry][rx] = { char = " ", fg = 0xFFFFFF, bg = 0x000000 }
       end
@@ -2223,15 +2247,15 @@ gpu.copy = function(x, y, w, h, dx, dy)
   for ry = 0, h - 1 do
     for rx = 0, w - 1 do
       local tx, ty = x + rx + dx, y + ry + dy
-      if tx >= 1 and tx <= Screen.width and ty >= 1 and ty <= Screen.height then
-        Screen.char[ty][tx] = src[ry][rx].char
-        Screen.fg[ty][tx] = src[ry][rx].fg
-        Screen.bg[ty][tx] = src[ry][rx].bg
-        markDirty(tx, ty)
+      if tx >= 1 and tx <= W and ty >= 1 and ty <= H then
+        s.char[ty][tx] = src[ry][rx].char
+        s.fg[ty][tx] = src[ry][rx].fg
+        s.bg[ty][tx] = src[ry][rx].bg
+        if onScreen then markDirty(tx, ty) end
       end
     end
   end
-  scheduleRender()
+  if onScreen then scheduleRender() end
   return true
 end
 gpu.fill = function(x, y, w, h, ch)
@@ -2244,33 +2268,36 @@ gpu.fill = function(x, y, w, h, ch)
   elseif b >= 0xC0 then charLen = 2 end
   ch = ch:sub(1, charLen)
   local cw = isWideCharCached(ch) and 2 or 1
+  local s = drawSurface(gpu._activeBuffer) or Screen
+  local onScreen = (s == Screen)
+  local W, H = s.width, s.height
   for ry = y, y + h - 1 do
-    if ry >= 1 and ry <= Screen.height then
+    if ry >= 1 and ry <= H then
       local rx = x
       local filled = 0
       while filled < w do
         local remaining = w - filled
         if cw == 2 and remaining < 2 then
           -- 剩余空间不足放一个宽字符, 填空格
-          if rx >= 1 and rx <= Screen.width then
-            Screen.char[ry][rx] = " "
-            Screen.bg[ry][rx] = gpu._bg
-            Screen.fg[ry][rx] = gpu._fg
-            markDirty(rx, ry)
+          if rx >= 1 and rx <= W then
+            s.char[ry][rx] = " "
+            s.bg[ry][rx] = gpu._bg
+            s.fg[ry][rx] = gpu._fg
+            if onScreen then markDirty(rx, ry) end
           end
           filled = filled + 1
           rx = rx + 1
         else
-          if rx >= 1 and rx <= Screen.width then
-            Screen.char[ry][rx] = ch
-            Screen.bg[ry][rx] = gpu._bg
-            Screen.fg[ry][rx] = gpu._fg
-            markDirty(rx, ry)
-            if cw == 2 and rx + 1 <= Screen.width then
-              Screen.char[ry][rx + 1] = ""
-              Screen.bg[ry][rx + 1] = gpu._bg
-              Screen.fg[ry][rx + 1] = gpu._fg
-              markDirty(rx + 1, ry)
+          if rx >= 1 and rx <= W then
+            s.char[ry][rx] = ch
+            s.bg[ry][rx] = gpu._bg
+            s.fg[ry][rx] = gpu._fg
+            if onScreen then markDirty(rx, ry) end
+            if cw == 2 and rx + 1 <= W then
+              s.char[ry][rx + 1] = ""
+              s.bg[ry][rx + 1] = gpu._bg
+              s.fg[ry][rx + 1] = gpu._fg
+              if onScreen then markDirty(rx + 1, ry) end
             end
           end
           filled = filled + cw
@@ -2279,7 +2306,7 @@ gpu.fill = function(x, y, w, h, ch)
       end
     end
   end
-  scheduleRender()
+  if onScreen then scheduleRender() end
   return true
 end
 gpu.setBackground = function(color, isPalette)
@@ -2331,7 +2358,44 @@ gpu.setBufferPalette = function(p)
   return true
 end
 gpu.setBufferSize = function(w, h) gpu.setResolution(w, h); return true end
-gpu.bitblt = function() return true end
+
+-- 在缓冲与屏幕之间搬运矩形; 缓冲 0 表示屏幕本身
+-- 参数: 目标缓冲, 目标列, 目标行, 宽, 高, 源缓冲, 源列, 源行
+gpu.bitblt = function(dst, dc, dx, w, h, src, sc, sy)
+  local d = drawSurface(dst)
+  local s = drawSurface(src)
+  if not d or not s then return false end
+  w, h = math.floor(tonumber(w) or 0), math.floor(tonumber(h) or 0)
+  if w <= 0 or h <= 0 then return false end
+  dc, dx = math.floor(tonumber(dc) or 0), math.floor(tonumber(dx) or 0)
+  sc, sy = math.floor(tonumber(sc) or 0), math.floor(tonumber(sy) or 0)
+  local dW, dH = d.width, d.height
+  local sW, sH = s.width, s.height
+  local onScreen = (d == Screen)
+  -- 源与目标可能是同一块面板, 先取快照避免搬运过程中互相覆盖
+  local snap = {}
+  for ry = 0, h - 1 do
+    snap[ry] = {}
+    for rx = 0, w - 1 do
+      local sx, syy = sc + rx, sy + ry
+      if sx >= 1 and sx <= sW and syy >= 1 and syy <= sH then
+        snap[ry][rx] = { s.char[syy][sx], s.fg[syy][sx], s.bg[syy][sx] }
+      end
+    end
+  end
+  for ry = 0, h - 1 do
+    for rx = 0, w - 1 do
+      local cell = snap[ry][rx]
+      local tx, ty = dc + rx, dx + ry
+      if cell and tx >= 1 and tx <= dW and ty >= 1 and ty <= dH then
+        d.char[ty][tx], d.fg[ty][tx], d.bg[ty][tx] = cell[1], cell[2], cell[3]
+        if onScreen then markDirty(tx, ty) end
+      end
+    end
+  end
+  if onScreen then scheduleRender() end
+  return true
+end
 
 -- ============================================================
 -- Screen 组件
@@ -2683,11 +2747,13 @@ if not eepromCode or #eepromCode == 0 then
 end
 
 local eeprom = {}
+eeprom._readonly = false
 eeprom.get = function()
   -- 始终返回当前 EEPROM 代码 (内置 OC BIOS 或自定义)
   return eepromCode
 end
 eeprom.set = function(data)
+  if eeprom._readonly then return false, "read-only" end
   -- 参数校验: 防止写入空文件
   if not data or #data == 0 then
     _stderr:write("[emulator] WARNING: eeprom.set() called with empty data, skipping write\n")
@@ -2747,9 +2813,13 @@ eeprom.set = function(data)
   return true
 end
 eeprom.getData = function() return eepromData end
-eeprom.setData = function(data) eepromData = (data or ""):sub(1, 256) end
+eeprom.setData = function(data)
+  if eeprom._readonly then return false, "read-only" end
+  eepromData = (data or ""):sub(1, 256)
+end
 eeprom.getLabel = function() return eepromLabel end
 eeprom.setLabel = function(label)
+  if eeprom._readonly then return nil, "read-only" end
   if #label > 16 then label = label:sub(1, 16) end
   eepromLabel = label
   -- 持久化标签到 config.json (对 .lua EEPROM 尤其重要, 因为 .lua 文件没有标签位)
@@ -2777,7 +2847,10 @@ eeprom.getChecksum = function()
   end
   return string.format("%08x", h)
 end
-eeprom.makeReadonly = function() return false, "not supported" end
+eeprom.makeReadonly = function()
+  eeprom._readonly = true
+  return true
+end
 
 -- ============================================================
 -- Internet 组件
@@ -4198,6 +4271,12 @@ extComponents.makeRedstone = function(address, meta)
   dev.getComparatorInput = dev.getInput
 
   function dev.getOutput(side)
+    -- 与 OpenComputers 一致: 不传 side 时返回全部通道的输出表
+    if side == nil then
+      local all = {}
+      for i = 0, 13 do all[i] = dev.getOutput(i) end
+      return all
+    end
     side = tonumber(side) or 0
     if isMachine() then
       local outputs = S().outputs
@@ -4218,25 +4297,33 @@ extComponents.makeRedstone = function(address, meta)
   function dev.setOutput(side, value)
     side = tonumber(side) or 0
     value = clamp(value)
+    -- 与 OpenComputers 一致: 返回写入前的值
+    local previous = dev.getOutput(side)
     dev._out[side] = value
     sendToServer({ type = "ext_command", address = address, method = "setOutput", args = { side, value } })
     if not isMachine() then dev._state.active = value > 0 end
-    return value
+    return previous
   end
 
   function dev.getBundledOutput(side)
+    if side == nil then
+      local all = {}
+      for i = 0, 13 do all[i] = dev.getBundledOutput(i) end
+      return all
+    end
     return dev._bout[tonumber(side) or 0] or 0
   end
 
-  -- bit0 表示开关, 任一通道均可
+  -- bit0 表示开关, 任一通道均可; 返回写入前的值
   function dev.setBundledOutput(side, mask)
     side = tonumber(side) or 0
     mask = tonumber(mask) or 0
     if isMachine() then return 0 end
+    local previous = dev._bout[side] or 0
     dev._bout[side] = mask
     sendToServer({ type = "ext_command", address = address, method = "setBundledOutput", args = { side, mask } })
     dev._state.active = (mask % 2) == 1
-    return mask
+    return previous
   end
 
   -- 0 号通道的 bit0..bit3: 运行 / 稳定 / 注意 / 危险
