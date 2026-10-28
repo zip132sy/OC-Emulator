@@ -910,10 +910,7 @@ redstone.setOutput(0, 15)
 
 | 位置 | 差异 | 影响 |
 |---|---|---|
-| `gpu.get` | 只返回字符、前景、背景 3 个值 | 原版多返回两个调色板索引，读取第 4/5 个值会得到 `nil` |
-| `gpu.setResolution` | 越界自动夹取并返回 `true` | 原版越界会报错 |
-| `internet.connect` | 不支持 TCP，返回 `nil, "TCP not supported"` | 用 socket 的程序无法运行 |
-| `internet.request` | 同步阻塞返回句柄 | 原版立即返回句柄，需要 `finishConnect()` |
+| `internet.request` | 整个请求完成后才返回句柄，`finishConnect()` 恒成功 | 原版立即返回句柄再等待连接；读取顺序不受影响 |
 | `screen` | 额外提供 `getResolution` / `setResolution` / `setCursor` / `setCursorBlink` 等 | 原版这些在 `gpu` 上，真机调用为 `nil` |
 | `keyboard.isKeyDown` | 恒返回 `false` | 浏览器里拿不到真实按键状态 |
 | `filesystem.list` | 目录名带结尾 `/` | 原版不带，做名字比较时要先去掉 |

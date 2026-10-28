@@ -1546,9 +1546,9 @@ local function dispatchServerMessage(msg)
       end
     end
     pushSignal("modem_message", modemAddr, msg.from or "", msg.port or 0, msg.distance or 0, unpackFn(payload, 1, n))
-  elseif t == "net_response" then
-    -- 网络请求响应 (异步)
-    -- 由 internet.request 处理回调
+  elseif t == "net_response" or t == "net_tcp_connected"
+    or t == "net_tcp_read_result" or t == "net_tcp_write_result" then
+    -- 网络请求 / 套接字操作的结果, 交给发起方注册的回调
     local cb = pendingNetCallbacks[msg.reqId]
     if cb then
       pendingNetCallbacks[msg.reqId] = nil
@@ -1829,9 +1829,11 @@ local Screen = {
   width = config.screenWidth,
   height = config.screenHeight,
   bg = {}, fg = {}, char = {},
+  bgi = {}, fgi = {},
 }
 for y = 1, Screen.height do
   Screen.bg[y] = {}; Screen.fg[y] = {}; Screen.char[y] = {}
+  Screen.bgi[y] = {}; Screen.fgi[y] = {}
   for x = 1, Screen.width do
     Screen.bg[y][x] = 0x000000; Screen.fg[y][x] = 0xFFFFFF; Screen.char[y][x] = " "
   end
@@ -2011,7 +2013,10 @@ gpuAddr = genAddr()
 local gpuBound = nil
 local gpu = {
   _resolution = { Screen.width, Screen.height },
-  _bg = 0x000000, _fg = 0xFFFFFF, _depth = 8,
+  _bg = 0x000000, _fg = 0xFFFFFF,
+  -- 调色板索引: 颜色来自 setBackground(color, true) 时记录, RGB 颜色为 nil
+  _bgIndex = nil, _fgIndex = nil,
+  _depth = config.gpuTier == 1 and 1 or config.gpuTier == 2 and 4 or 8,
   _palette = {},
   -- 暴露 tier 给程序: 程序通过 component.proxy(addr).tier 读取
   tier = config.gpuTier,
@@ -2041,16 +2046,20 @@ gpu.bind = function(address) gpuBound = address; return true end
 gpu.getScreen = function() return gpuBound end
 gpu.getResolution = function() return gpu._resolution[1], gpu._resolution[2] end
 gpu.setResolution = function(w, h)
-  -- 限制在 GPU 最大分辨率内
-  w = math.min(tonumber(w) or gpuMaxW, gpuMaxW)
-  h = math.min(tonumber(h) or gpuMaxH, gpuMaxH)
-  if w < 1 then w = 1 end
-  if h < 1 then h = 1 end
+  w, h = tonumber(w), tonumber(h)
+  -- 与 OpenComputers 一致: 超出最大分辨率或非法值直接报错
+  if not w or not h or w < 1 or h < 1 or w > gpuMaxW or h > gpuMaxH
+    or w ~= math.floor(w) or h ~= math.floor(h) then
+    error("unsupported resolution", 2)
+  end
+  if w == gpu._resolution[1] and h == gpu._resolution[2] then return false end
   gpu._resolution = { w, h }
   Screen.width, Screen.height = w, h
   Screen.bg, Screen.fg, Screen.char = {}, {}, {}
+  Screen.bgi, Screen.fgi = {}, {}
   for y = 1, h do
     Screen.bg[y] = {}; Screen.fg[y] = {}; Screen.char[y] = {}
+    Screen.bgi[y] = {}; Screen.fgi[y] = {}
     for x = 1, w do
       Screen.bg[y][x] = 0x000000; Screen.fg[y][x] = 0xFFFFFF; Screen.char[y][x] = " "
     end
@@ -2079,19 +2088,20 @@ end
 gpu.getDepth = function() return gpu._depth end
 gpu.setDepth = function(d)
   local previous = gpu._depth
-  d = tonumber(d) or 1
-  -- 限制可用深度: T1=1, T2=4, T3=8
+  local value = tonumber(d)
   local maxDepth = config.gpuTier == 1 and 1 or config.gpuTier == 2 and 4 or 8
-  if d > maxDepth then d = maxDepth end
-  if d < 1 then d = 1 end
-  gpu._depth = d
+  -- 与 OpenComputers 一致: 只接受 1 / 4 / 8, 超出支持的深度直接报错
+  if not value or (value ~= 1 and value ~= 4 and value ~= 8) or value > maxDepth then
+    error("unsupported color depth", 2)
+  end
+  gpu._depth = value
   -- 重置调色板到默认
   gpu._palette = {}
-  for i = 0, math.min(paletteSize(d) - 1, 15) do
+  for i = 0, math.min(paletteSize(value) - 1, 15) do
     gpu._palette[i] = defaultPalette[i]
   end
-  -- 与 OpenComputers 一致: 返回切换前的深度
-  return previous
+  -- 与 OpenComputers 一致: 返回切换前的深度名称
+  return ({ [1] = "OneBit", [4] = "FourBit", [8] = "EightBit" })[previous]
 end
 -- 离屏缓冲: 每个缓冲保存自己的字符与配色, 激活后绘制写入缓冲, 由 bitblt 搬回屏幕
 gpu._buffers = {}
@@ -2103,9 +2113,10 @@ gpu.allocateBuffer = function(w, h)
   gpu._nextBuffer = id + 1
   local bw = math.max(1, math.min(tonumber(w) or gpu._resolution[1], gpuMaxW))
   local bh = math.max(1, math.min(tonumber(h) or gpu._resolution[2], gpuMaxH))
-  local s = { width = bw, height = bh, char = {}, fg = {}, bg = {} }
+  local s = { width = bw, height = bh, char = {}, fg = {}, bg = {}, fgi = {}, bgi = {} }
   for y = 1, bh do
     s.char[y], s.fg[y], s.bg[y] = {}, {}, {}
+    s.fgi[y], s.bgi[y] = {}, {}
     for x = 1, bw do
       s.char[y][x] = " "
       s.fg[y][x] = 0xFFFFFF
@@ -2161,7 +2172,8 @@ gpu.get = function(x, y)
   if ch == "" and x > 1 then
     ch = s.char[y][x - 1]
   end
-  return ch, s.fg[y][x], s.bg[y][x]
+  -- 第 4、5 个返回值: 颜色来自调色板时给出索引, RGB 颜色为 nil
+  return ch, s.fg[y][x], s.bg[y][x], s.fgi[y][x], s.bgi[y][x]
 end
 gpu.set = function(x, y, text, vertical)
   text = tostring(text)
@@ -2184,6 +2196,8 @@ gpu.set = function(x, y, text, vertical)
         s.char[row][x] = ch
         s.bg[row][x] = gpu._bg
         s.fg[row][x] = gpu._fg
+        s.bgi[row][x] = gpu._bgIndex
+        s.fgi[row][x] = gpu._fgIndex
         if onScreen then markDirty(x, row) end
       end
       i = i + charLen
@@ -2204,12 +2218,16 @@ gpu.set = function(x, y, text, vertical)
         s.char[y][col] = ch
         s.bg[y][col] = gpu._bg
         s.fg[y][col] = gpu._fg
+        s.bgi[y][col] = gpu._bgIndex
+        s.fgi[y][col] = gpu._fgIndex
         if onScreen then markDirty(col, y) end
         -- 宽字符: 第二格也标记 (存储为特殊的"续接"标记, 用空字符串表示被宽字符覆盖)
         if cw == 2 and col + 1 <= W then
           s.char[y][col + 1] = ""
           s.bg[y][col + 1] = gpu._bg
           s.fg[y][col + 1] = gpu._fg
+          s.bgi[y][col + 1] = gpu._bgIndex
+          s.fgi[y][col + 1] = gpu._fgIndex
           if onScreen then markDirty(col + 1, y) end
         end
       end
@@ -2237,7 +2255,10 @@ gpu.copy = function(x, y, w, h, dx, dy)
     for rx = 0, w - 1 do
       local sx, sy = x + rx, y + ry
       if sx >= 1 and sx <= W and sy >= 1 and sy <= H then
-        src[ry][rx] = { char = s.char[sy][sx], fg = s.fg[sy][sx], bg = s.bg[sy][sx] }
+        src[ry][rx] = {
+          char = s.char[sy][sx], fg = s.fg[sy][sx], bg = s.bg[sy][sx],
+          fgi = s.fgi[sy][sx], bgi = s.bgi[sy][sx],
+        }
       else
         src[ry][rx] = { char = " ", fg = 0xFFFFFF, bg = 0x000000 }
       end
@@ -2251,6 +2272,8 @@ gpu.copy = function(x, y, w, h, dx, dy)
         s.char[ty][tx] = src[ry][rx].char
         s.fg[ty][tx] = src[ry][rx].fg
         s.bg[ty][tx] = src[ry][rx].bg
+        s.fgi[ty][tx] = src[ry][rx].fgi
+        s.bgi[ty][tx] = src[ry][rx].bgi
         if onScreen then markDirty(tx, ty) end
       end
     end
@@ -2283,6 +2306,8 @@ gpu.fill = function(x, y, w, h, ch)
             s.char[ry][rx] = " "
             s.bg[ry][rx] = gpu._bg
             s.fg[ry][rx] = gpu._fg
+            s.bgi[ry][rx] = gpu._bgIndex
+            s.fgi[ry][rx] = gpu._fgIndex
             if onScreen then markDirty(rx, ry) end
           end
           filled = filled + 1
@@ -2292,11 +2317,15 @@ gpu.fill = function(x, y, w, h, ch)
             s.char[ry][rx] = ch
             s.bg[ry][rx] = gpu._bg
             s.fg[ry][rx] = gpu._fg
+            s.bgi[ry][rx] = gpu._bgIndex
+            s.fgi[ry][rx] = gpu._fgIndex
             if onScreen then markDirty(rx, ry) end
             if cw == 2 and rx + 1 <= W then
               s.char[ry][rx + 1] = ""
               s.bg[ry][rx + 1] = gpu._bg
               s.fg[ry][rx + 1] = gpu._fg
+              s.bgi[ry][rx + 1] = gpu._bgIndex
+              s.fgi[ry][rx + 1] = gpu._fgIndex
               if onScreen then markDirty(rx + 1, ry) end
             end
           end
@@ -2310,27 +2339,31 @@ gpu.fill = function(x, y, w, h, ch)
   return true
 end
 gpu.setBackground = function(color, isPalette)
-  local old = gpu._bg
+  local oldColor, oldIndex = gpu._bg, gpu._bgIndex
   color = math.floor(tonumber(color) or 0)
   if isPalette then
+    gpu._bgIndex = color
     gpu._bg = gpu._palette[color] or 0
   else
+    gpu._bgIndex = nil
     gpu._bg = color
   end
-  return old
+  return oldColor, oldIndex
 end
 gpu.setForeground = function(color, isPalette)
-  local old = gpu._fg
+  local oldColor, oldIndex = gpu._fg, gpu._fgIndex
   color = math.floor(tonumber(color) or 0)
   if isPalette then
+    gpu._fgIndex = color
     gpu._fg = gpu._palette[color] or 0
   else
+    gpu._fgIndex = nil
     gpu._fg = color
   end
-  return old
+  return oldColor, oldIndex
 end
-gpu.getBackground = function() return gpu._bg, false end
-gpu.getForeground = function() return gpu._fg, false end
+gpu.getBackground = function() return gpu._bg, gpu._bgIndex ~= nil end
+gpu.getForeground = function() return gpu._fg, gpu._fgIndex ~= nil end
 gpu.getPaletteColor = function(idx)
   idx = math.floor(tonumber(idx) or 0)
   return gpu._palette[idx] or 0
@@ -2379,7 +2412,10 @@ gpu.bitblt = function(dst, dc, dx, w, h, src, sc, sy)
     for rx = 0, w - 1 do
       local sx, syy = sc + rx, sy + ry
       if sx >= 1 and sx <= sW and syy >= 1 and syy <= sH then
-        snap[ry][rx] = { s.char[syy][sx], s.fg[syy][sx], s.bg[syy][sx] }
+        snap[ry][rx] = {
+          s.char[syy][sx], s.fg[syy][sx], s.bg[syy][sx],
+          s.fgi[syy][sx], s.bgi[syy][sx],
+        }
       end
     end
   end
@@ -2389,6 +2425,7 @@ gpu.bitblt = function(dst, dc, dx, w, h, src, sc, sy)
       local tx, ty = dc + rx, dx + ry
       if cell and tx >= 1 and tx <= dW and ty >= 1 and ty <= dH then
         d.char[ty][tx], d.fg[ty][tx], d.bg[ty][tx] = cell[1], cell[2], cell[3]
+        d.fgi[ty][tx], d.bgi[ty][tx] = cell[4], cell[5]
         if onScreen then markDirty(tx, ty) end
       end
     end
@@ -2857,8 +2894,50 @@ end
 -- ============================================================
 local internetAddr = genAddr()
 local internet = {}
-internet.isTcpEnabled = function() return false end
+internet.isTcpEnabled = function() return true end
 internet.isHttpEnabled = function() return true end
+
+-- 套接字数据以 base64 在 JSON 消息中传输, 避免二进制字节被转义破坏
+internet.encodeBase64 = function(s)
+  local chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+  local out = {}
+  local i = 1
+  while i <= #s do
+    local a, b, c = s:byte(i, i + 2)
+    local n = (a or 0) * 65536 + (b or 0) * 256 + (c or 0)
+    out[#out + 1] = chars:sub(math.floor(n / 262144) % 64 + 1, math.floor(n / 262144) % 64 + 1)
+      .. chars:sub(math.floor(n / 4096) % 64 + 1, math.floor(n / 4096) % 64 + 1)
+      .. (b and chars:sub(math.floor(n / 64) % 64 + 1, math.floor(n / 64) % 64 + 1) or "=")
+      .. (c and chars:sub(n % 64 + 1, n % 64 + 1) or "=")
+    i = i + 3
+  end
+  return table.concat(out)
+end
+
+internet.decodeBase64 = function(t)
+  local map = internet._b64map
+  if not map then
+    map = {}
+    local chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+    for i = 1, 64 do map[chars:sub(i, i)] = i - 1 end
+    internet._b64map = map
+  end
+  t = tostring(t or ""):gsub("[^%w%+/=]", "")
+  local out = {}
+  local i = 1
+  while i <= #t do
+    local c1 = map[t:sub(i, i)] or 0
+    local c2 = map[t:sub(i + 1, i + 1)] or 0
+    local c3 = map[t:sub(i + 2, i + 2)]
+    local c4 = map[t:sub(i + 3, i + 3)]
+    local n = c1 * 262144 + c2 * 4096 + (c3 or 0) * 64 + (c4 or 0)
+    out[#out + 1] = string.char(math.floor(n / 65536) % 256)
+    if c3 then out[#out + 1] = string.char(math.floor(n / 256) % 256) end
+    if c4 then out[#out + 1] = string.char(n % 256) end
+    i = i + 4
+  end
+  return table.concat(out)
+end
 internet.request = function(url, postData, headers)
   if jsonIO then
     -- 异步模式: 通过 JSON I/O 协议发请求, 等待 net_response
@@ -2966,7 +3045,8 @@ internet.request = function(url, postData, headers)
   if not handle.data or handle.data == "" then
     return nil, "HTTP request returned no data"
   end
-  handle.read = function(n)
+  handle.read = function(a, b)
+    local n = (type(a) == "table") and b or a
     if handle.closed or not handle.data then return nil end
     if n and n < math.huge and n == math.floor(n) then
       local chunk = handle.data:sub(1, n)
@@ -2987,7 +3067,98 @@ internet.request = function(url, postData, headers)
   handle.finishConnect = function() return true end
   return handle
 end
-internet.connect = function(addr, port) return nil, "TCP not supported" end
+internet.connect = function(addr, port)
+  local handle = { closed = false, _err = nil, _socket = nil }
+
+  handle.id = function() return handle._socket or 0 end
+  handle.finishConnect = function()
+    if handle._err then return nil, handle._err end
+    return true
+  end
+  -- 同时支持 sock.read(n) 与 sock:read(n) 两种调用方式
+  handle.read = function(a, b)
+    local count = (type(a) == "table") and b or a
+    if handle._err then return nil, handle._err end
+    if handle.closed or not handle._socket then return nil end
+    pendingNetId = pendingNetId + 1
+    local rid = "tcpr_" .. pendingNetId
+    local res = nil
+    pendingNetCallbacks[rid] = function(msg) res = msg end
+    sendToServer({ type = "net_tcp_read", reqId = rid, id = handle._socket, count = tonumber(count) })
+    local waited = 0
+    while not res and waited < 120 do
+      pullSignal(1)
+      waited = waited + 1
+    end
+    pendingNetCallbacks[rid] = nil
+    if not res then return nil, "read timed out" end
+    if res.error then return nil, res.error end
+    if res.closed and not res.data then
+      handle.closed = true
+      return nil
+    end
+    return internet.decodeBase64(res.data or "")
+  end
+  handle.write = function(a, b)
+    local data = (type(a) == "table") and b or a
+    if handle._err then return nil, handle._err end
+    if handle.closed or not handle._socket then return nil, "socket closed" end
+    data = tostring(data or "")
+    pendingNetId = pendingNetId + 1
+    local wid = "tcpw_" .. pendingNetId
+    local res = nil
+    pendingNetCallbacks[wid] = function(msg) res = msg end
+    sendToServer({ type = "net_tcp_write", reqId = wid, id = handle._socket, data = internet.encodeBase64(data) })
+    local waited = 0
+    while not res and waited < 30 do
+      pullSignal(1)
+      waited = waited + 1
+    end
+    pendingNetCallbacks[wid] = nil
+    if not res then return nil, "write timed out" end
+    if res.error then return nil, res.error end
+    return res.written or 0
+  end
+  handle.close = function()
+    if handle.closed then return true end
+    handle.closed = true
+    if handle._socket then
+      sendToServer({ type = "net_tcp_close", id = handle._socket })
+      handle._socket = nil
+    end
+    return true
+  end
+
+  if not jsonIO then
+    handle._err = "TCP requires JSON I/O mode"
+    return handle
+  end
+
+  pendingNetId = pendingNetId + 1
+  local reqId = "tcpc_" .. pendingNetId
+  local result = nil
+  pendingNetCallbacks[reqId] = function(msg) result = msg end
+  sendToServer({
+    type = "net_tcp_connect",
+    reqId = reqId,
+    host = tostring(addr or ""),
+    port = tonumber(port) or 0,
+  })
+  local waited = 0
+  while not result and waited < 15 do
+    pullSignal(1)
+    waited = waited + 1
+  end
+  pendingNetCallbacks[reqId] = nil
+  if not result then
+    handle._err = "connect timed out"
+  elseif result.ok ~= true then
+    handle._err = result.error or "connection failed"
+  else
+    handle._socket = result.id
+  end
+  return handle
+end
 
 -- ============================================================
 -- 数据卡 (Data Card) - OC 模组标准 API, 分 Tier 实现
@@ -4792,7 +4963,6 @@ local function _showScreenMessage(msg)
     gpu.bind(screenAddr)
     local w = Screen.width
     local h = Screen.height
-    gpu.setResolution(w, h)
     gpu.fill(1, 1, w, h, " ")
     local lines = {}
     for line in msg:gmatch("[^\n]+") do
