@@ -107,8 +107,8 @@ print(mods.help())          -- 查看完整的 OC 原版 API 映射
   local redstone = component.redstone
   print(chamber.getHeat(), chamber.getMaxHeat(), chamber.getReactorEUOutput())
   print(chamber.getTemperature(), chamber.getMaxTemperature())
-  print(chamber.getComponentDurabilityRatio(0), chamber.getDurabilityRatio("fuel"))
-  print(chamber.getComponentTemperature(0), chamber.getComponentTemperatureRatio(0))
+  print(chamber.getComponentDurabilityRatio(1), chamber.getDurabilityRatio("fuel"))
+  print(chamber.getComponentTemperature(1), chamber.getComponentTemperatureRatio(1))
   print(redstone.getInput(6), redstone.getInput(9))   -- 燃料棒 / 全部组件最低耐久
   print(redstone.getInput(10), redstone.getInput(13)) -- 燃料棒 / 全部组件最高温度
   chamber.setTemperature(5000)             -- 写入堆芯温度（°C），越界自动夹取

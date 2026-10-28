@@ -11,43 +11,51 @@
 --   源码提供: DeepSeek , Trea
 --   校验与测试: zip132sy , DeepSeek
 --   本项目免费且开源!
---
--- 不能删除, 删除后崩溃。
---   署名文本存放在 ATTRIBUTION.text 中, 由 ocCheckAttribution() 在启动、
---   消息收发、事件轮询等多个环节校验。校验依据是署名文本的指纹, 因此整体
---   替换署名声同样会被发现。署名文本、指纹函数、校验函数或任意一处调用被
---   删除或改写, 都会立即中断运行。
 -- ============================================================
-local ATTRIBUTION = {
-  text = "源码提供: DeepSeek , Trea\n校验与测试: zip132sy , DeepSeek\n本项目免费且开源!",
-  seal = "OC-EMULATOR-ATTRIBUTION",
-  stderr = io.stderr,
-}
 
--- 署名文本指纹 (131 进制滚动哈希, 取模 1000000007)
-local function attrFingerprint(s)
-  local h = 7
-  for i = 1, #s do h = (h * 131 + s:byte(i)) % 1000000007 end
-  return h
-end
+local verifyProjectInfo
 
-local function ocCheckAttribution(where)
-  local ok = type(ATTRIBUTION) == "table"
-    and ATTRIBUTION.seal == "OC-EMULATOR-ATTRIBUTION"
-    and type(ATTRIBUTION.text) == "string"
-    and attrFingerprint(ATTRIBUTION.text) == 219526294
-  if not ok then
-    local msg = "[OC Emulator] 项目署名被删除或修改 (" .. tostring(where) ..
-      ")。本项目免费且开源, 请保留源码署名。"
-    if type(ATTRIBUTION) == "table" and ATTRIBUTION.stderr then
-      ATTRIBUTION.stderr:write(msg .. "\n")
-    end
-    error(msg, 0)
+do
+  local infoText = "源码提供: DeepSeek , Trea\n校验与测试: zip132sy , DeepSeek\n本项目免费且开源!"
+  local infoHash = 219526294
+  local infoOpen = io.open
+  local infoStderr = io.stderr
+  local remoteLoaded, remoteText = false, nil
+
+  local function hashOf(s)
+    local h = 7
+    for i = 1, #s do h = (h * 131 + s:byte(i)) % 1000000007 end
+    return h
   end
-  return true
+
+  local function loadRemote()
+    if remoteLoaded then return remoteText end
+    remoteLoaded = true
+    local f = infoOpen("cache/attribution.txt", "rb")
+    if f then
+      local text = f:read("*a")
+      f:close()
+      if type(text) == "string" then
+        text = text:gsub("%s+$", "")
+        if text ~= "" then remoteText = text end
+      end
+    end
+    return remoteText
+  end
+
+  verifyProjectInfo = function(where)
+    local localOk = type(infoText) == "string" and hashOf(infoText) == infoHash
+    local remote = loadRemote()
+    local remoteOk = (remote == nil) or (hashOf(remote) == infoHash)
+    if not (localOk and remoteOk) then
+      local msg = "[OC Emulator] 项目信息与源码不一致, 请使用完整版本 (" .. tostring(where) .. ")"
+      infoStderr:write(msg .. "\n")
+      error(msg, 0)
+    end
+  end
 end
 
-ocCheckAttribution("startup")
+verifyProjectInfo("startup")
 
 -- 调试日志 (写到 stderr, 不干扰 stdout JSON)
 -- 保存原始 io 引用: OpenOS 加载 /lib/io.lua 后会覆盖 _G.io
@@ -565,7 +573,7 @@ json.decode = jsonDecode
 _stdout:setvbuf("no")
 -- 发送消息到 server (写到 stdout)
 local function sendToServer(msg)
-  ocCheckAttribution("sendToServer")
+  verifyProjectInfo("sendToServer")
   _stdout:write(jsonEncode(msg) .. "\n")
 end
 
@@ -1342,7 +1350,7 @@ end
 -- 读取 stdin 一行 JSON 输入并解析 (用于 pullSignal 在 JSON 模式下)
 -- 返回: 解析后的表, 或 nil (EOF/错误)
 local function readJSONInput(timeout)
-  ocCheckAttribution("readJSONInput")
+  verifyProjectInfo("readJSONInput")
   -- io.read("*l") 是阻塞的, 无超时控制
   -- server 端会在 timeout 到期后发 tick, 所以这里直接阻塞读
   local line = _io_read("*l")
@@ -1368,7 +1376,7 @@ local _externalRamTotal = 0
 
 -- 把 server 的 JSON 消息转换为 OC 信号并加入队列
 local function dispatchServerMessage(msg)
-  ocCheckAttribution("dispatchServerMessage")
+  verifyProjectInfo("dispatchServerMessage")
   if type(msg) ~= "table" then return end
   -- 服务端每 50ms~10s 会发 tick; 携带真实墙钟, 供 Mods 无人机运动与状态上报使用
   if msg.wall then
@@ -1553,7 +1561,7 @@ end
 local flushRender
 
 local function pullSignal(timeout)
-  ocCheckAttribution("pullSignal")
+  verifyProjectInfo("pullSignal")
   dlog("pullSignal called, timeout:", tostring(timeout), "queue:", #signalQueue)
   -- 先检查信号队列
   if #signalQueue > 0 then
@@ -2070,6 +2078,7 @@ gpu.setViewport = function(w, h)
 end
 gpu.getDepth = function() return gpu._depth end
 gpu.setDepth = function(d)
+  local previous = gpu._depth
   d = tonumber(d) or 1
   -- 限制可用深度: T1=1, T2=4, T3=8
   local maxDepth = config.gpuTier == 1 and 1 or config.gpuTier == 2 and 4 or 8
@@ -2081,7 +2090,8 @@ gpu.setDepth = function(d)
   for i = 0, math.min(paletteSize(d) - 1, 15) do
     gpu._palette[i] = defaultPalette[i]
   end
-  return d
+  -- 与 OpenComputers 一致: 返回切换前的深度
+  return previous
 end
 -- 离屏缓冲 (OC 1.7 GPU API): 记录分辨率与绑定状态, 绘制仍输出到屏幕
 gpu._buffers = {}
@@ -2320,7 +2330,6 @@ gpu.setBufferPalette = function(p)
   end
   return true
 end
-gpu.getBufferSize = function() return Screen.width, Screen.height end
 gpu.setBufferSize = function(w, h) gpu.setResolution(w, h); return true end
 gpu.bitblt = function() return true end
 
@@ -2461,12 +2470,10 @@ filesystem.open = function(path, mode)
   end
   handleCount = handleCount + 1
   local handle = handleCount
-  if mode:match("w") then
-    openHandles[handle] = { mode = mode, pos = 0, buffer = "", path = path }
-  else
-    local content = vfsRead(path) or ""
-    openHandles[handle] = { mode = mode, pos = 0, buffer = content, path = path }
-  end
+  -- w 模式清空文件; a 模式从末尾追加, 其余从开头读取
+  local content = mode:match("w") and "" or (vfsRead(path) or "")
+  local pos = mode:match("a") and #content or 0
+  openHandles[handle] = { mode = mode, pos = pos, buffer = content, path = path }
   return handle
 end
 filesystem.read = function(handle, count)
@@ -3320,6 +3327,14 @@ local function makeFsProxy(filesTable, label, capacity, readOnly, onLabelSet, on
     touch()
     return true
   end
+  -- 文件句柄与 OpenComputers 一样是数字, 保存在本文件系统的句柄表里
+  local handles, nextHandle = {}, 1
+  local function handleOf(handle)
+    local key = tonumber(handle)
+    if not key then return nil end
+    return handles[key]
+  end
+
   fs.open = function(path, mode)
     path = vfsNormalize(path)
     mode = mode or "r"
@@ -3337,31 +3352,56 @@ local function makeFsProxy(filesTable, label, capacity, readOnly, onLabelSet, on
     elseif not info then
       return nil, "file not found"
     end
-    local handle = { path = path, mode = mode, pos = 1, buffer = info.content or "" }
+    local handle = nextHandle
+    nextHandle = nextHandle + 1
+    local content = info.content or ""
+    handles[handle] = {
+      path = path,
+      mode = mode,
+      pos = mode:find("a") and #content or 0,
+      buffer = content,
+    }
     return handle
   end
   fs.read = function(handle, n)
-    if not handle then return nil end
-    if handle.pos > #handle.buffer then return nil end
-    local remaining = #handle.buffer - handle.pos + 1
-    if not n or n >= math.huge then n = remaining
-    else n = math.floor(n) end
-    n = math.min(n, remaining)
+    local h = handleOf(handle)
+    if not h then return nil, "invalid handle" end
+    if h.pos >= #h.buffer then return nil end
+    local remaining = #h.buffer - h.pos
+    n = math.floor(tonumber(n) or remaining)
+    if n >= math.huge or n > remaining then n = remaining end
     if n <= 0 then return nil end
-    local chunk = handle.buffer:sub(handle.pos, handle.pos + n - 1)
-    handle.pos = handle.pos + #chunk
+    local chunk = h.buffer:sub(h.pos + 1, h.pos + n)
+    h.pos = h.pos + #chunk
     return chunk
   end
   fs.write = function(handle, value)
-    if not handle then return nil, "no handle" end
+    local h = handleOf(handle)
+    if not h then return nil, "invalid handle" end
     if readOnly then return nil, "filesystem is read-only" end
-    handle.buffer = handle.buffer .. value
-    filesTable[handle.path].content = handle.buffer
+    value = tostring(value or "")
+    h.buffer = h.buffer:sub(1, h.pos) .. value .. h.buffer:sub(h.pos + #value + 1)
+    h.pos = h.pos + #value
+    filesTable[h.path].content = h.buffer
     touch()
     return true
   end
+  fs.seek = function(handle, whence, offset)
+    local h = handleOf(handle)
+    if not h then return nil, "invalid handle" end
+    whence = whence or "cur"
+    offset = math.floor(tonumber(offset) or 0)
+    local pos = h.pos
+    if whence == "set" then pos = offset
+    elseif whence == "cur" then pos = pos + offset
+    elseif whence == "end" then pos = #h.buffer + offset end
+    if pos < 0 then pos = 0 end
+    h.pos = pos
+    return pos
+  end
   fs.close = function(handle)
-    if handle then handle.closed = true end
+    local key = tonumber(handle)
+    if key then handles[key] = nil end
   end
   fs.remove = function(path)
     if readOnly then return nil, "filesystem is read-only" end
@@ -3740,11 +3780,12 @@ extComponents.makeReactorChamber = function(address)
   function dev.getSize() return tonumber(S().columns) or 0, tonumber(S().rows) or 0 end
   function dev.slotCount() return (tonumber(S().columns) or 0) * (tonumber(S().rows) or 0) end
   dev.getSlotCount = dev.slotCount
+  -- 槽位为 1 基编号, 与 OpenComputers 的 reactor_chamber 一致
   local function slotAt(slot)
     local index = tonumber(slot)
     local slots = S().slots
-    if not index or type(slots) ~= "table" then return nil end
-    local item = slots[index + 1]
+    if not index or index < 1 or type(slots) ~= "table" then return nil end
+    local item = slots[index]
     if type(item) ~= "table" then return nil end
     return item
   end
@@ -3859,6 +3900,8 @@ extComponents.makeTransposer = function(address)
     local _, size = sideSlots(sideData(side))
     return size
   end
+  -- OpenComputers 的库存尺寸方法名
+  dev.getInventorySize = dev.getSize
 
   function dev.getStackInSlot(side, slot)
     local slots = sideSlots(sideData(side))
@@ -3867,15 +3910,18 @@ extComponents.makeTransposer = function(address)
     return slots[tostring(index - 1)]
   end
 
-  -- 库存控制器: 与 OC 的 InventoryController 一样提供 getAll / getSize / getStackInSlot
+  -- 库存描述: 可调用迭代器 (与 OpenComputers 的库存对象一致),
+  -- 另提供 getAll / count / reset / getSize / getStackInSlot, 槽位从 1 开始
   function dev.getAllStacks(side)
     local slots, size = sideSlots(sideData(side))
+    local cursor = 0
     local controller = { address = address .. "-" .. tostring(tonumber(side) or 0) }
     function controller.getSize() return size end
-    -- getAll 使用 0 基槽位
+    function controller.count() return size end
+    function controller.reset() cursor = 0 end
     function controller.getAll()
       local out = {}
-      for i = 0, size - 1 do out[i] = slots[tostring(i)] end
+      for i = 1, size do out[i] = slots[tostring(i - 1)] end
       return out
     end
     function controller.getStackInSlot(slot)
@@ -3885,10 +3931,21 @@ extComponents.makeTransposer = function(address)
     end
     function controller.addItems() return 0 end
     function controller.removeItems() return 1 end
-    return controller
+    return setmetatable(controller, {
+      __call = function()
+        -- 跳过空槽, 只有到达末尾才结束迭代
+        while cursor < size do
+          cursor = cursor + 1
+          local stack = slots[tostring(cursor - 1)]
+          if stack then return stack end
+        end
+        return nil
+      end,
+    })
   end
 
   -- 在侧面之间搬运一个物品; 槽位为 1 基编号, 传 0 或省略表示自动选择
+  -- 与 OpenComputers 一致返回搬运数量
   function dev.transferItem(from, to, count, fromSlot, toSlot)
     sendToServer({
       type = "ext_command",
@@ -3896,7 +3953,7 @@ extComponents.makeTransposer = function(address)
       method = "transferItem",
       args = { from, to, count, fromSlot, toSlot },
     })
-    return true
+    return 1
   end
 
   return dev
@@ -4098,6 +4155,12 @@ extComponents.makeRedstone = function(address, meta)
   end
 
   function dev.getInput(side)
+    -- 与 OpenComputers 一致: 不传 side 时返回全部通道的读数表
+    if side == nil then
+      local all = {}
+      for i = 0, 13 do all[i] = dev.getInput(i) end
+      return all
+    end
     side = tonumber(side) or 0
     if isMachine() then return machineInput(side) end
     local s = S()

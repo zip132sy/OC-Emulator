@@ -692,7 +692,7 @@ print(mods.getOffhand())            -- 副手工具
 | `producesEnergy()` | boolean | 开关打开且仍有未耗尽的燃料棒 |
 | `getSize()` | columns, rows | 网格尺寸 |
 | `slotCount()` / `getSlotCount()` | number | 槽位总数 |
-| `getStackInSlot(slot)` / `getComponentInfo(slot)` | table / nil | 0 基槽位内容，含 `durability` / `maxDurability` |
+| `getStackInSlot(slot)` / `getComponentInfo(slot)` | table / nil | 1 基槽位内容，含 `durability` / `maxDurability` |
 | `getComponentDurability(slot)` / `getSlotDurability(slot)` | current, max | 组件当前耐久与最大耐久；空槽为 0, 0 |
 | `getComponentDurabilityRatio(slot)` | number | 组件剩余耐久比例（0 ~ 1）；空槽为 0 |
 | `getDurabilityRatio(category)` | number | 同类组件中最低的剩余耐久比例（0 ~ 1）；`category` 可省略表示全部组件 |
@@ -713,10 +713,10 @@ print(mods.getOffhand())            -- 副手工具
 
 | 方法 | 返回 | 说明 |
 |---|---|---|
-| `getAllStacks(side)` | table | 库存控制器：`getAll()`（0 基槽位）、`getSize()`、`getStackInSlot(slot)` |
-| `getSize(side)` | number | 该侧面的槽位数 |
+| `getAllStacks(side)` | table | 库存对象：可调用迭代（`for stack in inv do`）、`reset()`、`getAll()`（1 基槽位）、`count()`、`getSize()`、`getStackInSlot(slot)` |
+| `getInventorySize(side)` / `getSize(side)` | number | 该侧面的槽位数 |
 | `getStackInSlot(side, slot)` | table / nil | 1 基槽位内容 |
-| `transferItem(from, to, count, fromSlot, toSlot)` | boolean | 搬运一个物品；槽位 1 基，传 0 或省略表示自动选择 |
+| `transferItem(from, to, count, fromSlot, toSlot)` | number | 搬运一个物品，返回搬运数量；槽位 1 基，传 0 或省略表示自动选择 |
 
 - 侧面映射固定：`0` = 反应堆堆芯（当前列数 × 6 格），`1` = 燃料箱，`2` = 废料箱。
 - 物品使用 IC2 名称：燃料棒为 `ic2:nuclear`，metadata 11~16 对应铀 / MOX 的单 / 双 / 四联；冷却单元 `ic2:coolant10k` / `coolant30k` / `coolant60k`；冷凝模块 `ic2:rsh_condensator` / `ic2:lzh_condensator`。
@@ -901,6 +901,28 @@ redstone.setOutput(0, 15)
 
 - 组件地址保存在 `machine.json` 的 `addresses` 中，重命名/调整脚本顺序时旧地址仍会保留。
 - 修改脚本后组件会重新注册，计算机会收到 `component_removed` / `component_added` 事件。
+
+### 9.6 与原版 OpenComputers 的差异
+
+组件方法名、参数与槽位编号按原版 OC 文档对齐（1 基槽位、数字文件句柄、`getInventorySize` 等），
+所以在这里跑通的脚本一般可以直接放到游戏里。以下是**已知仍有差异**的地方，写脚本时要留意：
+
+| 位置 | 差异 | 影响 |
+|---|---|---|
+| `gpu` 离屏缓冲 | 只记录分辨率与激活状态，绘制仍输出到屏幕 | 依赖 `setActiveBuffer` 做后台绘制的程序画面不正确 |
+| `gpu.bitblt` | 不复制像素，只返回 `true` | 依赖位块传送做刷新优化的程序画面不更新 |
+| `gpu.get` | 只返回字符、前景、背景 3 个值 | 原版多返回两个调色板索引，读取第 4/5 个值会得到 `nil` |
+| `gpu.setDepth` | 返回设置后的深度，越界自动夹取 | 原版返回旧深度、越界报错 |
+| `gpu.setResolution` | 越界自动夹取并返回 `true` | 原版越界会报错 |
+| `internet.connect` | 不支持 TCP，返回 `nil, "TCP not supported"` | 用 socket 的程序无法运行 |
+| `internet.request` | 同步阻塞返回句柄 | 原版立即返回句柄，需要 `finishConnect()` |
+| `screen` | 额外提供 `getResolution` / `setResolution` / `setCursor` / `setCursorBlink` 等 | 原版这些在 `gpu` 上，真机调用为 `nil` |
+| `keyboard.isKeyDown` | 恒返回 `false` | 浏览器里拿不到真实按键状态 |
+| `filesystem.list` | 目录名带结尾 `/` | 原版不带，做名字比较时要先去掉 |
+| `redstone` | 0~13 号通道映射为反应堆状态，另有 `getSides()` | 原版 side 是方块六个面，非反应堆脚本取值含义不同 |
+| `transposer` | 侧面 0 / 1 / 2 对应堆芯 / 燃料箱 / 废料箱 | 原版 side 是方块朝向，真机要用实际面编号 |
+| `reactor_chamber` | 温度读写、耐久比例、`producesEnergy` 等为扩展 | 原版没有这些方法，真机调用会报 `nil` |
+| `eeprom.makeReadonly` | 未实现，返回 `false, "not supported"` | 原版行为不同，需要只读 EEPROM 的程序不可用 |
 
 ## 10. 无线控制协议（T1 / T2 均可）
 
