@@ -1994,16 +1994,26 @@ async function main() {
     logger.log(`  Press Ctrl+C to stop.`);
     logger.log(`===============================================\n`);
 
-    // 把实际监听端口写入固定文件, 供 run.bat / run.sh 的外部看门狗读取。
+    // 把实际监听端口与进程号写入固定文件, 供 run.bat / run.sh 的外部看门狗读取。
     // 看门狗若把端口写死: 当配置端口被占用导致服务器自动换到 8081 时, 它仍监视 8080,
     // 检查失败后直接退出 —— 结果就是服务真的卡死时既不会被杀掉也不会被重启,
     // 命令行上也不会有任何提示。写入实际端口后看门狗总能找到正确的服务。
+    // 两个细节避免看门狗拿到"过期/半截"的状态:
+    //   1) 先写临时文件再改名, 读取方不会读到只写了一半的内容;
+    //   2) 退出时不删除, 重启的空档里文件仍然指向最近一次的实际值,
+    //      看门狗据此校验监听进程号, 不会因为"文件不存在"而误重启服务。
     try {
-      const portFile = path.join(PROJECT_DIR, 'cache', '.server-port');
-      fs.mkdirSync(path.dirname(portFile), { recursive: true });
-      fs.writeFileSync(portFile, String(actualPort), 'utf8');
-      process.on('exit', () => { try { fs.unlinkSync(portFile); } catch (e) { /* 忽略 */ } });
-    } catch (e) { /* 端口文件写入失败不影响服务运行 */ }
+      const cacheDir = path.join(PROJECT_DIR, 'cache');
+      fs.mkdirSync(cacheDir, { recursive: true });
+      const writeAtomic = (name, data) => {
+        const file = path.join(cacheDir, name);
+        const tmp = `${file}.${process.pid}.tmp`;
+        fs.writeFileSync(tmp, data, 'utf8');
+        fs.renameSync(tmp, file);
+      };
+      writeAtomic('.server-port', String(actualPort));
+      writeAtomic('.server-pid', String(process.pid));
+    } catch (e) { /* 状态文件写入失败不影响服务运行; 看门狗读不到时会保持不动 */ }
 
     // 应用"命令行窗口显示"设置 (关闭时启动即隐藏; 可在前端设置里重新打开)
     if (settings.showConsole === false) {

@@ -33,6 +33,11 @@ const DiskEditor = (() => {
         searchQuery: '',         // 搜索关键词
         currentDir: '/',         // 当前浏览的目录 (上传 / 新建时的默认位置)
         clipboard: null,         // 右键菜单的复制 / 剪切内容 { mode, path, type }
+        groupCollapsed: { dirs: false, files: false }, // 文件树分组 (文件夹/文件) 折叠状态
+        uploadListCollapsed: false, // 上传列表 (进度) 折叠状态
+        uploadItems: [],         // 上传列表条目 [{ name, path, status, percent, error }]
+        uploadDone: 0,           // 上传完成数
+        uploadFailed: 0,         // 上传失败数
       });
     }
     return sessions.get(diskPath);
@@ -79,6 +84,14 @@ const DiskEditor = (() => {
               <span data-role="progress-pct"></span>
             </div>
             <div class="disk-progress-bar"><div class="disk-progress-fill" data-role="progress-fill"></div></div>
+          </div>
+          <div class="disk-upload-list" id="disk-upload-list-${cssEsc(diskPath)}" style="display:none">
+            <div class="disk-upload-header" id="disk-upload-header-${cssEsc(diskPath)}" title="${I18N.t('disk.upload-list-toggle')}">
+              <span class="twisty"></span>
+              <span class="disk-upload-title">${I18N.t('disk.upload-list')}</span>
+              <span class="disk-upload-summary" data-role="upload-summary"></span>
+            </div>
+            <div class="disk-upload-body" id="disk-upload-body-${cssEsc(diskPath)}"></div>
           </div>
           <pre class="disk-file-content" id="disk-content-${cssEsc(diskPath)}" contenteditable="false" spellcheck="false">
             <span style="color:#606060">${I18N.t('disk.select-file')}</span>
@@ -135,6 +148,15 @@ const DiskEditor = (() => {
       e.preventDefault();
       openContextMenu(diskPath, e.clientX, e.clientY, row.dataset.path, row.dataset.type, row);
     });
+
+    // 上传列表: 点击标题折叠 / 展开; 恢复上次的上传记录
+    const uploadHeader = pane.querySelector(`#disk-upload-header-${cssEsc(diskPath)}`);
+    if (uploadHeader) {
+      uploadHeader.addEventListener('click', () => toggleUploadList(diskPath));
+    }
+    if (session.uploadItems.length) {
+      showUploadList(diskPath);
+    }
 
     // 加载信息
     loadInfo(diskPath);
@@ -218,39 +240,82 @@ const DiskEditor = (() => {
         treeEl.innerHTML = `<div class="disk-tree-row" style="color:var(--fg-dim)">${I18N.t('disk.no-match')}</div>`;
         return;
       }
-      // 按路径排序显示
+      // 按路径排序, 并按「文件夹 / 文件」分组显示
       matches.sort((a, b) => a.path.localeCompare(b.path));
-      for (const m of matches) {
-        const row = document.createElement('div');
-        row.className = 'disk-tree-row ' + (m.type === 'dir' ? 'dir' : 'file') + ' search-result';
-        row.innerHTML = `<span class="icon"></span><span class="name"></span><span class="path-hint"></span>`;
-        row.querySelector('.name').textContent = m.name;
-        row.querySelector('.path-hint').textContent = m.path;
-        row.dataset.path = m.path;
-        row.dataset.type = m.type;
-        if (m.type === 'file') {
-          row.addEventListener('click', () => {
-            // 找到这个文件, 展开其父目录
-            const parentPath = m.path.substring(0, m.path.lastIndexOf('/')) || '/';
-            expandDirParents(diskPath, parentPath);
-            selectFile(diskPath, m.path, row);
-          });
-        } else {
-          row.addEventListener('click', () => {
-            // 跳转到该文件夹, 展开它
-            session.searchQuery = '';
-            document.getElementById(`disk-search-${cssEsc(diskPath)}`).value = '';
-            session.expandedDirs.add(m.path);
-            expandDirParents(diskPath, m.path);
-            renderTree(diskPath);
-          });
-        }
-        treeEl.appendChild(row);
-      }
+      renderTreeGroups(diskPath, treeEl, matches, (body, m) => renderSearchRow(diskPath, body, m));
     } else {
-      // 正常树视图
-      renderTreeNode(diskPath, treeEl, session.tree, '', 0);
+      // 正常树视图: 根级按「文件夹 / 文件」分组, 分组标题可折叠
+      const rootChildren = getChildrenArray(session.tree).sort(sortTreeChildren);
+      renderTreeGroups(diskPath, treeEl, rootChildren, (body, child) => {
+        renderTreeChild(diskPath, body, child, '', 0);
+      });
     }
+  }
+
+  // 文件排序: 文件夹在前, 文件在后; 同类按名称
+  function sortTreeChildren(a, b) {
+    if (a.type !== b.type) return a.type === 'dir' ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  }
+
+  // 按「文件夹 / 文件」分组渲染; 点击分组标题可折叠 / 展开该组
+  function renderTreeGroups(diskPath, container, items, renderItem) {
+    const session = getSession(diskPath);
+    const groups = [
+      { key: 'dirs', label: I18N.t('disk.group-folders'), items: items.filter(it => it.type === 'dir') },
+      { key: 'files', label: I18N.t('disk.group-files'), items: items.filter(it => it.type === 'file') },
+    ];
+    for (const group of groups) {
+      if (!group.items.length) continue;
+      const collapsed = !!session.groupCollapsed[group.key];
+      const header = document.createElement('div');
+      header.className = 'disk-tree-group' + (collapsed ? '' : ' expanded');
+      header.dataset.group = group.key;
+      header.innerHTML = `<span class="twisty"></span><span class="group-name"></span><span class="group-count"></span>`;
+      header.querySelector('.group-name').textContent = group.label;
+      header.querySelector('.group-count').textContent = `(${group.items.length})`;
+      header.addEventListener('click', () => {
+        session.groupCollapsed[group.key] = !session.groupCollapsed[group.key];
+        renderTree(diskPath);
+      });
+      container.appendChild(header);
+
+      const body = document.createElement('div');
+      body.className = 'disk-tree-group-body';
+      if (collapsed) body.style.display = 'none';
+      container.appendChild(body);
+      for (const item of group.items) renderItem(body, item);
+    }
+  }
+
+  // 搜索结果的单行 (带完整路径提示)
+  function renderSearchRow(diskPath, container, m) {
+    const session = getSession(diskPath);
+    const row = document.createElement('div');
+    row.className = 'disk-tree-row ' + (m.type === 'dir' ? 'dir' : 'file') + ' search-result';
+    row.innerHTML = `<span class="icon"></span><span class="name"></span><span class="path-hint"></span>`;
+    row.querySelector('.name').textContent = m.name;
+    row.querySelector('.path-hint').textContent = m.path;
+    row.dataset.path = m.path;
+    row.dataset.type = m.type;
+    if (m.type === 'file') {
+      row.addEventListener('click', () => {
+        // 找到这个文件, 展开其父目录
+        const parentPath = m.path.substring(0, m.path.lastIndexOf('/')) || '/';
+        expandDirParents(diskPath, parentPath);
+        selectFile(diskPath, m.path, row);
+      });
+    } else {
+      row.addEventListener('click', () => {
+        // 跳转到该文件夹, 展开它
+        session.searchQuery = '';
+        document.getElementById(`disk-search-${cssEsc(diskPath)}`).value = '';
+        session.expandedDirs.add(m.path);
+        expandDirParents(diskPath, m.path);
+        renderTree(diskPath);
+      });
+    }
+    container.appendChild(row);
   }
 
   // 收集搜索匹配的节点
@@ -289,50 +354,50 @@ const DiskEditor = (() => {
 
   function renderTreeNode(diskPath, parentEl, node, parentPath, depth) {
     if (!node || !node.children) return;
+    const children = getChildrenArray(node).sort(sortTreeChildren);
+    for (const child of children) {
+      renderTreeChild(diskPath, parentEl, child, parentPath, depth);
+    }
+  }
+
+  // 渲染单个节点 (行 + 递归子节点容器)
+  function renderTreeChild(diskPath, parentEl, child, parentPath, depth) {
     const session = getSession(diskPath);
-    // 按名称排序: 文件夹在前, 文件在后
-    const children = getChildrenArray(node);
-    const sorted = [...children].sort((a, b) => {
-      if (a.type !== b.type) return a.type === 'dir' ? -1 : 1;
-      return a.name.localeCompare(b.name);
-    });
-    for (const child of sorted) {
-      const childPath = parentPath ? `${parentPath}/${child.name}` : '/' + child.name;
-      const row = document.createElement('div');
-      row.className = 'disk-tree-row ' + (child.type === 'dir' ? 'dir' : 'file');
-      row.style.paddingLeft = (depth * 12 + 6) + 'px';
-      row.innerHTML = `<span class="twisty"></span><span class="icon"></span><span class="name"></span>`;
-      row.querySelector('.name').textContent = child.name;
-      if (child.size != null) {
-        row.querySelector('.name').textContent += ` (${formatSize(child.size)})`;
+    const childPath = parentPath ? `${parentPath}/${child.name}` : '/' + child.name;
+    const row = document.createElement('div');
+    row.className = 'disk-tree-row ' + (child.type === 'dir' ? 'dir' : 'file');
+    row.style.paddingLeft = (depth * 12 + 6) + 'px';
+    row.innerHTML = `<span class="twisty"></span><span class="icon"></span><span class="name"></span>`;
+    row.querySelector('.name').textContent = child.name;
+    if (child.size != null) {
+      row.querySelector('.name').textContent += ` (${formatSize(child.size)})`;
+    }
+    // 在节点上记录完整路径
+    row.dataset.path = childPath;
+    row.dataset.type = child.type;
+    if (child.type === 'file') {
+      row.addEventListener('click', () => selectFile(diskPath, childPath, row));
+    } else {
+      const isExpanded = session.expandedDirs.has(childPath);
+      if (isExpanded) row.classList.add('expanded');
+      row.querySelector('.twisty').addEventListener('click', (e) => {
+        e.stopPropagation();
+        toggleDir(diskPath, childPath, row);
+      });
+      row.addEventListener('click', () => {
+        toggleDir(diskPath, childPath, row);
+      });
+    }
+    parentEl.appendChild(row);
+    if (child.type === 'dir' && child.children) {
+      const childContainer = document.createElement('div');
+      childContainer.className = 'disk-tree-node';
+      childContainer.dataset.dirPath = childPath;
+      if (!session.expandedDirs.has(childPath)) {
+        childContainer.style.display = 'none';
       }
-      // 在节点上记录完整路径
-      row.dataset.path = childPath;
-      row.dataset.type = child.type;
-      if (child.type === 'file') {
-        row.addEventListener('click', () => selectFile(diskPath, childPath, row));
-      } else {
-        const isExpanded = session.expandedDirs.has(childPath);
-        if (isExpanded) row.classList.add('expanded');
-        row.querySelector('.twisty').addEventListener('click', (e) => {
-          e.stopPropagation();
-          toggleDir(diskPath, childPath, row);
-        });
-        row.addEventListener('click', () => {
-          toggleDir(diskPath, childPath, row);
-        });
-      }
-      parentEl.appendChild(row);
-      if (child.type === 'dir' && child.children) {
-        const childContainer = document.createElement('div');
-        childContainer.className = 'disk-tree-node';
-        childContainer.dataset.dirPath = childPath;
-        if (!session.expandedDirs.has(childPath)) {
-          childContainer.style.display = 'none';
-        }
-        parentEl.appendChild(childContainer);
-        renderTreeNode(diskPath, childContainer, child, childPath, depth + 1);
-      }
+      parentEl.appendChild(childContainer);
+      renderTreeNode(diskPath, childContainer, child, childPath, depth + 1);
     }
   }
 
@@ -821,6 +886,221 @@ const DiskEditor = (() => {
     box.classList.remove('indeterminate');
   }
 
+  // ---------- 上传列表 (多文件进度, 可折叠) ----------
+
+  function uploadListBox(diskPath) {
+    return document.getElementById(`disk-upload-list-${cssEsc(diskPath)}`);
+  }
+
+  // 应用折叠状态到列表 (标题箭头 / 列表主体显示)
+  function applyUploadListCollapsed(diskPath) {
+    const session = getSession(diskPath);
+    const box = uploadListBox(diskPath);
+    if (!box) return;
+    const header = box.querySelector('.disk-upload-header');
+    if (header) header.classList.toggle('collapsed', session.uploadListCollapsed);
+    const body = box.querySelector('.disk-upload-body');
+    if (body) body.style.display = session.uploadListCollapsed ? 'none' : '';
+  }
+
+  // 点击标题折叠 / 展开上传列表
+  function toggleUploadList(diskPath) {
+    const session = getSession(diskPath);
+    session.uploadListCollapsed = !session.uploadListCollapsed;
+    applyUploadListCollapsed(diskPath);
+  }
+
+  // 显示上传列表 (保留已有条目) 并恢复折叠状态
+  function showUploadList(diskPath) {
+    const box = uploadListBox(diskPath);
+    if (!box) return;
+    box.style.display = '';
+    applyUploadListCollapsed(diskPath);
+    renderUploadRows(diskPath);
+    updateUploadSummary(diskPath);
+  }
+
+  // 开始新一轮上传: 重建条目
+  function startUploadList(diskPath, files) {
+    const session = getSession(diskPath);
+    if (session.uploadTicker) {
+      clearInterval(session.uploadTicker);
+      session.uploadTicker = null;
+    }
+    session.uploadItems = Array.from(files).map(f => ({
+      name: f.name,
+      path: null,
+      status: 'pending',
+      percent: null,
+      phase: null,
+      writeStartedAt: null,
+      error: null,
+    }));
+    session.uploadDone = 0;
+    session.uploadFailed = 0;
+    showUploadList(diskPath);
+  }
+
+  function renderUploadRows(diskPath) {
+    const session = getSession(diskPath);
+    const body = document.getElementById(`disk-upload-body-${cssEsc(diskPath)}`);
+    if (!body) return;
+    body.innerHTML = '';
+    session.uploadItems.forEach((item, i) => {
+      const row = document.createElement('div');
+      row.className = 'disk-upload-row';
+      row.dataset.idx = String(i);
+      row.innerHTML = `
+        <div class="disk-upload-row-top">
+          <span class="disk-upload-name"></span>
+          <span class="disk-upload-status"></span>
+        </div>
+        <div class="disk-upload-bar"><div class="disk-upload-fill"></div></div>
+      `;
+      const nameEl = row.querySelector('.disk-upload-name');
+      nameEl.textContent = item.name;
+      nameEl.title = item.path || item.name;
+      body.appendChild(row);
+      paintUploadRow(diskPath, i);
+    });
+  }
+
+  function paintUploadRow(diskPath, index) {
+    const session = getSession(diskPath);
+    const item = session.uploadItems[index];
+    if (!item) return;
+    const row = document.querySelector(`#disk-upload-body-${cssEsc(diskPath)} .disk-upload-row[data-idx="${index}"]`);
+    if (!row) return;
+    const statusEl = row.querySelector('.disk-upload-status');
+    const fillEl = row.querySelector('.disk-upload-fill');
+    row.classList.remove('uploading', 'done', 'error', 'skipped', 'indeterminate');
+    if (item.status === 'done') {
+      row.classList.add('done');
+      statusEl.textContent = '✓';
+      fillEl.style.width = '100%';
+    } else if (item.status === 'skipped') {
+      row.classList.add('skipped');
+      statusEl.textContent = I18N.t('disk.upload-skipped');
+      fillEl.style.width = '0%';
+    } else if (item.status === 'error') {
+      row.classList.add('error');
+      statusEl.textContent = '✗ ' + (item.error || I18N.t('disk.upload-failed'));
+      fillEl.style.width = '100%';
+    } else if (item.status === 'uploading') {
+      row.classList.add('uploading');
+      const pct = Number.isFinite(item.percent) ? Math.max(0, Math.min(100, item.percent)) : null;
+      const phase = item.phase || 'sending';
+      const label = phase === 'reading' ? I18N.t('disk.upload-reading')
+        : phase === 'writing' ? I18N.t('disk.upload-writing')
+        : I18N.t('disk.uploading');
+      // 读取 / 发送有真实百分比; 服务器写盘阶段无法细分, 显示流动的不确定进度
+      const indeterminate = phase === 'writing' || pct == null;
+      row.classList.toggle('indeterminate', indeterminate);
+      statusEl.textContent = indeterminate ? label : `${label} ${Math.round(pct)}%`;
+      fillEl.style.width = indeterminate ? '' : pct + '%';
+      if (phase === 'writing') ensureUploadTicker(diskPath);
+    } else {
+      statusEl.textContent = I18N.t('disk.upload-pending');
+      fillEl.style.width = '0%';
+    }
+  }
+
+  // 更新单个文件的状态 / 进度; 只刷新这一行
+  function updateUploadItem(diskPath, index, patch) {
+    const session = getSession(diskPath);
+    const item = session.uploadItems[index];
+    if (!item) return;
+    Object.assign(item, patch);
+    // 进入服务器写盘阶段: 记录开始时间, 用计时器给出真实的耗时反馈
+    if (patch.phase === 'writing' && !item.writeStartedAt) item.writeStartedAt = Date.now();
+    if (patch.status && patch.status !== 'uploading') {
+      item.writeStartedAt = null;
+      stopUploadTicker(diskPath);
+    }
+    const row = document.querySelector(`#disk-upload-body-${cssEsc(diskPath)} .disk-upload-row[data-idx="${index}"]`);
+    if (!row) {
+      // 标签页被重建时整表重渲染
+      renderUploadRows(diskPath);
+      return;
+    }
+    const nameEl = row.querySelector('.disk-upload-name');
+    if (patch.name) nameEl.textContent = patch.name;
+    if (patch.path) nameEl.title = patch.path;
+    paintUploadRow(diskPath, index);
+  }
+
+  // 更新标题栏摘要: 已完成 / 总数 (失败数)
+  function updateUploadSummary(diskPath) {
+    const session = getSession(diskPath);
+    const box = uploadListBox(diskPath);
+    if (!box) return;
+    const el = box.querySelector('[data-role="upload-summary"]');
+    if (!el) return;
+    const total = session.uploadItems.length;
+    const done = session.uploadItems.filter(it => it.status === 'done').length;
+    const failed = session.uploadItems.filter(it => it.status === 'error').length;
+    const skipped = session.uploadItems.filter(it => it.status === 'skipped').length;
+    session.uploadDone = done;
+    session.uploadFailed = failed;
+    let text = `${done} / ${total}`;
+    if (failed) text += ` · ${failed} ${I18N.t('disk.upload-failed-count')}`;
+    if (skipped) text += ` · ${skipped} ${I18N.t('disk.upload-skipped-count')}`;
+    el.textContent = text;
+    box.classList.toggle('has-error', failed > 0);
+  }
+
+  // ---------- 写盘阶段计时 (服务器同步落盘, 无法细分百分比) ----------
+
+  function formatElapsed(sec) {
+    if (sec < 60) return sec.toFixed(1) + 's';
+    const m = Math.floor(sec / 60);
+    const s = Math.floor(sec % 60);
+    return `${m}:${String(s).padStart(2, '0')}`;
+  }
+
+  function writingItems(diskPath) {
+    const session = getSession(diskPath);
+    return session.uploadItems
+      .map((item, i) => ({ item, i }))
+      .filter(({ item }) => item.status === 'uploading' && item.phase === 'writing');
+  }
+
+  function tickWritingRows(diskPath) {
+    const session = getSession(diskPath);
+    const rows = writingItems(diskPath);
+    if (!rows.length) {
+      if (session.uploadTicker) {
+        clearInterval(session.uploadTicker);
+        session.uploadTicker = null;
+      }
+      return;
+    }
+    for (const { item, i } of rows) {
+      const row = document.querySelector(`#disk-upload-body-${cssEsc(diskPath)} .disk-upload-row[data-idx="${i}"]`);
+      if (!row) continue;
+      const statusEl = row.querySelector('.disk-upload-status');
+      if (!statusEl) continue;
+      const elapsed = item.writeStartedAt ? (Date.now() - item.writeStartedAt) / 1000 : 0;
+      statusEl.textContent = `${I18N.t('disk.upload-writing')} ${formatElapsed(elapsed)}`;
+    }
+  }
+
+  function ensureUploadTicker(diskPath) {
+    const session = getSession(diskPath);
+    if (session.uploadTicker) return;
+    if (!writingItems(diskPath).length) return;
+    session.uploadTicker = setInterval(() => tickWritingRows(diskPath), 200);
+    tickWritingRows(diskPath);
+  }
+
+  function stopUploadTicker(diskPath) {
+    const session = getSession(diskPath);
+    if (session.uploadTicker && !writingItems(diskPath).length) {
+      clearInterval(session.uploadTicker);
+      session.uploadTicker = null;
+    }
+  }
+
   // ---------- 目录选择 ----------
 
   function parentOf(dirPath) {
@@ -1068,6 +1348,77 @@ const DiskEditor = (() => {
     input.click();
   }
 
+  // 上传遇到同名文件: 询问用户 取消 / 覆盖 / 重命名
+  function askUploadConflict(targetPath) {
+    return new Promise((resolve) => {
+      const modal = document.createElement('div');
+      modal.className = 'modal';
+      modal.innerHTML = `
+        <div class="modal-backdrop"></div>
+        <div class="modal-dialog">
+          <div class="modal-header">
+            <h3>${I18N.t('disk.upload-conflict-title')}</h3>
+          </div>
+          <div class="modal-body">
+            <div class="disk-conflict-msg" data-role="message"></div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn" data-action="cancel">${I18N.t('disk.cancel')}</button>
+            <button class="btn" data-action="rename">${I18N.t('disk.upload-conflict-rename')}</button>
+            <button class="btn btn-primary" data-action="overwrite">${I18N.t('disk.upload-conflict-overwrite')}</button>
+          </div>
+        </div>
+      `;
+      modal.querySelector('[data-role="message"]').textContent =
+        I18N.t('disk.upload-conflict-msg', { path: targetPath });
+      document.body.appendChild(modal);
+
+      let closed = false;
+      function close(action) {
+        if (closed) return;
+        closed = true;
+        document.removeEventListener('keydown', onKey);
+        modal.remove();
+        resolve(action);
+      }
+      function onKey(e) {
+        if (e.key === 'Escape') close('cancel');
+      }
+      document.addEventListener('keydown', onKey);
+      modal.querySelector('[data-action="cancel"]').addEventListener('click', () => close('cancel'));
+      modal.querySelector('[data-action="rename"]').addEventListener('click', () => close('rename'));
+      modal.querySelector('[data-action="overwrite"]').addEventListener('click', () => close('overwrite'));
+      modal.querySelector('.modal-backdrop').addEventListener('click', () => close('cancel'));
+    });
+  }
+
+  // 收集文件树中的全部文件路径
+  function collectFilePaths(node, parentPath, out) {
+    for (const child of getChildrenArray(node)) {
+      const childPath = parentPath ? `${parentPath}/${child.name}` : '/' + child.name;
+      if (child.type === 'file') {
+        out.add(childPath);
+      } else if (child.children) {
+        collectFilePaths(child, childPath, out);
+      }
+    }
+    return out;
+  }
+
+  // 生成不重名的文件名: name_1.ext, name_2.ext ... 依此类推
+  function makeUniqueName(name, dirPath, existingPaths) {
+    const dot = name.lastIndexOf('.');
+    const base = dot > 0 ? name.slice(0, dot) : name;
+    const ext = dot > 0 ? name.slice(dot) : '';
+    for (let i = 1; ; i++) {
+      const candidate = `${base}_${i}${ext}`;
+      const candidatePath = joinPath(dirPath, candidate);
+      if (!existingPaths.has(candidatePath)) {
+        return { name: candidate, path: candidatePath };
+      }
+    }
+  }
+
   async function handleFileUpload(diskPath, files, targetDir) {
     const session = getSession(diskPath);
     if (session.info?.locked) {
@@ -1081,23 +1432,56 @@ const DiskEditor = (() => {
     let successCount = 0;
     const errors = [];
 
+    // 上传前刷新文件树, 用于检测目标位置是否已有同名文件
+    await loadTree(diskPath);
+    const existingPaths = collectFilePaths(session.tree, '', new Set());
+
+    // 逐文件上传, 在「上传列表」中显示每个文件的进度
+    startUploadList(diskPath, list);
     for (let i = 0; i < list.length; i++) {
       const file = list[i];
-      const innerPath = joinPath(dir, file.name);
-      const prefix = `${I18N.t('disk.uploading')} ${i + 1}/${list.length}`;
+      let targetName = file.name;
+      let innerPath = joinPath(dir, file.name);
+
+      // 同名文件: 询问 取消 / 覆盖 / 重命名
+      if (existingPaths.has(innerPath)) {
+        const action = await askUploadConflict(innerPath);
+        if (action === 'cancel') {
+          updateUploadItem(diskPath, i, { status: 'skipped' });
+          updateUploadSummary(diskPath);
+          continue;
+        }
+        if (action === 'rename') {
+          const renamed = makeUniqueName(file.name, dir, existingPaths);
+          targetName = renamed.name;
+          innerPath = renamed.path;
+          updateUploadItem(diskPath, i, { name: targetName, path: innerPath });
+        }
+      }
+
+      // 进度分三段: 读取本地文件 0-30%, 发送数据 30-70%, 服务器写盘为不确定态
+      updateUploadItem(diskPath, i, { path: innerPath, status: 'uploading', phase: 'reading', percent: 0 });
       try {
-        showProgress(diskPath, `${prefix} · ${file.name}`, null);
-        const content = await readFileAsText(file);
-        await uploadContent(diskPath, innerPath, content, (loaded, total) => {
-          const overall = total > 0 ? ((i + loaded / total) / list.length) * 100 : null;
-          showProgress(diskPath, `${prefix} · ${file.name}`, overall);
+        const content = await readFileAsText(file, (loaded, total) => {
+          if (total > 0) updateUploadItem(diskPath, i, { percent: (loaded / total) * 30 });
+        });
+        updateUploadItem(diskPath, i, { phase: 'sending', percent: 30 });
+        await uploadContent(diskPath, innerPath, content, ({ phase, loaded, total }) => {
+          if (phase === 'writing' || !(total > 0)) {
+            updateUploadItem(diskPath, i, { phase: 'writing', percent: null });
+          } else {
+            updateUploadItem(diskPath, i, { phase: 'sending', percent: 30 + (loaded / total) * 40 });
+          }
         });
         successCount++;
+        existingPaths.add(innerPath);
+        updateUploadItem(diskPath, i, { status: 'done', percent: 100 });
       } catch (e) {
-        errors.push(file.name + ': ' + e.message);
+        errors.push(targetName + ': ' + e.message);
+        updateUploadItem(diskPath, i, { status: 'error', error: e.message });
       }
+      updateUploadSummary(diskPath);
     }
-    hideProgress(diskPath);
 
     // 展开目标目录并刷新
     session.currentDir = dir;
@@ -1108,14 +1492,19 @@ const DiskEditor = (() => {
     await loadTree(diskPath);
 
     if (errors.length === 0) {
-      App.setStatus(I18N.t('disk.uploaded', { n: successCount }));
+      // 全部文件都在冲突时被取消时不显示"已上传 0 个文件"
+      App.setStatus(successCount > 0
+        ? I18N.t('disk.uploaded', { n: successCount })
+        : I18N.t('disk.upload-skipped'));
     } else {
       App.setStatus(I18N.t('disk.upload-summary', { ok: successCount, fail: errors.length }));
       alert(I18N.t('disk.upload-failed') + '\n' + errors.join('\n'));
     }
   }
 
-  // 用 XHR 上传, 以便读取上传字节进度
+  // 用 XHR 上传, 以便读取真实的上传字节进度
+  // onProgress 收到 { phase, loaded, total }: phase = 'sending' 发送中 |
+  // 'writing' 请求已发完, 服务器正在写盘 (写盘耗时无法细分, 由 UI 显示为不确定进度)
   function uploadContent(diskPath, innerPath, content, onProgress) {
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
@@ -1123,8 +1512,10 @@ const DiskEditor = (() => {
       xhr.setRequestHeader('Content-Type', 'application/json');
       if (xhr.upload && typeof onProgress === 'function') {
         xhr.upload.onprogress = (e) => {
-          if (e.lengthComputable) onProgress(e.loaded, e.total);
+          if (e.lengthComputable) onProgress({ phase: 'sending', loaded: e.loaded, total: e.total });
         };
+        // 请求体发送完毕 -> 进入服务器写盘阶段
+        xhr.upload.onload = () => onProgress({ phase: 'writing', loaded: 0, total: 0 });
       }
       xhr.onload = () => {
         let data = null;
@@ -1141,9 +1532,15 @@ const DiskEditor = (() => {
     });
   }
 
-  function readFileAsText(file) {
+  // 读取本地文件为文本; onProgress 报告真实的读取字节进度
+  function readFileAsText(file, onProgress) {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
+      if (typeof onProgress === 'function') {
+        reader.onprogress = (e) => {
+          if (e.lengthComputable) onProgress(e.loaded, e.total);
+        };
+      }
       reader.onload = () => resolve(reader.result);
       reader.onerror = () => reject(reader.error);
       reader.readAsText(file);

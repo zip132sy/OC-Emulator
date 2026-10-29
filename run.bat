@@ -76,7 +76,6 @@ echo.
 set "RESTART_COUNT=0"
 set "MAX_RESTARTS=10"
 set "BACKOFF_SECONDS=2"
-set "WATCHDOG_PORT=8080"
 set "WATCHDOG_INTERVAL=30"
 set "WATCHDOG_TIMEOUT=10"
 
@@ -97,39 +96,62 @@ REM Start a background watchdog that detects a HUNG (not exited) server.
 REM   All logic is inlined here on purpose: shipping a separate .ps1 file is
 REM   unreliable across machines (it can be missing or blocked by policy).
 REM   This writes the watchdog to a temp file and starts a hidden PowerShell.
-REM   1) The port is read from cache\.server-port (written by the server at
-REM      startup), falling back to WATCHDOG_PORT. A hardcoded port silently
-REM      breaks detection once the server auto-switches away from a busy port.
-REM   2) When unresponsive it first asks /api/server/restart for a graceful
-REM      restart (the server stops all VMs first), then force-kills instead.
-REM   3) This script file itself is the sentinel: the guardian deletes it when
+REM   1) The port and the server PID are read from cache\.server-port and
+REM      cache\.server-pid (written atomically by the server at startup).
+REM      A hardcoded port silently breaks detection once the server
+REM      auto-switches away from a busy port.
+REM   2) Missing / unreadable state means "unknown", not "hung": the watchdog
+REM      then does nothing for that round. A failed state write or a restart
+REM      gap must never cause a healthy server to be killed.
+REM   3) It acts only after several consecutive failed probes, plus one
+REM      immediate re-check; the startup rounds are ignored entirely.
+REM   4) It acts only when the port really has a listening process, and only
+REM      when that PID matches the PID recorded by the server (otherwise the
+REM      state is stale). Then it first asks /api/server/restart for a
+REM      graceful restart and force-kills as the last resort.
+REM   5) This script file itself is the sentinel: the guardian deletes it when
 REM      the server exits, so the watchdog quits on its next round.
 REM   REMINDER: cmd eats a single caret in echo lines, so a regex caret must be
 REM   written doubled, and a pipe must be escaped with a caret.
 set "PS_WD=%TEMP%\oc_watchdog.ps1"
-> "%PS_WD%" echo $dp = %WATCHDOG_PORT%
->> "%PS_WD%" echo $pf = '%~dp0cache\.server-port'
+> "%PS_WD%" echo $pf = '%~dp0cache\.server-port'
+>> "%PS_WD%" echo $pidf = '%~dp0cache\.server-pid'
 >> "%PS_WD%" echo $iv = %WATCHDOG_INTERVAL%
 >> "%PS_WD%" echo $to = %WATCHDOG_TIMEOUT%
+>> "%PS_WD%" echo $mf = 3
+>> "%PS_WD%" echo $wr = 2
 >> "%PS_WD%" echo $sf = '%PS_WD%'
 >> "%PS_WD%" echo $lg = '%~dp0logs\guardian.log'
 >> "%PS_WD%" echo $f = 0
+>> "%PS_WD%" echo $n = 0
 >> "%PS_WD%" echo while ($true) {
 >> "%PS_WD%" echo   Start-Sleep -Seconds $iv
 >> "%PS_WD%" echo   if (-not (Test-Path $sf)) { break }
->> "%PS_WD%" echo   $p = $dp
->> "%PS_WD%" echo   if (Test-Path $pf) { try { $x = (Get-Content $pf -Raw).Trim(); if ($x -match '^^[0-9]+$') { $p = [int]$x } } catch {} }
+>> "%PS_WD%" echo   $n = $n + 1
+>> "%PS_WD%" echo   $p = 0
+>> "%PS_WD%" echo   if (Test-Path $pf) { try { $x = (Get-Content $pf -TotalCount 1).Trim(); if ($x -match '^^[0-9]+$') { $p = [int]$x } } catch {} }
+>> "%PS_WD%" echo   if ($p -le 0) { $f = 0; continue }
+>> "%PS_WD%" echo   $sp = 0
+>> "%PS_WD%" echo   if (Test-Path $pidf) { try { $x = (Get-Content $pidf -TotalCount 1).Trim(); if ($x -match '^^[0-9]+$') { $sp = [int]$x } } catch {} }
 >> "%PS_WD%" echo   $h = $false
 >> "%PS_WD%" echo   try { if ((Invoke-WebRequest "http://127.0.0.1:$p/api/version" -UseBasicParsing -TimeoutSec $to).StatusCode -eq 200) { $h = $true } } catch {}
 >> "%PS_WD%" echo   if ($h) { $f = 0; continue }
+>> "%PS_WD%" echo   if ($n -le $wr) { $f = 0; continue }
 >> "%PS_WD%" echo   $f = $f + 1
->> "%PS_WD%" echo   if ($f -lt 2) { continue }
+>> "%PS_WD%" echo   if ($f -lt $mf) { continue }
+>> "%PS_WD%" echo   $h = $false
+>> "%PS_WD%" echo   try { if ((Invoke-WebRequest "http://127.0.0.1:$p/api/version" -UseBasicParsing -TimeoutSec $to).StatusCode -eq 200) { $h = $true } } catch {}
+>> "%PS_WD%" echo   if ($h) { $f = 0; continue }
+>> "%PS_WD%" echo   $o = 0
+>> "%PS_WD%" echo   try { foreach ($l in (netstat -ano ^| Select-String 'LISTENING')) { if ("$l" -match ":$p\s+\S+\s+LISTENING\s+(\d+)") { $o = [int]$Matches[1]; break } } } catch {}
+>> "%PS_WD%" echo   if ($o -le 0) { Add-Content $lg "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] watchdog: port $p unresponsive (no listening process)"; $f = 0; continue }
+>> "%PS_WD%" echo   if ($sp -gt 0 -and $o -ne $sp) { Add-Content $lg "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] watchdog: port $p unresponsive but listener PID $o differs from recorded PID $sp, skipped"; $f = 0; continue }
 >> "%PS_WD%" echo   $g = $false
 >> "%PS_WD%" echo   try { if ((Invoke-WebRequest "http://127.0.0.1:$p/api/server/restart" -Method POST -UseBasicParsing -TimeoutSec 5).StatusCode -eq 200) { $g = $true } } catch {}
->> "%PS_WD%" echo   if ($g) { Add-Content $lg "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] watchdog: port $p unresponsive, graceful restart requested"; Start-Sleep -Seconds 5; continue }
->> "%PS_WD%" echo   $o = $null
->> "%PS_WD%" echo   try { foreach ($l in (netstat -ano ^| Select-String 'LISTENING')) { if ("$l" -match ":$p\s+\S+\s+LISTENING\s+(\d+)") { $o = [int]$Matches[1]; break } } } catch {}
->> "%PS_WD%" echo   if ($o) { Add-Content $lg "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] watchdog: port $p unresponsive, killed PID $o"; Stop-Process -Id $o -Force -ErrorAction SilentlyContinue } else { Add-Content $lg "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] watchdog: port $p unresponsive (no listening process)" }
+>> "%PS_WD%" echo   if ($g) { Add-Content $lg "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] watchdog: port $p unresponsive, graceful restart requested"; $f = 0; Start-Sleep -Seconds 5; continue }
+>> "%PS_WD%" echo   Add-Content $lg "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] watchdog: port $p unresponsive, killed PID $o"
+>> "%PS_WD%" echo   Stop-Process -Id $o -Force -ErrorAction SilentlyContinue
+>> "%PS_WD%" echo   $f = 0
 >> "%PS_WD%" echo   Start-Sleep -Seconds 3
 >> "%PS_WD%" echo }
 

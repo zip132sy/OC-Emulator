@@ -195,13 +195,17 @@ echo ""
 RESTART_COUNT=0
 MAX_RESTARTS=10
 BACKOFF_SECONDS=2
-WATCHDOG_PORT=8080
-# 服务器启动时会把"实际监听端口"写到这个文件; 配置端口(8080)被占用时服务器会自动
-# 换到 8081 等端口, 看门狗若只认 8080 就会监视错误端口、检查失败后直接退出 ——
-# 结果是服务真的卡死时反而没人管。这里始终以文件里的实际端口为准。
+# 服务器启动时会把"实际监听端口"和"自己的进程号"写到这两个文件; 配置端口(8080)被
+# 占用时服务器会自动换到 8081 等端口, 看门狗若只认 8080 就会监视错误端口 ——
+# 结果是服务真的卡死时反而没人管。这里始终以文件里的实际值为准。
 WATCHDOG_PORT_FILE="$(pwd)/cache/.server-port"
+WATCHDOG_PID_FILE="$(pwd)/cache/.server-pid"
 WATCHDOG_INTERVAL=30
 WATCHDOG_TIMEOUT=10
+# 连续 N 次探测失败才认为卡死 (每次间隔 WATCHDOG_INTERVAL 秒)。
+WATCHDOG_MAX_FAILS=3
+# 服务器刚启动的前 N 轮不做判定: 此时端口可能还没开始监听、状态文件也可能还没写。
+WATCHDOG_WARMUP_ROUNDS=2
 
 WATCHDOG_SENTINEL=""
 WATCHDOG_PID=""
@@ -266,19 +270,35 @@ start_watchdog() {
     fi
     WATCHDOG_SENTINEL="$(mktemp -t oc_watchdog.XXXXXX 2>/dev/null || echo "/tmp/oc_watchdog.$$")"
     (
-        _wf=0
+        _wf=0     # 连续探测失败次数
+        _wr=0     # 已运行的轮数 (用于启动宽限期)
         while true; do
             sleep "$WATCHDOG_INTERVAL"
             # Main loop finished -> watchdog stops too
             [ -f "$WATCHDOG_SENTINEL" ] || exit 0
+            _wr=$((_wr + 1))
 
-            # 端口以服务器写入的实际端口为准, 读不到才回退到配置端口
-            _wd_port="$WATCHDOG_PORT"
+            # 端口与进程号以服务器写入的实际值为准; 文件缺失/内容非法时本轮不做任何判定:
+            # 状态缺失可能只是写文件失败, 也可能正处在重启的空档, 这时重启服务只会误伤
+            # 正在正常工作的进程。宁可少管一次, 也不要错误地杀掉健康的服务。
+            _wd_port=""
             if [ -f "$WATCHDOG_PORT_FILE" ]; then
-                _p="$(tr -d '[:space:]' < "$WATCHDOG_PORT_FILE" 2>/dev/null)"
+                _p="$(head -n 1 "$WATCHDOG_PORT_FILE" 2>/dev/null | tr -d '[:space:]')"
                 case "$_p" in
                     ''|*[!0-9]*) : ;;
                     *) _wd_port="$_p" ;;
+                esac
+            fi
+            if [ -z "$_wd_port" ]; then
+                _wf=0
+                continue
+            fi
+            _wd_pid=""
+            if [ -f "$WATCHDOG_PID_FILE" ]; then
+                _p="$(head -n 1 "$WATCHDOG_PID_FILE" 2>/dev/null | tr -d '[:space:]')"
+                case "$_p" in
+                    ''|*[!0-9]*) : ;;
+                    *) _wd_pid="$_p" ;;
                 esac
             fi
 
@@ -287,30 +307,56 @@ start_watchdog() {
                 continue
             fi
 
-            # 连续两次失败才动手: 服务可能只是短暂繁忙(磁盘操作会阻塞事件循环数十秒),
+            # 启动宽限期: 服务器可能还在起服务(磁盘镜像同步等 IO 会阻塞事件循环),
+            # 这段时间里的探测失败不能算作卡死。
+            if [ "$_wr" -le "$WATCHDOG_WARMUP_ROUNDS" ]; then
+                _wf=0
+                continue
+            fi
+
+            # 连续失败才动手: 服务可能只是短暂繁忙(磁盘操作会阻塞事件循环数十秒),
             # 一次失败就杀掉会误伤正常运行中的服务。
             _wf=$((_wf + 1))
-            if [ "$_wf" -lt 2 ]; then
+            if [ "$_wf" -lt "$WATCHDOG_MAX_FAILS" ]; then
+                continue
+            fi
+
+            # 已经连续失败多轮, 动手前再立刻复查一次, 避免把偶发的探测失败当成卡死。
+            if http_probe "http://127.0.0.1:${_wd_port}/api/version" "$WATCHDOG_TIMEOUT"; then
+                _wf=0
+                continue
+            fi
+
+            _hung_pid="$(find_pid_on_port "$_wd_port")"
+            if [ -z "$_hung_pid" ]; then
+                # 端口上根本没有监听进程: 说明服务已经退出(守护脚本会负责重启),
+                # 这里不需要也不应该杀任何进程。
+                _wf=0
+                echo "[$(date '+%Y-%m-%d %H:%M:%S')] watchdog: port ${_wd_port} unresponsive (no listening process)" >> "$GUARD_LOG" 2>/dev/null
+                continue
+            fi
+            if [ -n "$_wd_pid" ] && [ "$_hung_pid" != "$_wd_pid" ]; then
+                # 状态文件里的进程号与端口上的监听进程对不上: 状态已过期(来自上一次运行
+                # 或另一个实例), 此时杀掉监听进程可能误伤无关的服务。
+                _wf=0
+                echo "[$(date '+%Y-%m-%d %H:%M:%S')] watchdog: port ${_wd_port} unresponsive but listener PID ${_hung_pid} != recorded PID ${_wd_pid}, skipped" >> "$GUARD_LOG" 2>/dev/null
                 continue
             fi
 
             # 无响应: 先请求优雅重启(服务会先停掉所有虚拟机再退出, 退出码 5),
             # 该请求也失败时才强杀进程。
             if http_post "http://127.0.0.1:${_wd_port}/api/server/restart" 5; then
+                _wf=0
                 echo "[watchdog] server on port ${_wd_port} unresponsive; graceful restart requested"
                 echo "[$(date '+%Y-%m-%d %H:%M:%S')] watchdog: server on port ${_wd_port} unresponsive; graceful restart requested" >> "$GUARD_LOG" 2>/dev/null
                 sleep 5
                 continue
             fi
 
-            _hung_pid="$(find_pid_on_port "$_wd_port")"
-            if [ -n "$_hung_pid" ]; then
-                echo "[watchdog] server not responding, killing PID ${_hung_pid}"
-                echo "[$(date '+%Y-%m-%d %H:%M:%S')] watchdog: server on port ${_wd_port} unresponsive, killed PID ${_hung_pid}" >> "$GUARD_LOG" 2>/dev/null
-                kill -9 "$_hung_pid" 2>/dev/null
-            else
-                echo "[$(date '+%Y-%m-%d %H:%M:%S')] watchdog: server on port ${_wd_port} unresponsive (no listening process found)" >> "$GUARD_LOG" 2>/dev/null
-            fi
+            echo "[watchdog] server not responding, killing PID ${_hung_pid}"
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] watchdog: server on port ${_wd_port} unresponsive, killed PID ${_hung_pid}" >> "$GUARD_LOG" 2>/dev/null
+            kill -9 "$_hung_pid" 2>/dev/null
+            _wf=0
             sleep 3
         done
     ) &
