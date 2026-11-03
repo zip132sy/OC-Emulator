@@ -72,6 +72,7 @@ local _os_tmpname = os.tmpname
 local _os_remove = os.remove
 local _os_execute_raw = os.execute
 local _os_clock = os.clock       -- 保存原始 os.clock (渲染帧率控制用)
+local _os_exit = os.exit        -- 保存原始 os.exit: 系统可能覆盖 _G.os.exit, 宿主退出必须用它
 _stderr:setvbuf("no")
 
 -- Lua 5.1 兼容: string.format("%s", table) 不会自动 tostring
@@ -1063,23 +1064,72 @@ end
 -- 被强制结束(用户在界面上点停止 -> 3 秒超时 SIGTERM, 或服务被关闭)就会丢掉内存里的
 -- 安装结果, 下次启动又从头装一遍。
 -- ============================================================
-local diskPersist = { dirty = false, lastFlush = 0, interval = 1 }
+local diskPersist = { dirty = false, lastFlush = 0, interval = 1, job = nil, slice = 0.12 }
+
+-- 后台落盘任务 (协程)
+--
+-- 整盘 save 要做 "序列化 + LZW 压缩 + 加密", 3MB 级磁盘合计 2~4 秒 CPU。若在
+-- tick 处理里同步执行, 客户机在这段时间无法拉事件、无法重绘, 界面会明显停顿。
+-- 这里把 saveAllDisks 放进协程, 每个 tick 只跑一小片 (默认 120ms), 客户机在
+-- 落盘期间照常响应; 分片跑完后才原子替换磁盘文件, 数据完整性不变。
+--
+-- 任务与调参挂在 diskPersist 表上, 避免增加顶层局部变量。
+
+-- 推进后台落盘任务; budget 为本次最多消耗的 CPU 秒数。
+-- 返回 true: 任务已完成 (或本来就没有任务), false: 还没跑完或有错误。
+function diskPersist.stepJob(budget)
+  local job = diskPersist.job
+  if not job then return true end
+  local deadline = _os_clock() + budget
+  disk.setYieldHook(coroutine.yield)
+  while true do
+    local ok, res = coroutine.resume(job)
+    if not ok then
+      disk.setYieldHook(nil)
+      diskPersist.job = nil
+      _stderr:write("[emulator] WARNING: autosave disks failed: " .. tostring(res) .. "\n")
+      return false
+    end
+    if coroutine.status(job) == "dead" then
+      disk.setYieldHook(nil)
+      diskPersist.job = nil
+      return true
+    end
+    if _os_clock() >= deadline then
+      disk.setYieldHook(nil)
+      return false
+    end
+  end
+end
 
 function diskPersist.mark()
   diskPersist.dirty = true
 end
 
+-- 同步立即落盘 (关机/改名/退出等必须马上生效的场合)。
+-- 若后台分片任务还在跑, 必须先让它跑完: 它持有的是旧快照, 否则它会在文件
+-- 替换之后把旧数据写回, 覆盖掉这次的新结果。
+function diskPersist.saveNow()
+  if diskPersist.job then diskPersist.stepJob(math.huge) end
+  saveAllDisks()
+end
+
 function diskPersist.flush(force)
+  -- 已有后台任务: 非强制时只推进一小片; 强制时先把它跑完 (它持有的是旧快照)
+  if diskPersist.job then
+    diskPersist.stepJob(force and math.huge or diskPersist.slice)
+    if diskPersist.job then return end
+  end
   if not diskPersist.dirty then return end
   local now = os.time()
   if not force and (now - diskPersist.lastFlush) < diskPersist.interval then return end
   diskPersist.lastFlush = now
   diskPersist.dirty = false
-  local ok, err = pcall(saveAllDisks)
-  if not ok then
+  diskPersist.job = coroutine.create(saveAllDisks)
+  local done = diskPersist.stepJob(force and math.huge or diskPersist.slice)
+  if not done and not diskPersist.job then
     -- 落盘失败时保留脏标记, 下一轮再试 (避免静默丢数据)
     diskPersist.dirty = true
-    _stderr:write("[emulator] WARNING: autosave disks failed: " .. tostring(err) .. "\n")
   end
 end
 
@@ -1756,14 +1806,15 @@ function computer.uptime()
 end
 function computer.shutdown(reboot)
   -- 保存所有磁盘 + EEPROM
-  saveAllDisks()
+  diskPersist.saveNow()
   _stderr:write("[emulator] computer " .. (reboot and "reboot" or "shutdown") .. "\n")
   if reboot then
     showScreenMessage("Rebooting...")
   else
     showScreenMessage("System shut down.\nPress any key to restart.")
   end
-  os.exit(reboot and 2 or 0)
+  -- 用宿主 os.exit: 系统的 os.exit 可能已被改写 (如 Fuchas 的 os.exit 依赖当前进程)
+  _os_exit(reboot and 2 or 0)
 end
 function computer.getBootAddress() return computer._bootAddr end
 function computer.setBootAddress(addr) dlog("setBootAddress:", tostring(addr):sub(1,8)); computer._bootAddr = addr end
@@ -2155,6 +2206,21 @@ gpu.getBufferSize = function(id)
   return buffer.width, buffer.height
 end
 
+-- VRAM 容量: 与真机一致 = 最大分辨率格数 × tier 系数 (T1=1, T2=2, T3=3)
+-- 屏幕本身不计入 (真机 totalMemory/freeMemory 只统计离屏缓冲)
+local vramFactor = config.gpuTier == 1 and 1 or config.gpuTier == 2 and 2 or 3
+gpu.totalMemory = function()
+  return gpuMaxW * gpuMaxH * vramFactor
+end
+
+gpu.freeMemory = function()
+  local used = 0
+  for _, buffer in pairs(gpu._buffers) do
+    used = used + buffer.width * buffer.height
+  end
+  return gpu.totalMemory() - used
+end
+
 -- 按编号取绘制面板: 0 是屏幕, 其余是离屏缓冲
 local function drawSurface(id)
   local n = tonumber(id) or 0
@@ -2494,7 +2560,7 @@ filesystem.getLabel = function() local l = vdisk.label or "Untitled"; dlog("fs.g
 filesystem.setLabel = function(label)
   vdisk.label = tostring(label or ""):sub(1, 16)
   -- 立即落盘, 避免 VM 被强制结束时丢掉这次改名
-  pcall(saveAllDisks)
+  pcall(diskPersist.saveNow)
   return vdisk.label
 end
 filesystem.spaceUsed = function() return vfsSpaceUsed() end
@@ -2997,7 +3063,9 @@ internet.request = function(url, postData, headers)
 
     local handle = { data = responseData, closed = false }
     handle.read = function(n)
-      if handle.closed or not handle.data then return nil end
+      -- 数据读完后必须返回 nil (真实 OC 语义), 否则字符串 sub 会一直返回空串,
+      -- 客户机的 while 读循环 (如 Internet.lua 的 download) 会在空串上死循环。
+      if handle.closed or not handle.data or #handle.data == 0 then return nil end
       if n and n < math.huge and n == math.floor(n) then
         local chunk = handle.data:sub(1, n)
         handle.data = handle.data:sub(n + 1)
@@ -3009,7 +3077,7 @@ internet.request = function(url, postData, headers)
         handle.data = handle.data:sub(n + 1)
         return chunk
       else
-        local all = handle.data; handle.data = nil; return all
+        local all = handle.data; handle.data = ""; return all
       end
     end
     handle.response = function()
@@ -3047,7 +3115,7 @@ internet.request = function(url, postData, headers)
   end
   handle.read = function(a, b)
     local n = (type(a) == "table") and b or a
-    if handle.closed or not handle.data then return nil end
+    if handle.closed or not handle.data or #handle.data == 0 then return nil end
     if n and n < math.huge and n == math.floor(n) then
       local chunk = handle.data:sub(1, n)
       handle.data = handle.data:sub(n + 1)
@@ -3059,7 +3127,7 @@ internet.request = function(url, postData, headers)
       handle.data = handle.data:sub(n + 1)
       return chunk
     else
-      local all = handle.data; handle.data = nil; return all
+      local all = handle.data; handle.data = ""; return all
     end
   end
   handle.response = function() return 200, "OK", {} end
@@ -3502,7 +3570,7 @@ local function makeFsProxy(filesTable, label, capacity, readOnly, onLabelSet, on
     label = tostring(l or "")
     if onLabelSet then pcall(onLabelSet, label) end
     -- 立即落盘: 这样即使 VM 随后被强制结束, 这次改名也不会丢
-    pcall(saveAllDisks)
+    pcall(diskPersist.saveNow)
     return label
   end
   fs.isReadOnly = function() return readOnly == true end
@@ -3539,21 +3607,30 @@ local function makeFsProxy(filesTable, label, capacity, readOnly, onLabelSet, on
   end
   fs.list = function(path)
     path = vfsNormalize(path)
-    local entries = {}
+    -- 按「条目名」聚合: 同一个名字既可能来自显式条目 (如 "/lib"), 也可能来自
+    -- 它的子条目 (如 "/lib/core/x.lua")。以名字为键可以避免同一目录重复列出;
+    -- 根条目 "/" 的 rest 为空串, 跳过它可避免返回空名字 —— OpenOS 的 full_ls
+    -- 会对每个名字调用 filesystem.name(), 空名字返回 nil, 导致 `ls /` 报错。
+    local names = {}
     local prefix = path == "/" and "/" or path .. "/"
     for p, info in pairs(filesTable) do
       if p:sub(1, #prefix) == prefix then
         local rest = p:sub(#prefix + 1)
-        if rest:find("/") then
-          local dirName = rest:match("^([^/]+)/")
-          if dirName then entries[dirName .. "/"] = true end
-        else
-          entries[rest] = true
+        if rest ~= "" then
+          local slash = rest:find("/")
+          local name = slash and rest:sub(1, slash - 1) or rest
+          if slash then
+            names[name] = true -- 有子条目 => 目录
+          elseif names[name] == nil then
+            names[name] = info ~= nil and info.type == "directory"
+          end
         end
       end
     end
     local result = {}
-    for name in pairs(entries) do table.insert(result, name) end
+    for name, isDir in pairs(names) do
+      table.insert(result, isDir and (name .. "/") or name)
+    end
     local i = 0
     -- 返回真实数组 table + __call 迭代，确保全面兼容
     return setmetatable(result, {
@@ -4815,8 +4892,6 @@ end
 local _os_time = os.time
 local _os_date = os.date
 -- _os_clock 已在文件开头定义
-local _os_exit = os.exit
-local _os_getenv = os.getenv
 local _os_execute = os.execute
 
 if not _G.os then _G.os = {} end
@@ -4835,7 +4910,8 @@ _G.os.execute = function(cmd)
   return _os_execute(cmd)
 end
 _G.os.exit = function(code) _os_exit(code or 0) end
-_G.os.getenv = function(name) return _os_getenv(name) end
+-- 真机 OpenComputers 的沙箱 os 表不暴露 getenv，这里保持一致（Fuchas 等系统依赖此判断运行环境）
+_G.os.getenv = nil
 _G.os.remove = function(path) return vfsRemove(path) end
 _G.os.rename = function(from, to) return vfsRename(from, to) end
 _G.os.tmpname = function() return "/tmp/tmp" .. math.random(100000, 999999) end
@@ -5085,7 +5161,7 @@ if not chunk then
   dlog("load error:", err)
   _stderr:write("[emulator] load error: " .. tostring(err) .. "\n")
   showScreenMessage("EEPROM load error\n" .. tostring(err))
-  os.exit(1)
+  _os_exit(1)
 end
 
 -- Lua 5.1 兼容: setfenv 设置环境
@@ -5096,11 +5172,11 @@ if not ok then
   _stderr:write("[emulator] runtime error:\n" .. tostring(err) .. "\n")
   if modsAddr and mods.reportError then mods.reportError(tostring(err)) end
   showScreenMessage("Runtime error\n" .. tostring(err))
-  saveAllDisks()
-  os.exit(1)
+  diskPersist.saveNow()
+  _os_exit(1)
 end
 
-saveAllDisks()
+diskPersist.saveNow()
 
 -- 如果使用了临时 VM 磁盘，尝试将修改写回 VM 文件
 if vmTempDisk and arg[1] and arg[1]:match("%.ocvm$") then

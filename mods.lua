@@ -1794,7 +1794,7 @@ addRows("robot_api", {
   { "robot.equipOffhand(name[,maxDurability])", "name:string", "装备副手工具（扩展）。" },
   { "robot.unequipOffhand()", "", "卸下副手工具（扩展）。" },
   { "robot.getOffhand()", "", "返回副手工具名称与耐久（扩展）。" },
-}, "mods.robot", "mods", nil)
+}, "mods.robot", "mods.", nil)
 
 -- 扩展 API (原版没有, Mods 额外提供)
 local EXTENSION_ROWS = {

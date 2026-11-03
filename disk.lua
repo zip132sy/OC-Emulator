@@ -192,48 +192,124 @@ local function xorTransformV1(data)
   return table.concat(result)
 end
 
+-- 分片让出钩子: 压缩/加密是整盘级别的大循环 (3MB 磁盘合计 2~4 秒)。模拟器把
+-- save 放进协程, 每个 tick 只执行一小片, 客户机在落盘期间仍能处理输入与重绘。
+-- 钩子为 nil 时按同步方式执行。
+local stepYield = nil
+function disk.setYieldHook(fn) stepYield = fn end
+
 -- V2 加密: 16 字节滚动密钥 + label 盐值
 -- data: 要加密/解密的字符串
 -- label: 磁盘标签 (用于生成盐值)
+--
+-- 性能说明: 逐字节现算三次 bxor 在 3MB 级磁盘上耗时数秒, 若在主线程同步执行,
+-- 一次小文件写入就会让整机停顿。合并密钥流的周期是 lcm(16, 256, 65536) =
+-- 65536 字节, 因此大块数据先预计算一个周期的密钥流, 之后每字节只需查表;
+-- 输出与逐字节计算完全一致。
+local XOR_STREAM_PERIOD = 65536
+local XOR_CHUNK = 4096        -- 必须是 XOR_STREAM_PERIOD 的约数
+local charByByte = {}
+for b = 0, 255 do charByByte[b] = string.char(b) end
+
 local function xorTransformV2(data, label)
+  local n = #data
+  if n == 0 then return "" end
   local salt = deriveLabelSalt(label or "")
-  local result = {}
-  for i = 1, #data do
-    local keyByte = salt[((i - 1) % 16) + 1]
-    -- 每 256 字节额外混入位置信息, 增强抗分析能力
-    local posByte = bxor((i % 256), (math.floor(i / 256) % 256))
-    result[i] = string.char(bxor(bxor(data:byte(i), keyByte), bxor(posByte, (i * 7) % 256)))
+
+  -- 小数据: 逐字节 (预计算密钥流的开销不值得)
+  if n <= XOR_STREAM_PERIOD then
+    local result = {}
+    for i = 1, n do
+      local keyByte = salt[((i - 1) % 16) + 1]
+      -- 每 256 字节额外混入位置信息, 增强抗分析能力
+      local posByte = bxor((i % 256), (math.floor(i / 256) % 256))
+      result[i] = charByByte[bxor(bxor(data:byte(i), keyByte), bxor(posByte, (i * 7) % 256))]
+    end
+    return table.concat(result)
   end
-  return table.concat(result)
+
+  -- 大数据: 预计算一个完整周期的合并密钥流, 然后按块查表
+  local stream = {}
+  for i = 1, XOR_STREAM_PERIOD do
+    local keyByte = salt[((i - 1) % 16) + 1]
+    local posByte = bxor((i % 256), (math.floor(i / 256) % 256))
+    stream[i] = bxor(keyByte, bxor(posByte, (i * 7) % 256))
+  end
+
+  local out = {}
+  local outN = 0
+  local chunkSinceYield = 0
+  for i = 0, n - 1, XOR_CHUNK do
+    local chunk = data:sub(i + 1, i + XOR_CHUNK)
+    local bytes = { chunk:byte(1, -1) }
+    -- i 是 XOR_CHUNK 的整数倍, 且 XOR_CHUNK 整除周期, base 一定落在块边界上,
+    -- 块内 base + j 不会超过一个周期, 无需再取模。
+    local base = i % XOR_STREAM_PERIOD
+    local parts = {}
+    for j = 1, #bytes do
+      parts[j] = charByByte[xorTable[bytes[j]][stream[base + j]]]
+    end
+    outN = outN + 1
+    out[outN] = table.concat(parts)
+    -- 每 64KB 让出一次协程 (约 20ms), 让模拟器把落盘摊到多个 tick
+    if stepYield then
+      chunkSinceYield = chunkSinceYield + 1
+      if chunkSinceYield >= 16 then
+        chunkSinceYield = 0
+        stepYield()
+      end
+    end
+  end
+  return table.concat(out)
 end
 
 -- LZW 纯压缩 (不做加密, 加密由调用方处理)
+--
+-- 性能说明: 字典键用数字 (前缀码 << 8 | 字节), 避免逐字节拼接字符串带来的
+-- 哈希与比较开销, 3.3MB 磁盘可显著缩短压缩时间。
+-- 产出的码流与字符串键写法一致 (贪心匹配顺序不变)。
 local function lzwCompressRaw(input)
-  if #input == 0 then return "" end
+  local len = #input
+  if len == 0 then return "" end
+
   local dict = {}
   local dictSize = 256
-  for i = 0, 255 do dict[string.char(i)] = i end
-
-  local w = ""
   local result = {}
+  local resultN = 0
+  local wcode = -1              -- -1 表示还没读入任何字符
+  local sinceYield = 0
 
-  for i = 1, #input do
-    local c = input:sub(i, i)
-    local wc = w .. c
-    if dict[wc] then
-      w = wc
+  for i = 1, len do
+    local c = string.byte(input, i)
+    if wcode < 0 then
+      wcode = c
     else
-      local code = dict[w]
-      result[#result + 1] = packU16(code)
-      if dictSize < 65536 then
-        dict[wc] = dictSize
-        dictSize = dictSize + 1
+      local key = wcode * 256 + c
+      local code = dict[key]
+      if code then
+        wcode = code
+      else
+        resultN = resultN + 1
+        result[resultN] = string.char(math.floor(wcode / 256) % 256, wcode % 256)
+        if dictSize < 65536 then
+          dict[key] = dictSize
+          dictSize = dictSize + 1
+        end
+        wcode = c
       end
-      w = c
+    end
+    -- 每处理 64KB 让出一次协程 (约 20ms)
+    if stepYield then
+      sinceYield = sinceYield + 1
+      if sinceYield >= 65536 then
+        sinceYield = 0
+        stepYield()
+      end
     end
   end
-  if w ~= "" then
-    result[#result + 1] = packU16(dict[w])
+  if wcode >= 0 then
+    resultN = resultN + 1
+    result[resultN] = string.char(math.floor(wcode / 256) % 256, wcode % 256)
   end
   return table.concat(result)
 end
