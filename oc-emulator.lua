@@ -4897,11 +4897,46 @@ local _os_execute = os.execute
 if not _G.os then _G.os = {} end
 if not _G.os.sleep then _G.os.sleep = function(t) computer.pullSignal(t or 0) end end
 _G.os.time = function() return _os_time() end
+-- Windows 的 strftime 不支持 POSIX 扩展的转换符 (%T/%D/%R/%r/%n/%t/%s/%e),
+-- 而真机 OC 跑在 LuaJ 上支持它们 (Fuchas 的任务栏就是 os.date("%T"))。
+-- 这里先把这些转换符展开成宿主支持的等价写法, 再交给原生 os.date。
+local posixDateAliases = {
+  T = "%H:%M:%S",
+  D = "%m/%d/%y",
+  R = "%H:%M",
+  r = "%I:%M:%S %p",
+  n = "\n",
+  t = "\t",
+  e = "%d",
+}
+-- 逐字符展开转换符; "%s" 没有等价 strftime 写法, 直接内联时间戳
+local function normalizeDateFormat(fmt, now)
+  local out, i, len = {}, 1, #fmt
+  while i <= len do
+    local c = fmt:sub(i, i)
+    if c == "%" and i < len then
+      local spec = fmt:sub(i + 1, i + 1)
+      if spec == "s" then
+        out[#out + 1] = tostring(now)
+      else
+        out[#out + 1] = posixDateAliases[spec] or ("%" .. spec)
+      end
+      i = i + 2
+    else
+      out[#out + 1] = c
+      i = i + 1
+    end
+  end
+  return table.concat(out)
+end
 _G.os.date = function(fmt, t)
   if t ~= nil then
     t = math.floor(tonumber(t) or 0)
   end
-  return _os_date(fmt, t)
+  if type(fmt) ~= "string" or fmt:find("*t", 1, true) then
+    return _os_date(fmt, t)
+  end
+  return _os_date(normalizeDateFormat(fmt, t or _os_time()), t)
 end
 _G.os.clock = function() return _os_clock() end
 _G.os.difftime = function(t2, t1) return t2 - t1 end
