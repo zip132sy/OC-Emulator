@@ -210,109 +210,109 @@ print(mods.help())
 
 | 原版 API | 参数签名 | Mods 目标 | 扁平别名 | 说明 |
 |----------|----------|-----------|----------|------|
-| `robot.forward()` | - | `mods.robot.forward` | `modsforward` | 向前移动一格。 |
-| `robot.back()` | - | `mods.robot.back` | `modsback` | 向后移动一格。 |
-| `robot.up()` | - | `mods.robot.up` | `modsup` | 向上移动一格。 |
-| `robot.down()` | - | `mods.robot.down` | `modsdown` | 向下移动一格。 |
-| `robot.turnLeft()` | - | `mods.robot.turnLeft` | `modsturnLeft` | 左转 90 度。 |
-| `robot.turnRight()` | - | `mods.robot.turnRight` | `modsturnRight` | 右转 90 度。 |
-| `robot.detect()` | - | `mods.robot.detect` | `modsdetect` | 检测正前方。 |
-| `robot.detectUp()` | - | `mods.robot.detectUp` | `modsdetectUp` | 检测正上方。 |
-| `robot.detectDown()` | - | `mods.robot.detectDown` | `modsdetectDown` | 检测正下方。 |
-| `robot.compare()` | - | `mods.robot.compare` | `modscompare` | 比较正前方方块与选中物品。 |
-| `robot.compareUp()` | - | `mods.robot.compareUp` | `modscompareUp` | 比较正上方方块与选中物品。 |
-| `robot.compareDown()` | - | `mods.robot.compareDown` | `modscompareDown` | 比较正下方方块与选中物品。 |
-| `robot.drop([count])` | `count:number` | `mods.robot.drop` | `modsdrop` | 把选中格物品丢到正前方。 |
-| `robot.dropUp([count])` | `count:number` | `mods.robot.dropUp` | `modsdropUp` | 丢到正上方。 |
-| `robot.dropDown([count])` | `count:number` | `mods.robot.dropDown` | `modsdropDown` | 丢到正下方。 |
-| `robot.suck([count])` | `count:number` | `mods.robot.suck` | `modssuck` | 从正前方吸取物品。 |
-| `robot.suckUp([count])` | `count:number` | `mods.robot.suckUp` | `modssuckUp` | 从正上方吸取物品。 |
-| `robot.suckDown([count])` | `count:number` | `mods.robot.suckDown` | `modssuckDown` | 从正下方吸取物品。 |
-| `robot.place([side[,sneaky]])` | `side:number` | `mods.robot.place` | `modsplace` | 把选中物品放到正前方；side 是放置面。 |
-| `robot.placeUp([side[,sneaky]])` | `side:number` | `mods.robot.placeUp` | `modsplaceUp` | 放到正上方。 |
-| `robot.placeDown([side[,sneaky]])` | `side:number` | `mods.robot.placeDown` | `modsplaceDown` | 放到正下方。 |
-| `robot.swing([side[,sneaky]])` | `side:number` | `mods.robot.swing` | `modsswing` | 挖掘正前方；side 是作用面。 |
-| `robot.swingUp([side[,sneaky]])` | `side:number` | `mods.robot.swingUp` | `modsswingUp` | 挖掘正上方。 |
-| `robot.swingDown([side[,sneaky]])` | `side:number` | `mods.robot.swingDown` | `modsswingDown` | 挖掘正下方。 |
-| `robot.use([side[,sneaky]])` | `side:number` | `mods.robot.use` | `modsuse` | 使用正前方；side 是作用面。 |
-| `robot.useUp([side[,sneaky]])` | `side:number` | `mods.robot.useUp` | `modsuseUp` | 使用正上方。 |
-| `robot.useDown([side[,sneaky]])` | `side:number` | `mods.robot.useDown` | `modsuseDown` | 使用正下方。 |
-| `robot.equip(name[,maxDurability])` | `name:string` | `mods.robot.equip` | `modsequip` | 装备工具（扩展）。 |
-| `robot.unequip()` | - | `mods.robot.unequip` | `modsunequip` | 卸下工具（扩展）。 |
+| `robot.forward()` | - | `mods.robot.forward` | `mods.forward` | 向前移动一格。 |
+| `robot.back()` | - | `mods.robot.back` | `mods.back` | 向后移动一格。 |
+| `robot.up()` | - | `mods.robot.up` | `mods.up` | 向上移动一格。 |
+| `robot.down()` | - | `mods.robot.down` | `mods.down` | 向下移动一格。 |
+| `robot.turnLeft()` | - | `mods.robot.turnLeft` | `mods.turnLeft` | 左转 90 度。 |
+| `robot.turnRight()` | - | `mods.robot.turnRight` | `mods.turnRight` | 右转 90 度。 |
+| `robot.detect()` | - | `mods.robot.detect` | `mods.detect` | 检测正前方。 |
+| `robot.detectUp()` | - | `mods.robot.detectUp` | `mods.detectUp` | 检测正上方。 |
+| `robot.detectDown()` | - | `mods.robot.detectDown` | `mods.detectDown` | 检测正下方。 |
+| `robot.compare()` | - | `mods.robot.compare` | `mods.compare` | 比较正前方方块与选中物品。 |
+| `robot.compareUp()` | - | `mods.robot.compareUp` | `mods.compareUp` | 比较正上方方块与选中物品。 |
+| `robot.compareDown()` | - | `mods.robot.compareDown` | `mods.compareDown` | 比较正下方方块与选中物品。 |
+| `robot.drop([count])` | `count:number` | `mods.robot.drop` | `mods.drop` | 把选中格物品丢到正前方。 |
+| `robot.dropUp([count])` | `count:number` | `mods.robot.dropUp` | `mods.dropUp` | 丢到正上方。 |
+| `robot.dropDown([count])` | `count:number` | `mods.robot.dropDown` | `mods.dropDown` | 丢到正下方。 |
+| `robot.suck([count])` | `count:number` | `mods.robot.suck` | `mods.suck` | 从正前方吸取物品。 |
+| `robot.suckUp([count])` | `count:number` | `mods.robot.suckUp` | `mods.suckUp` | 从正上方吸取物品。 |
+| `robot.suckDown([count])` | `count:number` | `mods.robot.suckDown` | `mods.suckDown` | 从正下方吸取物品。 |
+| `robot.place([side[,sneaky]])` | `side:number` | `mods.robot.place` | `mods.place` | 把选中物品放到正前方；side 是放置面。 |
+| `robot.placeUp([side[,sneaky]])` | `side:number` | `mods.robot.placeUp` | `mods.placeUp` | 放到正上方。 |
+| `robot.placeDown([side[,sneaky]])` | `side:number` | `mods.robot.placeDown` | `mods.placeDown` | 放到正下方。 |
+| `robot.swing([side[,sneaky]])` | `side:number` | `mods.robot.swing` | `mods.swing` | 挖掘正前方；side 是作用面。 |
+| `robot.swingUp([side[,sneaky]])` | `side:number` | `mods.robot.swingUp` | `mods.swingUp` | 挖掘正上方。 |
+| `robot.swingDown([side[,sneaky]])` | `side:number` | `mods.robot.swingDown` | `mods.swingDown` | 挖掘正下方。 |
+| `robot.use([side[,sneaky]])` | `side:number` | `mods.robot.use` | `mods.use` | 使用正前方；side 是作用面。 |
+| `robot.useUp([side[,sneaky]])` | `side:number` | `mods.robot.useUp` | `mods.useUp` | 使用正上方。 |
+| `robot.useDown([side[,sneaky]])` | `side:number` | `mods.robot.useDown` | `mods.useDown` | 使用正下方。 |
+| `robot.equip(name[,maxDurability])` | `name:string` | `mods.robot.equip` | `mods.equip` | 装备工具（扩展）。 |
+| `robot.unequip()` | - | `mods.robot.unequip` | `mods.unequip` | 卸下工具（扩展）。 |
 
 ### 4.5 Mods 扩展 API
 
-| 原版 API | 参数签名 | Mods 目标 | 扁平别名 | 说明 |
-|----------|----------|-----------|----------|------|
-| `mods.getVersion()` | - | `mods.getVersion()` | - | - |
-| `mods.getType()` | - | `mods.getType()` | - | - |
-| `mods.getDeviceType()` | - | `mods.getDeviceType()` | - | - |
-| `mods.setDeviceType(type)` | - | `mods.setDeviceType(type)` | - | - |
-| `mods.setClock(fn)` | - | `mods.setClock(fn)` | - | - |
-| `mods.getPosition()` | - | `mods.getPosition()` | - | - |
-| `mods.setPosition(x,y,z)` | - | `mods.setPosition(x,y,z)` | - | - |
-| `mods.getFacing()` | - | `mods.getFacing()` | - | - |
-| `mods.give(name[,count[,meta]])` | - | `mods.give(name[,count[,meta]])` | - | - |
-| `mods.take(name[,count])` | - | `mods.take(name[,count])` | - | - |
-| `mods.clearInventory()` | - | `mods.clearInventory()` | - | - |
-| `mods.getInventory([side])` | - | `mods.getInventory([side])` | - | - |
-| `mods.equip(name[,maxDurability])` | - | `mods.equip(name[,maxDurability])` | - | - |
-| `mods.unequip()` | - | `mods.unequip()` | - | - |
-| `mods.getEquipped()` | - | `mods.getEquipped()` | - | - |
-| `mods.equipOffhand(name[,maxDurability])` | - | `mods.equipOffhand(name[,maxDurability])` | - | 副手工具 |
-| `mods.unequipOffhand()` | - | `mods.unequipOffhand()` | - | 卸下副手工具 |
-| `mods.getOffhand()` | - | `mods.getOffhand()` | - | 副手工具名称与耐久 |
-| `mods.getProfile()` | - | `mods.getProfile()` | - | 控制面板里的设备专属参数 |
-| `mods.setProfile(profile)` | - | `mods.setProfile(profile)` | - | 套用设备专属参数 |
-| `mods.setDoubleClickFullscreen(enabled)` | - | `mods.setDoubleClickFullscreen(enabled)` | - | 是否允许双击设备面板进入全屏 |
-| `mods.getDoubleClickFullscreen()` | - | `mods.getDoubleClickFullscreen()` | - | 返回是否允许双击全屏 |
-| `mods.addTank([capacity])` | - | `mods.addTank([capacity])` | - | - |
-| `mods.getTank([tank])` | - | `mods.getTank([tank])` | - | - |
-| `mods.setTank([tank],fluid,amount)` | - | `mods.setTank([tank],fluid,amount)` | - | - |
-| `mods.tankCapacity([tank])` | - | `mods.tankCapacity([tank])` | - | - |
-| `mods.getState()` | - | `mods.getState()` | - | - |
-| `mods.getInfo()` | - | `mods.getInfo()` | - | - |
-| `mods.reset([keepWorld])` | - | `mods.reset([keepWorld])` | - | - |
-| `mods.reportError(message)` | - | `mods.reportError(message)` | - | - |
-| `mods.getEnergy()` | - | `mods.getEnergy()` | - | - |
-| `mods.setEnergy(value)` | - | `mods.setEnergy(value)` | - | - |
-| `mods.world.setLimit(n)` | - | `mods.world.setLimit(n)` | - | - |
-| `mods.world.setBlock(x,y,z,name[,meta])` | - | `mods.world.setBlock(x,y,z,name[,meta])` | - | - |
-| `mods.world.getBlock(x,y,z)` | - | `mods.world.getBlock(x,y,z)` | - | - |
-| `mods.world.removeBlock(x,y,z)` | - | `mods.world.removeBlock(x,y,z)` | - | - |
-| `mods.world.setFluid(x,y,z,fluid[,amount[,capacity]])` | - | `mods.world.setFluid(x,y,z,fluid[,amount[,capacity]])` | - | - |
-| `mods.world.getFluid(x,y,z)` | - | `mods.world.getFluid(x,y,z)` | - | - |
-| `mods.world.setChest(x,y,z[,size])` | - | `mods.world.setChest(x,y,z[,size])` | - | - |
-| `mods.world.getChest(x,y,z)` | - | `mods.world.getChest(x,y,z)` | - | - |
-| `mods.world.addItem(x,y,z,name[,count[,meta]])` | - | `mods.world.addItem(x,y,z,name[,count[,meta]])` | - | - |
-| `mods.world.getItems(x,y,z)` | - | `mods.world.getItems(x,y,z)` | - | - |
-| `mods.world.addEntity(x,y,z[,name])` | - | `mods.world.addEntity(x,y,z[,name])` | - | - |
-| `mods.world.removeEntity(x,y,z)` | - | `mods.world.removeEntity(x,y,z)` | - | - |
-| `mods.world.clear()` | - | `mods.world.clear()` | - | - |
-| `mods.world.stats()` | - | `mods.world.stats()` | - | - |
-| `mods.world.dump()` | - | `mods.world.dump()` | - | - |
-| `mods.setBlock(...)` | - | `mods.setBlock(...)` | - | - |
-| `mods.getBlock(...)` | - | `mods.getBlock(...)` | - | - |
-| `mods.removeBlock(...)` | - | `mods.removeBlock(...)` | - | - |
-| `mods.clearWorld()` | - | `mods.clearWorld()` | - | - |
-| `mods.getStatusText()` | - | `mods.getStatusText()` | - | - |
-| `mods.setStatusText(value)` | - | `mods.setStatusText(value)` | - | - |
-| `mods.getLightColor()` | - | `mods.getLightColor()` | - | - |
-| `mods.setLightColor(value)` | - | `mods.setLightColor(value)` | - | - |
-| `mods.getOffset()` | - | `mods.getOffset()` | - | - |
-| `mods.getVelocity()` | - | `mods.getVelocity()` | - | - |
-| `mods.setMaxVelocity(value)` | - | `mods.setMaxVelocity(value)` | - | - |
-| `mods.setAcceleration(value)` | - | `mods.setAcceleration(value)` | - | - |
-| `mods.forward()/back()/up()/down()` | - | `mods.forward()/back()/up()/down()` | - | - |
-| `mods.turnLeft()/turnRight()` | - | `mods.turnLeft()/turnRight()` | - | - |
-| `mods.detectUp()/detectDown()` | - | `mods.detectUp()/detectDown()` | - | - |
-| `mods.compareUp()/compareDown()` | - | `mods.compareUp()/compareDown()` | - | - |
-| `mods.dropUp()/dropDown()/suckUp()/suckDown()` | - | `mods.dropUp()/dropDown()/suckUp()/suckDown()` | - | - |
-| `mods.placeUp()/placeDown()/swingUp()/swingDown()/useUp()/useDown()` | - | `mods.placeUp()/placeDown()/swingUp()/swingDown()/useUp()/useDown()` | - | - |
-| `mods.apiMap([kind])` | - | `mods.apiMap([kind])` | - | - |
-| `mods.map(name)` | - | `mods.map(name)` | - | - |
-| `mods.help([kind])` | - | `mods.help([kind])` | - | - |
-| `mods.listAPIs()` | - | `mods.listAPIs()` | - | - |
+| API | 说明 |
+|-----|------|
+| `mods.getVersion()` | 组件版本号。 |
+| `mods.getType()` | 组件类型，固定返回 `mods`。 |
+| `mods.getDeviceType()` | 设备类型：`robot` / `drone` / `microcontroller` / `reactor`。 |
+| `mods.setDeviceType(type)` | 设置设备类型。 |
+| `mods.setClock(fn)` | 替换时间源（由模拟器注入服务端墙钟）。 |
+| `mods.getPosition()` | 当前坐标 `x, y, z`。 |
+| `mods.setPosition(x,y,z)` | 直接设置坐标（调试 / 初始化用）。 |
+| `mods.getFacing()` | 朝向编号与名称。 |
+| `mods.give(name[,count[,meta]])` | 向物品栏放入物品。 |
+| `mods.take(name[,count])` | 取出物品，返回实际取出数量。 |
+| `mods.clearInventory()` | 清空物品栏。 |
+| `mods.getInventory([side])` | 物品栏内容快照。 |
+| `mods.equip(name[,maxDurability])` | 装备工具。 |
+| `mods.unequip()` | 卸下工具。 |
+| `mods.getEquipped()` | 已装备工具名称与耐久。 |
+| `mods.equipOffhand(name[,maxDurability])` | 装备副手工具。 |
+| `mods.unequipOffhand()` | 卸下副手工具。 |
+| `mods.getOffhand()` | 副手工具名称与耐久。 |
+| `mods.getProfile()` | 控制面板配置的设备专属参数。 |
+| `mods.setProfile(profile)` | 套用设备专属参数（主手 / 副手工具、物品栏格数、储罐数量、速度等）。 |
+| `mods.setDoubleClickFullscreen(enabled)` | 是否允许双击设备面板进入全屏（默认开启）。 |
+| `mods.getDoubleClickFullscreen()` | 返回是否允许双击全屏。 |
+| `mods.addTank([capacity])` | 安装一个储罐。 |
+| `mods.getTank([tank])` | 储罐液体、液位、容量。 |
+| `mods.setTank([tank],fluid,amount)` | 直接设置储罐内容。 |
+| `mods.tankCapacity([tank])` | 储罐容量。 |
+| `mods.getState()` | 设备完整状态快照。 |
+| `mods.getInfo()` | 状态、方向开放与世界统计。 |
+| `mods.reset([keepWorld])` | 重置设备状态（可选保留世界）。 |
+| `mods.reportError(message)` | 写入 `lastError`（单片机风格）。 |
+| `mods.getEnergy()` | 能量与最大能量（扩展状态）。 |
+| `mods.setEnergy(value)` | 设置能量（扩展状态）。 |
+| `mods.world.setLimit(n)` | 世界坐标边界（默认 256）。 |
+| `mods.world.setBlock(x,y,z,name[,meta])` | 放置 / 移除方块。 |
+| `mods.world.getBlock(x,y,z)` | 方块名称与 meta。 |
+| `mods.world.removeBlock(x,y,z)` | 移除方块。 |
+| `mods.world.setFluid(x,y,z,fluid[,amount[,capacity]])` | 放置液体。 |
+| `mods.world.getFluid(x,y,z)` | 液体名称、数量、容量。 |
+| `mods.world.setChest(x,y,z[,size])` | 创建容器。 |
+| `mods.world.getChest(x,y,z)` | 容器内容。 |
+| `mods.world.addItem(x,y,z,name[,count[,meta]])` | 生成掉落物。 |
+| `mods.world.getItems(x,y,z)` | 掉落物内容。 |
+| `mods.world.addEntity(x,y,z[,name])` | 放置实体标记。 |
+| `mods.world.removeEntity(x,y,z)` | 移除实体标记。 |
+| `mods.world.clear()` | 清空世界。 |
+| `mods.world.stats()` | 世界统计信息。 |
+| `mods.world.dump()` | 导出世界内容。 |
+| `mods.setBlock(...)` | `mods.world.setBlock` 的快捷方式。 |
+| `mods.getBlock(...)` | `mods.world.getBlock` 的快捷方式。 |
+| `mods.removeBlock(...)` | `mods.world.removeBlock` 的快捷方式。 |
+| `mods.clearWorld()` | `mods.world.clear` 的快捷方式。 |
+| `mods.getStatusText()` | 状态文本。 |
+| `mods.setStatusText(value)` | 设置状态文本。 |
+| `mods.getLightColor()` | 灯光颜色。 |
+| `mods.setLightColor(value)` | 设置灯光颜色。 |
+| `mods.getOffset()` | 无人机到目标位置的距离。 |
+| `mods.getVelocity()` | 无人机速度。 |
+| `mods.setMaxVelocity(value)` | 设置无人机最大速度。 |
+| `mods.setAcceleration(value)` | 设置无人机加速度。 |
+| `mods.forward()/back()/up()/down()` | 机器人高层移动快捷方式。 |
+| `mods.turnLeft()/turnRight()` | 机器人高层转向快捷方式。 |
+| `mods.detectUp()/detectDown()` | 机器人高层检测快捷方式。 |
+| `mods.compareUp()/compareDown()` | 机器人高层比较快捷方式。 |
+| `mods.dropUp()/dropDown()/suckUp()/suckDown()` | 机器人高层丢弃 / 吸取快捷方式。 |
+| `mods.placeUp()/placeDown()/swingUp()/swingDown()/useUp()/useDown()` | 机器人高层放置 / 挖掘 / 使用快捷方式。 |
+| `mods.apiMap([kind])` | OC 原版 API 到 Mods 的映射表；`kind` 可为 `robot` / `drone` / `microcontroller` / `robot_api`。 |
+| `mods.map(name)` | 按原版名称查询映射目标，例如 `mods.map("robot.move")`。 |
+| `mods.help([kind])` | 可直接 `print` 的中文映射帮助。 |
+| `mods.listAPIs()` | 全部可调用 API 名称。 |
 
 ---
 
@@ -326,7 +326,7 @@ print(mods.help())
 - `mods.mcu_<name>` / `mods.microcontroller_<name>`：单片机方法的扁平别名。
 - `mods.forward/back/up/down/turnLeft/turnRight/detectUp/...`：机器人高层方法的扁平别名。
 
-`mods.listAPIs()` 会返回全部可调用名称（当前共 267 项）。
+`mods.listAPIs()` 会返回全部可调用名称。
 
 ---
 
@@ -561,7 +561,7 @@ Mods/
 
 - 配置弹窗只有反应堆 GUI，没有「EFI 程序」与「硬件」页签。
 - 设备页的页签为「☢ 反应堆」与「物品 / 状态」；地址显示为「组件地址」（双击可复制）。「物品 / 状态」会列出堆芯里已放置的组件（耐久与温度）、燃料箱与废料箱的内容，以及温度、堆芯热量、剩余吸热、安全时间、外壳散热、活跃燃料棒和连接的目标虚拟机。
-- 设备页与顶部工具栏都提供启动 / 停止（对应反应堆运行开关）
+- 设备页与顶部工具栏都提供启动 / 停止（对应反应堆运行开关）。
 - 「连接到虚拟机」可选择一台虚拟机接上设备（相当于把红石 I/O 端口接到该计算机）：连接后只有该虚拟机能看到对应组件；选「不连接」即可断开。连接关系保存在 `mod.json` 的 `connectedVm` 字段。
 
 - 配置弹窗显示 IC2 原版风格的灰色反应堆 GUI。
