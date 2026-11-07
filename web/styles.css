@@ -476,6 +476,18 @@ html, body {
   display: inline-flex;
   opacity: 0.5;
 }
+/* 浏览器不支持方向锁定时 (如 iOS Safari): 把舞台旋转 90°, 竖屏也能横着用。
+   按钮是舞台的兄弟节点, 不随旋转, 因此仍按屏幕方向摆放。 */
+.console-canvas-wrap.fullscreen.fs-rotate .canvas-stage {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vh;
+  height: 100vw;
+  padding: 4px;
+  transform-origin: 0 0;
+  transform: rotate(90deg) translateY(-100%);
+}
 /* 暂停遮罩 (VMware 风格) */
 .paused-overlay {
   position: absolute;

@@ -412,6 +412,8 @@ const Console = (() => {
 
     // 窗口大小变化时重绘画布并重新渲染所有单元格
     view._resizeHandler = () => {
+      // 手机旋转后重新判断是否需要 CSS 旋转兜底
+      syncFsRotation(vmName);
       fitCanvasToContainer(vmName);
       repaintAll(vmName);
     };
@@ -1646,20 +1648,87 @@ const Console = (() => {
     resizeCanvas(vmName);
   }
 
-  // 全屏切换
-  function toggleFullscreen(vmName) {
+  // ---------- 全屏 / 横屏 ----------
+  function isTouchDevice() {
+    return !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+  }
+
+  // Screen Orientation API 的 lock 只在部分浏览器可用 (iOS Safari 不提供)
+  function orientationLockSupported() {
+    return !!(window.screen && screen.orientation && typeof screen.orientation.lock === 'function');
+  }
+
+  function lockLandscape() {
+    if (!orientationLockSupported()) return;
+    try {
+      const p = screen.orientation.lock('landscape');
+      if (p && p.catch) p.catch(() => { /* 浏览器拒绝时保持当前方向 */ });
+    } catch (e) { /* 忽略 */ }
+  }
+
+  function unlockOrientation() {
+    try {
+      if (window.screen && screen.orientation && typeof screen.orientation.unlock === 'function') {
+        screen.orientation.unlock();
+      }
+    } catch (e) { /* 忽略 */ }
+  }
+
+  // 原生全屏: 锁定方向的前提是先进入全屏, 因此两步串联
+  function requestNativeFullscreen(el) {
+    const fn = el.requestFullscreen || el.webkitRequestFullscreen;
+    if (!fn) return;
+    try {
+      const p = fn.call(el, { navigationUI: 'hide' });
+      if (p && p.then) p.then(lockLandscape, () => { /* 不支持时忽略 */ });
+      else lockLandscape();
+    } catch (e) { /* 忽略 */ }
+  }
+
+  function exitNativeFullscreen() {
+    if (!document.fullscreenElement && !document.webkitFullscreenElement) return;
+    const fn = document.exitFullscreen || document.webkitExitFullscreen;
+    if (!fn) return;
+    try {
+      const p = fn.call(document);
+      if (p && p.catch) p.catch(() => {});
+    } catch (e) { /* 忽略 */ }
+  }
+
+  // 无法锁定方向时 (如 iOS Safari), 在竖屏下把舞台旋转 90° 呈现横屏。
+  // 舞台是包住画布的独立容器, 按钮等控件不随之旋转。
+  function syncFsRotation(vmName) {
     const view = getView(vmName);
     const wrap = view.canvasWrap;
     if (!wrap) return;
-    view.isFullscreen = !view.isFullscreen;
-    wrap.classList.toggle('fullscreen', view.isFullscreen);
+    const rotate = !!view.isFullscreen
+      && isTouchDevice()
+      && !orientationLockSupported()
+      && window.innerHeight > window.innerWidth;
+    if (rotate === !!view.fsRotated) return;
+    view.fsRotated = rotate;
+    wrap.classList.toggle('fs-rotate', rotate);
+    // 类名切换不触发 resize, 这里手动重新适配画布
+    requestAnimationFrame(() => {
+      fitCanvasToContainer(vmName);
+      repaintAll(vmName);
+    });
+  }
+
+  // 全屏切换
+  function setFullscreen(vmName, on) {
+    const view = getView(vmName);
+    const wrap = view.canvasWrap;
+    if (!wrap || view.isFullscreen === on) return;
+    view.isFullscreen = on;
+    wrap.classList.toggle('fullscreen', on);
     // ESC 退出全屏 (在 capture 阶段拦截, 防止冒泡到 canvas 的 onKey)
-    if (view.isFullscreen) {
+    if (on) {
       view._escHandler = (e) => {
         if (e.key === 'Escape') {
           e.preventDefault();
           e.stopPropagation();
-          toggleFullscreen(vmName);
+          setFullscreen(vmName, false);
         }
       };
       document.addEventListener('keydown', view._escHandler, true);
@@ -1671,6 +1740,9 @@ const Console = (() => {
         view.canvas.focus();
       };
       wrap.addEventListener('mousedown', view._fsFocusHandler, true);
+      // 移动端: 进入原生全屏并锁定横屏
+      if (isTouchDevice()) requestNativeFullscreen(wrap);
+      syncFsRotation(vmName);
       // 进入全屏后立即聚焦 canvas, 否则 keydown 收不到
       setTimeout(() => {
         view.canvas.focus();
@@ -1686,11 +1758,27 @@ const Console = (() => {
         wrap.removeEventListener('mousedown', view._fsFocusHandler, true);
         view._fsFocusHandler = null;
       }
+      unlockOrientation();
+      exitNativeFullscreen();
+      view.fsRotated = false;
+      wrap.classList.remove('fs-rotate');
       // 退出全屏时收起软键盘
       if (view.imeInput) view.imeInput.blur();
       setTimeout(() => { fitCanvasToContainer(vmName); repaintAll(vmName); }, 30);
     }
   }
+
+  function toggleFullscreen(vmName) {
+    setFullscreen(vmName, !getView(vmName).isFullscreen);
+  }
+
+  // 系统手势 / ESC 退出原生全屏时, 同步回退页面内的全屏状态
+  document.addEventListener('fullscreenchange', () => {
+    if (document.fullscreenElement) return;
+    views.forEach((view, vmName) => {
+      if (view.isFullscreen) setFullscreen(vmName, false);
+    });
+  });
 
   function clearLog(vmName) {
     const view = getView(vmName);
@@ -2286,15 +2374,40 @@ const Console = (() => {
 
   // 把浏览器坐标换算成 OC 的字符坐标与精确像素坐标 (OC 标准: 每字符 6x9 像素)
   function computePoint(view, clientX, clientY) {
-    const rect = view.canvas.getBoundingClientRect();
-    // getBoundingClientRect 已反映 CSS transform 缩放后的实际渲染尺寸
-    const realCharW = rect.width / view.w;
-    const realCharH = rect.height / view.h;
-    const x = Math.max(1, Math.min(view.w, Math.floor((clientX - rect.left) / realCharW) + 1));
-    const y = Math.max(1, Math.min(view.h, Math.floor((clientY - rect.top) / realCharH) + 1));
+    let localX, localY, boxW, boxH;
+    if (view.fsRotated) {
+      // 舞台整体旋转 90°: 用实际变换矩阵做逆变换, 把屏幕坐标映射回画布布局坐标
+      const stage = view.canvasStage;
+      let local = null;
+      try {
+        const m = new DOMMatrixReadOnly(getComputedStyle(stage).transform);
+        local = m.inverse().transformPoint({ x: clientX, y: clientY });
+      } catch (e) {
+        local = null;
+      }
+      if (!local) {
+        // 极老的浏览器没有 DOMMatrix: 按 rotate(90deg) translateY(-100%) 手算
+        local = { x: clientY, y: stage.offsetHeight - clientX };
+      }
+      localX = local.x - view.canvas.offsetLeft;
+      localY = local.y - view.canvas.offsetTop;
+      boxW = view.canvas.offsetWidth;
+      boxH = view.canvas.offsetHeight;
+    } else {
+      const rect = view.canvas.getBoundingClientRect();
+      // getBoundingClientRect 已反映 CSS transform 缩放后的实际渲染尺寸
+      localX = clientX - rect.left;
+      localY = clientY - rect.top;
+      boxW = rect.width;
+      boxH = rect.height;
+    }
+    const realCharW = boxW / view.w;
+    const realCharH = boxH / view.h;
+    const x = Math.max(1, Math.min(view.w, Math.floor(localX / realCharW) + 1));
+    const y = Math.max(1, Math.min(view.h, Math.floor(localY / realCharH) + 1));
     // 计算指针在当前字符内的相对位置 (0-1)
-    const fx = (clientX - rect.left) / realCharW - (x - 1);
-    const fy = (clientY - rect.top) / realCharH - (y - 1);
+    const fx = localX / realCharW - (x - 1);
+    const fy = localY / realCharH - (y - 1);
     // 像素坐标: 1-based, 总像素 = 字符数 * 每字符像素数
     const px = Math.max(1, Math.min(view.w * 6, (x - 1) * 6 + Math.floor(fx * 6) + 1));
     const py = Math.max(1, Math.min(view.h * 9, (y - 1) * 9 + Math.floor(fy * 9) + 1));
