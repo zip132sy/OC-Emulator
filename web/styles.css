@@ -1486,6 +1486,8 @@ html, body {
   display: flex; gap: 6px; align-items: center;
   font-size: 12px;
 }
+/* 悬浮内容窗口的关闭按钮 (仅手机端显示) */
+.disk-viewer-close { display: none; }
 .disk-mirror-status {
   background: var(--bg-sidebar);
   padding: 4px 12px;
@@ -1722,16 +1724,31 @@ html, body {
   .vm-toolbar .vm-title { margin-right: auto; }
   .vm-toolbar .btn { flex: 0 0 auto; }
 
-  /* 磁盘编辑器: 窄屏改上下布局, 文件树在上, 编辑区在下 */
+  /* 磁盘编辑器: 文件树占满整个区域, 文件内容改成悬浮窗口显示 */
   .disk-editor {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: minmax(0, 38%) minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
     min-height: min(520px, 68dvh);
   }
   .disk-tree {
     border-right: none;
-    border-bottom: 1px solid var(--border-dark);
+    border-bottom: none;
   }
+  .disk-file-viewer {
+    position: fixed;
+    left: 8px;
+    right: 8px;
+    top: calc(8px + env(safe-area-inset-top, 0px));
+    bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+    z-index: 44;
+    display: none;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg-app);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.6);
+  }
+  .disk-editor.viewer-open .disk-file-viewer { display: flex; }
+  .disk-viewer-close { display: inline-flex; }
 
   /* 日志: 独立成底部抽屉, 不参与画布列布局, 展开后有足够高度看完整内容 */
   .log-panel {

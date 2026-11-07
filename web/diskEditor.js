@@ -46,7 +46,7 @@ const DiskEditor = (() => {
   function render(pane, diskPath, vm) {
     const session = getSession(diskPath);
     pane.innerHTML = `
-      <div class="disk-editor">
+      <div class="disk-editor" id="disk-editor-${cssEsc(diskPath)}">
         <div class="disk-tree">
           <div class="disk-tree-header">
             <div class="disk-tree-actions">
@@ -73,6 +73,7 @@ const DiskEditor = (() => {
             <button class="btn btn-primary" data-action="unlock" id="disk-unlock-${cssEsc(diskPath)}">${I18N.t('disk.unlock')}</button>
             <button class="btn" data-action="lock" id="disk-lock-${cssEsc(diskPath)}">${I18N.t('disk.lock')}</button>
             <button class="btn btn-warn" data-action="format" id="disk-format-${cssEsc(diskPath)}">${I18N.t('disk.format')}</button>
+            <button class="btn btn-icon disk-viewer-close" data-action="close-viewer" id="disk-close-viewer-${cssEsc(diskPath)}" title="${I18N.t('disk.close-viewer')}">✕</button>
           </div>
           <div class="disk-mirror-status" id="disk-mirror-status-${cssEsc(diskPath)}" style="display:none"></div>
           <div class="disk-file-toolbar" id="disk-file-info-${cssEsc(diskPath)}">
@@ -110,6 +111,8 @@ const DiskEditor = (() => {
     pane.querySelector(`#disk-unlock-${cssEsc(diskPath)}`).addEventListener('click', () => unlock(diskPath));
     pane.querySelector(`#disk-lock-${cssEsc(diskPath)}`).addEventListener('click', () => lock(diskPath));
     pane.querySelector(`#disk-format-${cssEsc(diskPath)}`).addEventListener('click', () => format(diskPath));
+    const closeViewerBtn = pane.querySelector(`#disk-close-viewer-${cssEsc(diskPath)}`);
+    if (closeViewerBtn) closeViewerBtn.addEventListener('click', () => closeViewer(diskPath));
 
     const actionsBar = pane.querySelector(`#disk-file-actions-${cssEsc(diskPath)}`);
     actionsBar.querySelector('button[data-action="save"]').addEventListener('click', () => saveCurrent(diskPath));
@@ -299,7 +302,7 @@ const DiskEditor = (() => {
     row.dataset.path = m.path;
     row.dataset.type = m.type;
     if (m.type === 'file') {
-      row.addEventListener('click', () => {
+      bindFileRow(diskPath, row, () => {
         // 找到这个文件, 展开其父目录
         const parentPath = m.path.substring(0, m.path.lastIndexOf('/')) || '/';
         expandDirParents(diskPath, parentPath);
@@ -376,7 +379,7 @@ const DiskEditor = (() => {
     row.dataset.path = childPath;
     row.dataset.type = child.type;
     if (child.type === 'file') {
-      row.addEventListener('click', () => selectFile(diskPath, childPath, row));
+      bindFileRow(diskPath, row, () => selectFile(diskPath, childPath, row));
     } else {
       const isExpanded = session.expandedDirs.has(childPath);
       if (isExpanded) row.classList.add('expanded');
@@ -442,6 +445,36 @@ const DiskEditor = (() => {
     renderTree(diskPath);
   }
 
+  // 触屏下文件行单击只高亮, 双击才打开 (打开后内容在悬浮窗口里显示)
+  function isTouchUi() {
+    return !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+  }
+
+  function bindFileRow(diskPath, row, openFn) {
+    let lastTapAt = 0;
+    row.addEventListener('click', () => {
+      if (!isTouchUi()) { openFn(); return; }
+      const now = Date.now();
+      if (now - lastTapAt <= 320) {
+        lastTapAt = 0;
+        openFn();
+        return;
+      }
+      lastTapAt = now;
+      document.querySelectorAll(`#disk-tree-${cssEsc(diskPath)} .disk-tree-row`).forEach(r => r.classList.remove('active'));
+      row.classList.add('active');
+    });
+  }
+
+  // 关闭悬浮的内容窗口 (手机端)
+  function closeViewer(diskPath) {
+    const editorEl = document.getElementById(`disk-editor-${cssEsc(diskPath)}`);
+    if (editorEl) editorEl.classList.remove('viewer-open');
+    const session = getSession(diskPath);
+    session.selectedFile = null;
+    document.querySelectorAll(`#disk-tree-${cssEsc(diskPath)} .disk-tree-row`).forEach(r => r.classList.remove('active'));
+  }
+
   async function selectFile(diskPath, innerPath, rowEl) {
     const session = getSession(diskPath);
     session.selectedFile = innerPath;
@@ -450,6 +483,9 @@ const DiskEditor = (() => {
     // 标记 active
     document.querySelectorAll(`#disk-tree-${cssEsc(diskPath)} .disk-tree-row`).forEach(r => r.classList.remove('active'));
     rowEl.classList.add('active');
+    // 手机上内容区是悬浮窗口, 打开文件时展开
+    const editorEl = document.getElementById(`disk-editor-${cssEsc(diskPath)}`);
+    if (editorEl) editorEl.classList.add('viewer-open');
     document.getElementById(`disk-file-info-${cssEsc(diskPath)}`).innerHTML = `<span>${escapeHTML(innerPath)}${I18N.t('disk.loading-file')}</span>`;
     try {
       const result = await App.api(`disks/${diskApiPath(diskPath)}/read?path=${encodeURIComponent(innerPath)}`);
