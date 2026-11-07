@@ -1349,6 +1349,18 @@ async function handleApi(req, res, body) {
         }
       }
 
+      // /api/vms/:name/rename
+      if (parts[3] === 'rename' && method === 'POST') {
+        let newName = '';
+        try { newName = String((JSON.parse(body || '{}') || {}).name || '').trim(); } catch (e) { /* 忽略非法 body */ }
+        try {
+          const cfg = vmManager.rename(vmName, newName);
+          try { modsManager.renameVmConnection(vmName, newName); } catch { /* 接线同步失败不影响改名 */ }
+          return json(res, { ok: true, name: newName, config: cfg });
+        } catch (e) {
+          return json(res, { ok: false, error: e.message }, 400);
+        }
+      }
       // /api/vms/:name/start
       if (parts[3] === 'start' && method === 'POST') {
         const result = vmManager.start(vmName);

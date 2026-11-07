@@ -224,6 +224,31 @@ html, body {
   font-size: 10px;
   color: var(--fg-muted);
 }
+/* 列表项右侧的"更多操作"按钮 (手机端点它打开菜单, 桌面也可用) */
+.vm-more {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s, background 0.12s, color 0.12s;
+}
+.vm-item:hover .vm-more,
+.vm-item.active .vm-more { opacity: 1; }
+.vm-more:hover {
+  background: var(--bg-input);
+  color: var(--fg-primary);
+}
+@media (pointer: coarse) {
+  .vm-more { opacity: 1; width: 32px; height: 32px; }
+}
 
 /* ---------- 内容区 ---------- */
 .content {

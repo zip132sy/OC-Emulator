@@ -864,6 +864,7 @@ const App = (() => {
           <div class="vm-name"></div>
           <div class="vm-meta"></div>
         </div>
+        <button class="vm-more" type="button" title="${escapeAttr(I18N.t('ctx.more'))}" aria-label="${escapeAttr(I18N.t('ctx.more'))}">⋮</button>
       `;
       li.querySelector('.vm-name').textContent = vm.name;
       const metaParts = [];
@@ -880,10 +881,22 @@ const App = (() => {
       metaParts.push(I18N.t(stateKey));
       li.querySelector('.vm-meta').textContent = metaParts.join(' · ');
       li.addEventListener('click', () => openVMTab(vm.name));
+      // 触屏长按不再弹出菜单, 统一用右侧的 ⋮ 按钮
+      let lastTouchAt = 0;
+      li.addEventListener('touchstart', () => { lastTouchAt = Date.now(); }, { passive: true });
       li.addEventListener('contextmenu', (e) => {
         e.preventDefault();
+        if (Date.now() - lastTouchAt < 900) return;
         showVMContextMenu(vm.name, e.clientX, e.clientY);
       });
+      const moreBtn = li.querySelector('.vm-more');
+      if (moreBtn) {
+        moreBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const rect = moreBtn.getBoundingClientRect();
+          showVMContextMenu(vm.name, rect.left, rect.bottom + 4);
+        });
+      }
       ul.appendChild(li);
     }
   }
@@ -1366,8 +1379,23 @@ const App = (() => {
   }
 
   // ---------- 上下文菜单 ----------
+  let vmMenuEl = null;
+  let vmMenuClose = null;
+
+  function closeVMContextMenu() {
+    if (vmMenuEl && vmMenuEl.parentNode) vmMenuEl.parentNode.removeChild(vmMenuEl);
+    vmMenuEl = null;
+    if (vmMenuClose) {
+      document.removeEventListener('click', vmMenuClose, true);
+      document.removeEventListener('keydown', vmMenuClose, true);
+      window.removeEventListener('blur', vmMenuClose, true);
+      window.removeEventListener('resize', vmMenuClose, true);
+      vmMenuClose = null;
+    }
+  }
+
   function showVMContextMenu(vmName, x, y) {
-    // 简易菜单: 启动/停止/编辑/导出/导入/删除
+    closeVMContextMenu();
     const items = [
       { label: I18N.t('ctx.open'), action: () => openVMTab(vmName) },
       { label: I18N.t('ctx.start'), action: () => api(`vms/${encodeURIComponent(vmName)}/start`, { method: 'POST' }).then(refreshVMs) },
@@ -1388,9 +1416,12 @@ const App = (() => {
           }
         });
       } },
+      { separator: true },
+      { label: I18N.t('ctx.rename'), action: () => openRenameVM(vmName) },
       { label: I18N.t('ctx.export-vm'), action: () => ExportWizard.open(vmName) },
       { label: I18N.t('ctx.import-vm'), action: () => ExportWizard.openImport() },
-      { label: I18N.t('ctx.delete'), action: async () => {
+      { separator: true },
+      { label: I18N.t('ctx.delete'), danger: true, action: async () => {
         if (confirm(I18N.t('ctx.confirm-delete-vm').replace('{name}', vmName))) {
           await api(`vms/${encodeURIComponent(vmName)}`, { method: 'DELETE' });
           // 关闭相关 tab
@@ -1400,13 +1431,104 @@ const App = (() => {
         }
       } },
     ];
-    // 简易实现: 用 confirm/prompt 替代
-    const choice = items.map((it, i) => `${i}: ${it.label}`).join('\n');
-    const idx = prompt(`${I18N.t('ctx.menu-title')}\n${choice}`, '0');
-    if (idx !== null) {
-      const i = parseInt(idx, 10);
-      if (items[i]) items[i].action();
+
+    const menu = document.createElement('div');
+    menu.className = 'disk-context-menu';
+    for (const item of items) {
+      if (item.separator) {
+        const sep = document.createElement('div');
+        sep.className = 'disk-context-sep';
+        menu.appendChild(sep);
+        continue;
+      }
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'disk-context-item' + (item.danger ? ' danger' : '');
+      btn.textContent = item.label;
+      btn.addEventListener('click', () => {
+        closeVMContextMenu();
+        item.action();
+      });
+      menu.appendChild(btn);
     }
+    document.body.appendChild(menu);
+    const rect = menu.getBoundingClientRect();
+    menu.style.left = Math.max(4, Math.min(x, window.innerWidth - rect.width - 8)) + 'px';
+    menu.style.top = Math.max(4, Math.min(y, window.innerHeight - rect.height - 8)) + 'px';
+    vmMenuEl = menu;
+
+    vmMenuClose = (ev) => {
+      if (ev && ev.type === 'keydown' && ev.key !== 'Escape') return;
+      closeVMContextMenu();
+    };
+    setTimeout(() => {
+      document.addEventListener('click', vmMenuClose, true);
+      document.addEventListener('keydown', vmMenuClose, true);
+      window.addEventListener('blur', vmMenuClose, true);
+      window.addEventListener('resize', vmMenuClose, true);
+    }, 0);
+  }
+
+  // 重命名虚拟机: 目录与显示名一起改, 已打开的标签页跟随
+  function openRenameVM(vmName) {
+    Modal.open({
+      title: I18N.t('ctx.rename.title'),
+      size: 'small',
+      bodyHTML: `
+        <div class="form-row">
+          <label>${I18N.t('ctx.rename.label')}</label>
+          <input type="text" id="rename-vm-input" value="${escapeAttr(vmName)}" maxlength="32">
+        </div>
+        <div class="form-row">
+          <label></label>
+          <span class="hint">${I18N.t('ctx.rename.hint')}</span>
+        </div>`,
+      footerHTML: `
+        <button class="btn" data-action="modal-close">${I18N.t('settings.cancel')}</button>
+        <button class="btn btn-primary" id="rename-vm-save">${I18N.t('ctx.rename.confirm')}</button>`,
+      onMount(body, footer) {
+        const input = body.querySelector('#rename-vm-input');
+        const saveBtn = footer.querySelector('#rename-vm-save');
+        const submit = async () => {
+          const newName = (input.value || '').trim();
+          if (!/^[A-Za-z0-9_-]{1,32}$/.test(newName)) {
+            alert(I18N.t('ctx.rename.invalid'));
+            return;
+          }
+          if (newName === vmName) { Modal.close(); return; }
+          saveBtn.disabled = true;
+          let r = null;
+          try {
+            r = await api(`vms/${encodeURIComponent(vmName)}/rename`, { method: 'POST', body: { name: newName } });
+          } catch (e) {
+            r = { ok: false, error: e.message };
+          }
+          saveBtn.disabled = false;
+          if (!r || !r.ok) {
+            const raw = String((r && r.error) || '');
+            const text = /running/i.test(raw) ? I18N.t('ctx.rename.running')
+              : /already exists/i.test(raw) ? I18N.t('ctx.rename.exists')
+              : raw;
+            alert(I18N.t('ctx.rename.failed') + text);
+            return;
+          }
+          const related = state.tabs.filter(t => t.vm === vmName);
+          for (const t of related) closeTab(t.id);
+          Modal.close();
+          await refreshVMs();
+          // 原先打开的是虚拟机标签页时, 用新名字重新打开
+          if (related.some(t => t.type === 'vm')) openVMTab(newName);
+        };
+        if (saveBtn) saveBtn.addEventListener('click', submit);
+        if (input) {
+          input.focus();
+          input.select();
+          input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') { e.preventDefault(); submit(); }
+          });
+        }
+      },
+    });
   }
 
   // ---------- 菜单事件 ----------
