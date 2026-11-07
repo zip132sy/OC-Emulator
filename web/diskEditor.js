@@ -762,6 +762,7 @@ const DiskEditor = (() => {
     const openedAt = Date.now();
     contextMenuClose = (ev) => {
       if (ev && ev.type === 'keydown' && ev.key !== 'Escape') return;
+      if (ev && ev.type === 'blur' && ev.target !== window) return;
       if (ev && ev.type === 'click') {
         // 菜单内部的点击交给菜单项自己处理 (捕获阶段移除节点会让移动端丢失这次 click)
         if (menu.contains(ev.target)) return;

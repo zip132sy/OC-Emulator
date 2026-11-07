@@ -1483,6 +1483,8 @@ const App = (() => {
     const openedAt = Date.now();
     vmMenuClose = (ev) => {
       if (ev && ev.type === 'keydown' && ev.key !== 'Escape') return;
+      // 只关心窗口失焦; 元素失焦会冒到 window 的捕获阶段, 会在点菜单项时误关菜单
+      if (ev && ev.type === 'blur' && ev.target !== window) return;
       if (ev && ev.type === 'click') {
         // 菜单内部的点击交给菜单项自己处理: 在捕获阶段移除节点会让移动端
         // 收不到这次 click, 表现为"菜单能打开, 点菜单项没反应"

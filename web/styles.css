@@ -514,7 +514,6 @@ html, body {
 .console-canvas-wrap.fullscreen .ime-btn {
   top: calc(12px + env(safe-area-inset-top, 0px));
   left: calc(12px + env(safe-area-inset-left, 0px));
-  display: inline-flex;
   opacity: 0.5;
 }
 /* 浏览器不支持方向锁定时 (如 iOS Safari): 把舞台旋转 90°, 竖屏也能横着用。
