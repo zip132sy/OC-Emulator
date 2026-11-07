@@ -34,7 +34,7 @@
 | 依赖 | 版本 | 说明 |
 |------|------|------|
 | Node.js | 18+ | 启动脚本会在缺失时尝试自动安装 |
-| Lua | 5.3（固定版本） | 需在 PATH 中（`lua5.3` / `lua53` / `lua`）；缺失或版本不符时自动安装 Lua 5.3.6 |
+| Lua | 5.3 / 5.4 | 需在 PATH 中（`lua5.3` / `lua53` / `lua5.4` / `lua54` / `lua`）；缺失或版本过低时自动安装 Lua 5.3.6 |
 | LuaFileSystem (lfs) | 可选 | 缺失时自动回退到 shell 命令，功能一致、性能略低 |
 | npm 依赖 | `ws` | 首次启动自动安装 |
 
@@ -47,7 +47,7 @@
 下载后直接双击 `run.bat`。脚本会自动完成：
 
 1. 检查 / 安装 Node.js；
-2. 检查 npm 依赖与 Lua（缺失自动安装；Lua 固定为 5.3.x）；
+2. 检查 npm 依赖与 Lua（缺失自动安装；需要 Lua 5.3 或 5.4）；
 3. 校验强依赖文件，缺失时**联网下载修复**（GitHub 优先，Gitee 回退）；
 4. **检查并拉取仓库更新**（可在设置中关闭）；
 5. 带看门狗启动服务器（崩溃 / 卡死自动重启，端口被占用自动切换）。
@@ -144,7 +144,7 @@ OC-Emulator/
 │   ├── reactor.js                # IC2 核电站网格 / 组件 / EU 与热量计算
 │   ├── internetProxy.js          # Internet 组件 HTTP/HTTPS 代理
 │   ├── floppyTemplates.js        # 软盘模板读取
-│   ├── setupLua.js               # 跨平台 Lua 5.3 自动安装
+│   ├── setupLua.js               # 跨平台 Lua 自动安装（下载 / 编译 / 包管理器）
 │   ├── sysInfo.js                # 宿主机内存 / 电量采集
 │   ├── crypto-helper.js          # 数据卡加解密桥接
 │   ├── ensureDeps.js             # 启动前依赖检查（npm 依赖 + Lua）
