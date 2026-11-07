@@ -885,6 +885,77 @@ html, body {
   grid-column: 2;
 }
 
+/* ---------- 路径浏览 (设置里的 Lua 解释器选择) ---------- */
+.path-browser {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-input);
+  overflow: hidden;
+}
+.path-browser-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px;
+  border-bottom: 1px solid var(--border);
+}
+.path-browser-path {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.path-browser-hint {
+  padding: 4px 8px;
+  font-size: 10px;
+  color: var(--fg-dim);
+}
+.path-browser-list {
+  max-height: 240px;
+  overflow-y: auto;
+}
+.path-browser-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  background: transparent;
+  color: var(--fg-primary);
+  font-size: 12px;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.path-browser-row:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+.path-browser-row.is-dir {
+  font-weight: 600;
+}
+.path-browser-row.is-exec {
+  color: var(--ok);
+}
+.path-browser-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.path-browser-empty {
+  padding: 12px 8px;
+  font-size: 12px;
+  color: var(--fg-muted);
+  text-align: center;
+}
+
 /* Switch toggle */
 .switch {
   position: relative;
@@ -1663,6 +1734,8 @@ html, body {
   /* 磁盘编辑器文件树行 */
   .disk-tree-row { min-height: 40px; padding: 8px 6px; }
   .disk-context-item { min-height: 38px; padding: 9px 10px; }
+  /* 路径浏览的行 */
+  .path-browser-row { min-height: 40px; padding: 8px; }
   button, select, input[type="checkbox"] { touch-action: manipulation; }
 }
 

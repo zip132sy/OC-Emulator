@@ -165,6 +165,17 @@ const App = (() => {
             <label></label>
             <span class="hint">${I18N.t('settings.lua-hint')}</span>
           </div>
+          <div class="form-row" id="settings-lua-browse" style="display:none;">
+            <label></label>
+            <div class="path-browser">
+              <div class="path-browser-bar">
+                <button class="btn" type="button" id="settings-lua-browse-up">${I18N.t('settings.browse.up')}</button>
+                <span class="path-browser-path" id="settings-lua-browse-path"></span>
+              </div>
+              <div class="path-browser-hint">${I18N.t('settings.browse.hint')}</div>
+              <div class="path-browser-list" id="settings-lua-list"></div>
+            </div>
+          </div>
           <div class="form-row">
             <label>${I18N.t('settings.language')}</label>
             <select id="settings-lang" style="flex:1;padding:6px 8px;background:var(--bg-input);color:var(--fg-primary);border:1px solid var(--border);border-radius:3px;">
@@ -321,21 +332,64 @@ const App = (() => {
           // 版本回退
           const rollbackBtn = body.querySelector('#settings-rollback');
           if (rollbackBtn) rollbackBtn.addEventListener('click', () => openRollbackDialog());
-          // 浏览按钮 (隐藏的 file input)
+          // 浏览按钮: 展开服务端目录列表, 点击文件夹进入, 点击文件选中完整路径
           const browseBtn = body.querySelector('#settings-browse');
-          const fileInput = document.createElement('input');
-          fileInput.type = 'file';
-          // 不加 accept 过滤: Lua 可执行文件在 Windows 是 .exe, 在 Linux/macOS 没有扩展名
-          fileInput.style.display = 'none';
-          body.appendChild(fileInput);
-          browseBtn.addEventListener('click', () => fileInput.click());
-          fileInput.addEventListener('change', () => {
-            if (fileInput.files.length > 0) {
-              input.value = fileInput.files[0].name;
-              alert(I18N.t('settings.path-restricted'));
-              input.focus();
-              input.select();
+          const browsePanel = body.querySelector('#settings-lua-browse');
+          const browseList = body.querySelector('#settings-lua-list');
+          const browsePathText = body.querySelector('#settings-lua-browse-path');
+          const browseUpBtn = body.querySelector('#settings-lua-browse-up');
+          let browseParent = null;
+
+          const loadDir = async (target) => {
+            browseList.innerHTML = `<div class="path-browser-empty">${I18N.t('settings.browse.loading')}</div>`;
+            let r = null;
+            try {
+              r = await api('fs/list?path=' + encodeURIComponent(target || ''));
+            } catch { /* 请求失败按读取错误处理 */ }
+            if (!r || !r.ok) {
+              browseParent = (r && r.parent) || null;
+              browsePathText.textContent = (r && r.path) || target || '';
+              browseUpBtn.disabled = !browseParent;
+              browseList.innerHTML = `<div class="path-browser-empty">${I18N.t('settings.browse.error')}</div>`;
+              return;
             }
+            browseParent = r.parent;
+            browsePathText.textContent = r.path || '';
+            browseUpBtn.disabled = !browseParent;
+            if (!r.entries.length) {
+              browseList.innerHTML = `<div class="path-browser-empty">${I18N.t('settings.browse.empty')}</div>`;
+              return;
+            }
+            browseList.innerHTML = '';
+            for (const entry of r.entries) {
+              const row = document.createElement('button');
+              row.type = 'button';
+              row.className = 'path-browser-row' + (entry.isDir ? ' is-dir' : entry.isExec ? ' is-exec' : '');
+              const icon = document.createElement('span');
+              icon.className = 'path-browser-icon';
+              icon.textContent = entry.isDir ? '📁' : entry.isExec ? '⚙' : '📄';
+              const name = document.createElement('span');
+              name.className = 'path-browser-name';
+              name.textContent = entry.name;
+              row.appendChild(icon);
+              row.appendChild(name);
+              row.addEventListener('click', () => {
+                if (entry.isDir) { loadDir(entry.path); return; }
+                input.value = entry.path;
+                browsePanel.style.display = 'none';
+                input.focus();
+              });
+              browseList.appendChild(row);
+            }
+          };
+
+          browseBtn.addEventListener('click', () => {
+            const visible = browsePanel.style.display !== 'none';
+            browsePanel.style.display = visible ? 'none' : '';
+            if (!visible) loadDir(input.value.trim());
+          });
+          browseUpBtn.addEventListener('click', () => {
+            if (browseParent) loadDir(browseParent);
           });
           // 保存
           document.querySelector('#settings-save').addEventListener('click', async () => {

@@ -697,6 +697,88 @@ function serveStatic(req, res) {
   fs.createReadStream(filePath).pipe(res);
 }
 
+// 列出宿主机目录 (设置里选择 Lua 解释器路径用)。
+// 只做目录列举, 不读取文件内容; path 为空时给出默认起始目录。
+function listHostDirectory(rawPath) {
+  const isWin = process.platform === 'win32';
+  const limit = 3000;
+  let target = String(rawPath || '').trim();
+
+  if (!target) {
+    if (isWin) {
+      const entries = [];
+      for (let code = 65; code <= 90; code++) {
+        const drive = String.fromCharCode(code) + ':\\';
+        try {
+          if (fs.existsSync(drive)) {
+            entries.push({ name: drive.slice(0, 2), path: drive, isDir: true, isExec: false });
+          }
+        } catch (e) { /* 不可访问的盘符跳过 */ }
+      }
+      return { ok: true, path: '', parent: null, entries };
+    }
+    // Termux 的 Lua 在 $PREFIX/bin, 桌面 Linux 通常在 /usr/bin
+    const candidates = [
+      process.env.PREFIX && path.join(process.env.PREFIX, 'bin'),
+      '/usr/local/bin',
+      '/usr/bin',
+    ].filter(Boolean);
+    target = candidates.find((dir) => {
+      try { return fs.statSync(dir).isDirectory(); } catch (e) { return false; }
+    }) || '/';
+  }
+
+  let abs = path.resolve(target);
+  try {
+    if (!fs.statSync(abs).isDirectory()) abs = path.dirname(abs);
+  } catch (e) {
+    return { ok: false, path: abs, parent: null, entries: [], error: e.code === 'EACCES' ? 'permission' : 'not-found' };
+  }
+
+  let dirents = [];
+  try {
+    dirents = fs.readdirSync(abs, { withFileTypes: true });
+  } catch (e) {
+    const up = path.dirname(abs);
+    return {
+      ok: false,
+      path: abs,
+      parent: up === abs ? null : up,
+      entries: [],
+      error: e.code === 'EACCES' ? 'permission' : 'not-found',
+    };
+  }
+
+  const entries = [];
+  for (const dirent of dirents) {
+    if (entries.length >= limit) break;
+    const full = path.join(abs, dirent.name);
+    let isDir = dirent.isDirectory();
+    let isExec = false;
+    try {
+      const st = fs.statSync(full); // 跟随符号链接
+      isDir = st.isDirectory();
+      if (!isDir) {
+        if (isWin) {
+          isExec = /\.(exe|cmd|bat|com)$/i.test(dirent.name);
+        } else {
+          try {
+            fs.accessSync(full, fs.constants.X_OK);
+            isExec = true;
+          } catch (e) { /* 不可执行 */ }
+        }
+      }
+    } catch (e) {
+      continue; // 断链或无权访问
+    }
+    entries.push({ name: dirent.name, path: full, isDir, isExec });
+  }
+  entries.sort((a, b) => (a.isDir === b.isDir ? a.name.localeCompare(b.name) : (a.isDir ? -1 : 1)));
+
+  const parent = path.dirname(abs);
+  return { ok: true, path: abs, parent: parent === abs ? null : parent, entries };
+}
+
 // ---------- REST API ----------
 async function handleApi(req, res, body) {
   const parts = req.pathname.split('/').filter(Boolean); // ['api', 'vms', ...]
@@ -706,6 +788,11 @@ async function handleApi(req, res, body) {
     // /api/version
     if (parts[1] === 'version') {
       return json(res, { version: '2.0.0', name: 'OC Emulator' });
+    }
+
+    // /api/fs/list: 列出宿主机目录 (设置里选择 Lua 解释器路径用)
+    if (parts[1] === 'fs' && parts[2] === 'list' && method === 'GET') {
+      return json(res, listHostDirectory((req.query && req.query.path) || ''));
     }
 
     // /api/server/restart 与 /api/server/stop: 前端控制面板里的服务级按钮
