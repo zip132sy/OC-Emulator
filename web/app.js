@@ -1480,8 +1480,16 @@ const App = (() => {
     menu.style.top = Math.max(4, Math.min(y, window.innerHeight - rect.height - 8)) + 'px';
     vmMenuEl = menu;
 
+    const openedAt = Date.now();
     vmMenuClose = (ev) => {
       if (ev && ev.type === 'keydown' && ev.key !== 'Escape') return;
+      if (ev && ev.type === 'click') {
+        // 菜单内部的点击交给菜单项自己处理: 在捕获阶段移除节点会让移动端
+        // 收不到这次 click, 表现为"菜单能打开, 点菜单项没反应"
+        if (menu.contains(ev.target)) return;
+        // 打开菜单的同一次点击 (含触屏合成点击) 不应立刻把它关掉
+        if (Date.now() - openedAt < 250) return;
+      }
       closeVMContextMenu();
     };
     setTimeout(() => {
