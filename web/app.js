@@ -1359,8 +1359,10 @@ const Modal = (() => {
       dlg.style.minWidth = 'min(720px, calc(100vw - 24px))';
       dlg.style.maxWidth = 'min(900px, calc(100vw - 24px))';
     } else {
-      container.querySelector('.modal-dialog').style.minWidth = '480px';
-      container.querySelector('.modal-dialog').style.maxWidth = '800px';
+      // 用 min() 跟随视口宽度: 手机上弹窗不能比屏幕宽, 否则右侧按钮会落在屏幕外
+      const dlg = container.querySelector('.modal-dialog');
+      dlg.style.minWidth = 'min(480px, calc(100vw - 24px))';
+      dlg.style.maxWidth = 'min(800px, calc(100vw - 24px))';
     }
     container.classList.remove('hidden');
     container.setAttribute('aria-hidden', 'false');

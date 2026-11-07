@@ -1446,12 +1446,60 @@ html, body {
 
   .content { min-width: 0; }
 
-  /* 模态框占满可用宽度, 内容可滚动 */
-  .modal-dialog { width: calc(100vw - 20px) !important; max-width: none; max-height: 88vh; }
-  .modal-body { max-height: calc(88vh - 110px); overflow-y: auto; }
+  /* 模态框: 必须解除 480px 的 min-width, 否则弹窗比屏幕还宽, 右侧按钮落在屏幕外 */
+  .modal { padding: 8px; }
+  .modal-dialog {
+    width: calc(100vw - 16px) !important;
+    min-width: 0 !important;
+    max-width: calc(100vw - 16px) !important;
+    max-height: calc(100dvh - 16px);
+  }
+  .modal-body { max-height: none; overflow-y: auto; }
+  .modal-footer { flex-wrap: wrap; justify-content: stretch; }
+  .modal-footer .btn { flex: 1 1 auto; }
+
+  /* VM 工具栏: 按钮换行显示, 而不是被 tab-pane 的 overflow:hidden 裁掉 */
+  .vm-toolbar { flex-wrap: wrap; row-gap: 6px; }
+  .vm-toolbar .spacer { display: none; }
+  .vm-toolbar .vm-title { margin-right: auto; }
+  .vm-toolbar .btn { flex: 0 0 auto; }
+
+  /* 磁盘编辑器: 窄屏改上下布局, 文件树在上, 编辑区在下 */
+  .disk-editor {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 38%) minmax(0, 1fr);
+    min-height: min(520px, 68dvh);
+  }
+  .disk-tree {
+    border-right: none;
+    border-bottom: 1px solid var(--border-dark);
+  }
+
+  /* 日志面板在手机上限制高度, 保证画布和工具栏可用 */
+  .log-panel { flex-basis: 84px; max-height: 120px; }
+
+  /* 磁盘编辑器右侧工具条同样允许换行, 否则右侧按钮被 overflow:hidden 裁掉 */
+  .disk-file-toolbar { flex-wrap: wrap; row-gap: 6px; }
+  .disk-file-toolbar .spacer { display: none; }
+  .disk-tree-actions { flex-wrap: wrap; row-gap: 4px; }
+
+  /* 硬件配置: 200px 标签列在窄屏下会挤压输入框, 改成上下排列 */
+  .hw-grid { grid-template-columns: minmax(0, 1fr); gap: 2px; max-width: none; }
+  .hw-grid label { padding: 6px 0 0; }
 
   .welcome h1 { font-size: 20px; }
-  .form-row { flex-direction: column; align-items: stretch; gap: 6px; }
+  /* .form-row 是 grid 布局, 用 grid-template-columns 才能变成单列 */
+  .form-row { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  .form-row .hint { grid-column: 1; }
+
+  /* 手机浏览器在输入框字号小于 16px 时会自动放大页面, 放大后就点不到旁边的按钮 */
+  input:not([type="checkbox"]):not([type="radio"]),
+  select,
+  textarea,
+  .form-row select,
+  .form-row input,
+  .hw-grid select,
+  .hw-grid input { font-size: 16px; }
 }
 
 /* ---------- 平板 (768px - 1023px): 两列最合适 ---------- */
@@ -1468,8 +1516,48 @@ html, body {
     min-height: 40px;
   }
   .vm-list li { min-height: 44px; padding: 10px 12px; }
-  .modal-close { min-width: 40px; min-height: 40px; }
+  .modal-close {
+    min-width: 40px;
+    min-height: 40px;
+    font-size: 24px;
+  }
   .btn { min-height: 40px; padding: 8px 16px; }
+  /* 图标按钮 (磁盘编辑器工具栏等) 默认只有 24px, 手指难以点中 */
+  .btn-icon {
+    min-width: 40px;
+    min-height: 40px;
+    padding: 6px 8px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  /* 画布右上角的全屏按钮 / 左上角的输入法按钮 */
+  .fs-btn,
+  .ime-btn {
+    min-height: 40px;
+    padding: 8px 12px;
+    font-size: 13px;
+    opacity: 0.85;
+  }
+  /* 日志面板的操作按钮 */
+  .log-panel-header .log-btn {
+    min-height: 34px;
+    padding: 6px 12px;
+    font-size: 12px;
+  }
+  .log-show-handle { min-height: 34px; }
+  /* 标签页与关闭按钮 */
+  .tab { min-height: 40px; padding: 8px 12px; }
+  .tab-close {
+    min-width: 32px;
+    min-height: 32px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  /* 磁盘编辑器文件树行 */
+  .disk-tree-row { min-height: 40px; padding: 8px 6px; }
+  .disk-context-item { min-height: 38px; padding: 9px 10px; }
   button, select, input[type="checkbox"] { touch-action: manipulation; }
 }
 
