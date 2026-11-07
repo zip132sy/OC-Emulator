@@ -7,7 +7,7 @@ const fs = require('fs');
 const path = require('path');
 const url = require('url');
 const os = require('os');
-const { execFile } = require('child_process');
+const { execFile, spawn } = require('child_process');
 const { WebSocketServer } = require('ws');
 
 const { VMManager } = require('./lib/vmManager');
@@ -221,6 +221,126 @@ async function applyUpdate() {
   out.changed = !!(out.before && out.after && out.before !== out.after);
   out.ok = true;
   return out;
+}
+
+// ---------- 流式更新: 逐行解析 git 输出, 推送真实进度 ----------
+// git 在非 TTY 环境下默认不输出进度; 加 --progress 后可以拿到
+// "Receiving objects: 42% (…)" 这类行, 据此换算真实百分比。
+function runGitStreaming(args, onLine) {
+  return new Promise((resolve) => {
+    let stdout = '';
+    let stderr = '';
+    let child;
+    try {
+      child = spawn('git', args, { cwd: PROJECT_DIR, windowsHide: true });
+    } catch (e) {
+      resolve({ ok: false, stdout: '', stderr: '', err: String(e.message || e) });
+      return;
+    }
+    const killTimer = setTimeout(() => { try { child.kill(); } catch (e) { /* 忽略 */ } }, 300000);
+    const feed = (chunk, isErr) => {
+      const text = chunk.toString();
+      if (isErr) stderr += text; else stdout += text;
+      // 进度行用 \r 原地刷新, 因此按 \r 与 \n 一起切分
+      for (const raw of text.split(/[\r\n]+/)) {
+        const line = raw.trim();
+        if (line && onLine) onLine(line);
+      }
+    };
+    child.stdout.on('data', (c) => feed(c, false));
+    child.stderr.on('data', (c) => feed(c, true));
+    child.on('error', (e) => {
+      clearTimeout(killTimer);
+      resolve({ ok: false, stdout, stderr, err: String(e.message || e) });
+    });
+    child.on('close', (code) => {
+      clearTimeout(killTimer);
+      resolve({ ok: code === 0, code, stdout, stderr, err: code === 0 ? null : `git exited with ${code}` });
+    });
+  });
+}
+
+// 从 git 进度行里取出百分比 (例如 "Receiving objects:  37% (…)")
+function parseGitPercent(line) {
+  const m = /(\d{1,3})%/.exec(line || '');
+  if (!m) return null;
+  const n = parseInt(m[1], 10);
+  return Number.isFinite(n) ? Math.max(0, Math.min(100, n)) : null;
+}
+
+// 以 NDJSON 流的形式执行更新: 每行一个 JSON 事件
+// { stage, percent, line } … 最后一行 { done: true, result }
+async function applyUpdateStreaming(res) {
+  const out = { ok: false, changed: false, before: null, after: null, output: '', error: null };
+  const startedAt = Date.now();
+  let percent = 0;
+
+  res.writeHead(200, {
+    'Content-Type': 'application/x-ndjson; charset=utf-8',
+    'Cache-Control': 'no-store',
+    'X-Accel-Buffering': 'no',
+  });
+  if (typeof res.flushHeaders === 'function') res.flushHeaders();
+
+  const emit = (evt) => {
+    if (res.writableEnded) return;
+    try { res.write(JSON.stringify(evt) + '\n'); } catch (e) { /* 客户端已断开 */ }
+  };
+  // 进度只增不减, 避免 git 多次输出导致进度条回退
+  const progress = (stage, nextPercent, line) => {
+    percent = Math.max(percent, Math.min(100, Math.round(nextPercent)));
+    emit({ stage, percent, line: line || '' });
+  };
+  const finish = () => { if (!res.writableEnded) res.end(); };
+
+  if (!fs.existsSync(path.join(PROJECT_DIR, '.git'))) {
+    out.error = 'not-a-repo';
+    emit({ done: true, result: out });
+    finish();
+    return;
+  }
+
+  progress('prepare', 5);
+  const before = await gitRun(['rev-parse', 'HEAD'], 15000);
+  out.before = before.ok ? before.stdout.trim().slice(0, 7) : null;
+  progress('prepare', 12, out.before ? `HEAD ${out.before}` : '');
+
+  // 拉取阶段: 把 git 的百分比映射到 12% - 82%
+  const onLine = (line) => {
+    const p = parseGitPercent(line);
+    if (p !== null) progress('fetch', 12 + p * 0.7, line);
+    else emit({ stage: 'fetch', percent, line });
+  };
+
+  progress('fetch', 18);
+  let pull = await runGitStreaming(['pull', '--ff-only', '--progress'], onLine);
+  if (!pull.ok) {
+    const ref = await resolveUpstreamRef();
+    if (ref && ref.indexOf('/') > 0) {
+      const remote = ref.slice(0, ref.indexOf('/'));
+      const branch = ref.slice(ref.indexOf('/') + 1);
+      emit({ stage: 'fetch', percent, line: `git pull ${remote} ${branch}` });
+      pull = await runGitStreaming(['pull', '--ff-only', '--progress', remote, branch], onLine);
+    }
+  }
+  out.output = ((pull.stdout || '') + (pull.stderr || '')).trim().slice(0, 2000);
+  if (!pull.ok) {
+    out.error = 'pull-failed';
+    emit({ stage: 'error', percent, line: (pull.stderr || pull.err || '').trim().slice(0, 500) });
+    emit({ done: true, result: out });
+    finish();
+    return;
+  }
+
+  progress('checkout', 88);
+  const after = await gitRun(['rev-parse', 'HEAD'], 15000);
+  out.after = after.ok ? after.stdout.trim().slice(0, 7) : null;
+  out.changed = !!(out.before && out.after && out.before !== out.after);
+  out.ok = true;
+  progress('verify', 96, `${out.before || '?'} -> ${out.after || '?'}`);
+  progress('done', 100, `${((Date.now() - startedAt) / 1000).toFixed(1)}s`);
+  emit({ done: true, result: out });
+  finish();
 }
 
 // 列出最近的历史版本 (供设置里的"版本回退"选择)
@@ -519,6 +639,11 @@ async function handleApi(req, res, body) {
       }
       if (parts[2] === 'apply' && method === 'POST') {
         logger.log('[server] 前端请求拉取更新');
+        // 前端带 Accept: application/x-ndjson 时走流式响应, 推送实时进度;
+        // 其余情况返回整包 JSON。
+        const wantsStream = String(req.headers.accept || '').indexOf('application/x-ndjson') >= 0
+          || (req.query && req.query.stream === '1');
+        if (wantsStream) return applyUpdateStreaming(res);
         return json(res, await applyUpdate());
       }
       if (parts[2] === 'versions') {
@@ -1706,6 +1831,11 @@ async function handleApi(req, res, body) {
     return json(res, { error: 'Not found' }, 404);
   } catch (e) {
     logger.error('[api]', e.message);
+    // 流式接口 (如 update/apply) 可能已经发出响应头, 这时只能结束响应
+    if (res.headersSent) {
+      try { res.end(); } catch (err) { /* 忽略 */ }
+      return;
+    }
     return json(res, { error: e.message }, 500);
   }
 }

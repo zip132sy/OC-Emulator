@@ -62,8 +62,13 @@ html, body {
 
 .app {
   display: grid;
+  /* 单列布局必须显式给列宽, 否则列宽会被内容 (顶栏菜单) 撑开,
+     在窄屏上表现为整条顶栏比屏幕还宽, 右侧按钮直接落在屏幕外 */
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: 38px 1fr 22px;
   height: 100vh;
+  width: 100%;
+  overflow: hidden;
 }
 
 /* ---------- 顶部菜单栏 ---------- */
@@ -74,6 +79,7 @@ html, body {
   align-items: center;
   padding: 0 12px;
   gap: 16px;
+  min-width: 0;
 }
 
 .brand {
@@ -101,6 +107,7 @@ html, body {
 .menu {
   display: flex; gap: 4px;
   margin-left: 24px;
+  min-width: 0;
 }
 .menu-btn {
   background: transparent;
@@ -367,7 +374,17 @@ html, body {
   -webkit-user-select: none;
 }
 .canvas-stage canvas:focus {
+  outline: none;
+}
+/* 只在键盘导航时才显示焦点框; 触屏上自动聚焦会留下一个突兀的蓝框 */
+.canvas-stage canvas:focus-visible {
   box-shadow: 0 0 0 2px var(--accent);
+}
+@media (pointer: coarse) {
+  .canvas-stage canvas:focus,
+  .canvas-stage canvas:focus-visible {
+    box-shadow: none;
+  }
 }
 /* 全屏按钮 */
 .fs-btn {
@@ -755,6 +772,48 @@ html, body {
   border-top: 1px solid var(--border-dark);
   border-radius: 0 0 4px 4px;
   display: flex; gap: 8px; justify-content: flex-end;
+}
+
+/* ---------- 更新进度条 ---------- */
+.update-progress { padding: 4px 2px 2px; }
+.update-progress-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--fg-secondary);
+  margin-bottom: 8px;
+}
+.update-progress-stage { font-weight: 600; }
+.update-progress-pct {
+  font-family: var(--font-mono);
+  color: var(--fg-primary);
+}
+.update-progress-bar {
+  height: 8px;
+  background: var(--bg-input);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.update-progress-fill {
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  border-radius: 4px;
+  transition: width 0.25s ease;
+}
+.update-progress.done .update-progress-fill { background: var(--ok); }
+.update-progress-detail {
+  margin-top: 8px;
+  min-height: 16px;
+  max-height: 90px;
+  overflow-y: auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-muted);
+  white-space: pre-wrap;
+  word-break: break-all;
 }
 
 /* ---------- 创建向导 ---------- */
@@ -1392,15 +1451,16 @@ html, body {
   z-index: 39;
 }
 .nav-toggle { display: none; }
+.menu-toggle { display: none; }
 
 /* ---------- 手机 (<= 767px) ---------- */
 @media (max-width: 767px) {
-  /* 顶部工具条在手机上折成两行, 高度自适应 */
   .app { grid-template-rows: auto 1fr auto; }
 
   .top-bar {
-    flex-wrap: wrap;
-    gap: 6px 10px;
+    position: relative;
+    flex-wrap: nowrap;
+    gap: 8px;
     padding: 6px 10px;
   }
   .nav-toggle {
@@ -1409,27 +1469,60 @@ html, body {
     justify-content: center;
     font-size: 16px;
     padding: 6px 10px;
+    flex: 0 0 auto;
   }
-  .brand { flex: 1 1 auto; min-width: 0; }
-  .brand-name { white-space: nowrap; }
-  .conn-status { order: 2; margin-left: 0; }
+  .brand { flex: 1 1 auto; min-width: 0; overflow: hidden; }
+  .brand-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .brand-sub {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /* 手机顶栏只放常用入口, 连接状态让位给 ⋮ 菜单按钮 */
+  .conn-status { display: none; }
 
-  /* 操作按钮换到第二行并横向滚动, 而不是换行堆高工具条 */
-  .menu {
-    order: 3;
-    width: 100%;
-    margin-left: 0;
-    overflow-x: auto;
-    overflow-y: hidden;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: none;
-    padding-bottom: 2px;
+  /* 所有操作收进 ⋮ 下拉菜单: 竖排列表, 比横向滚动的按钮更容易点到 */
+  .menu-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    font-size: 18px;
+    padding: 6px 12px;
   }
-  .menu::-webkit-scrollbar { display: none; }
-  .menu-btn { flex: 0 0 auto; white-space: nowrap; }
+  .menu {
+    display: none;
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 8px;
+    right: 8px;
+    margin: 0;
+    padding: 6px;
+    flex-direction: column;
+    gap: 2px;
+    background: var(--bg-top);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    box-shadow: var(--shadow);
+    max-height: 60vh;
+    overflow-y: auto;
+    z-index: 45;
+  }
+  body.menu-open .menu { display: flex; }
+  /* 只让下拉菜单里的条目占满宽度; 顶栏的 ☰ / ⋮ 按钮保持自身尺寸 */
+  .menu .menu-btn {
+    width: 100%;
+    flex: 0 0 auto;
+    justify-content: flex-start;
+    text-align: left;
+    white-space: nowrap;
+  }
+  .menu-btn.danger { color: #ff9a9a; }
 
   /* 主体改单列, 侧边栏变成可收起的抽屉 */
-  .main { grid-template-columns: 1fr; }
+  .main { grid-template-columns: minmax(0, 1fr); }
   .sidebar {
     position: fixed;
     top: 0;

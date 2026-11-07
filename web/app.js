@@ -56,6 +56,59 @@ const App = (() => {
     catch { return txt; }
   }
 
+  // 流式请求: 服务端按 NDJSON 逐行推送 { stage, percent, line } … { done, result }
+  async function apiStream(path, onEvent, opts = {}) {
+    const res = await fetch('/api/' + path, {
+      method: opts.method || 'POST',
+      cache: 'no-store',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/x-ndjson',
+        ...(opts.headers || {}),
+      },
+      body: opts.body ? JSON.stringify(opts.body) : undefined,
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+
+    // 极老的浏览器没有 ReadableStream: 退化成整包读取
+    if (!res.body || typeof res.body.getReader !== 'function') {
+      const txt = await res.text();
+      let final = null;
+      for (const line of txt.split('\n')) {
+        if (!line.trim()) continue;
+        let evt = null;
+        try { evt = JSON.parse(line); } catch (e) { continue; }
+        if (evt && evt.done && evt.result) final = evt.result;
+        if (evt && onEvent) onEvent(evt);
+      }
+      return final;
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    let final = null;
+    const handleLine = (line) => {
+      if (!line) return;
+      let evt = null;
+      try { evt = JSON.parse(line); } catch (e) { return; }
+      if (evt && evt.done && evt.result) final = evt.result;
+      if (onEvent) onEvent(evt);
+    };
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buf.indexOf('\n')) >= 0) {
+        handleLine(buf.slice(0, idx).trim());
+        buf = buf.slice(idx + 1);
+      }
+    }
+    handleLine(buf.trim());
+    return final;
+  }
+
   // ---------- Lua 检测 ----------
   async function checkLua() {
     const badge = $('#lua-badge');
@@ -64,7 +117,9 @@ const App = (() => {
     try {
       const r = await api('lua/check', { method: 'POST' });
       if (r && r.ok) {
-        badge.textContent = 'Lua: ' + r.version + (r.cached ? I18N.t('lua.cached') : '');
+        // r.version 形如 "Lua 5.3", 只有缺少前缀时才补
+        const ver = String(r.version || '');
+        badge.textContent = (/^lua/i.test(ver) ? ver : 'Lua ' + ver) + (r.cached ? I18N.t('lua.cached') : '');
         badge.className = 'brand-sub ok';
       } else {
         badge.textContent = I18N.t('lua.failed');
@@ -490,32 +545,125 @@ const App = (() => {
     }
   }
 
-  // 执行更新; 完成后询问是否重启后端
+  // 更新进度弹窗: 显示真实百分比、当前阶段和 git 的原始进度行
+  function openUpdateProgressModal() {
+    Modal.open({
+      title: I18N.t('update.progress-title'),
+      size: 'small',
+      bodyHTML: `
+        <div class="update-progress">
+          <div class="update-progress-head">
+            <span class="update-progress-stage" data-role="stage">${escapeHtml(I18N.t('update.stage.prepare'))}</span>
+            <span class="update-progress-pct" data-role="pct">0%</span>
+          </div>
+          <div class="update-progress-bar"><div class="update-progress-fill" data-role="fill"></div></div>
+          <div class="update-progress-detail" data-role="detail"></div>
+        </div>`,
+      footerHTML: '',
+    });
+    const body = document.getElementById('modal-body');
+    const rootEl = body.querySelector('.update-progress');
+    const stageEl = body.querySelector('[data-role="stage"]');
+    const pctEl = body.querySelector('[data-role="pct"]');
+    const fillEl = body.querySelector('[data-role="fill"]');
+    const detailEl = body.querySelector('[data-role="detail"]');
+    return {
+      update(evt) {
+        if (!evt || evt.done) return;
+        if (evt.stage && stageEl) {
+          const label = I18N.t('update.stage.' + evt.stage);
+          stageEl.textContent = label === 'update.stage.' + evt.stage ? evt.stage : label;
+        }
+        if (typeof evt.percent === 'number') {
+          const pct = Math.max(0, Math.min(100, Math.round(evt.percent)));
+          if (fillEl) fillEl.style.width = pct + '%';
+          if (pctEl) pctEl.textContent = pct + '%';
+        }
+        if (detailEl && typeof evt.line === 'string') detailEl.textContent = evt.line;
+      },
+      // 流结束但没有进度事件时, 手动补到 100%
+      complete(text) {
+        if (rootEl) rootEl.classList.add('done');
+        if (fillEl) fillEl.style.width = '100%';
+        if (pctEl) pctEl.textContent = '100%';
+        if (stageEl) stageEl.textContent = I18N.t('update.stage.done');
+        if (detailEl && text) detailEl.textContent = text;
+      },
+      setDetail(text) { if (detailEl) detailEl.textContent = text || ''; },
+    };
+  }
+
+  // 后端重启期间会短暂无法访问; 等它重新可用后再刷新页面。
+  async function waitForServerAndReload(maxMs = 90000) {
+    setStatus(I18N.t('update.restart-wait'));
+    const start = Date.now();
+    // 先等一会儿, 让旧进程真正退出, 避免请求打到尚未关闭的旧实例
+    await new Promise((r) => setTimeout(r, 2500));
+    while (Date.now() - start < maxMs) {
+      try {
+        const r = await fetch('/api/version', { cache: 'no-store' });
+        if (r && r.ok) { location.reload(); return; }
+      } catch (e) { /* 服务器还没起来 */ }
+      await new Promise((r) => setTimeout(r, 1200));
+    }
+    // 超时也刷新一次, 至少让用户看到最新页面
+    location.reload();
+  }
+
+  // 执行更新; 进度条实时显示, 完成后自动刷新页面
   async function applyUpdateFlow() {
     if (updateBusy) return;
     updateBusy = true;
     setStatus(I18N.t('update.applying'));
-    openBusyModal('update.applying', 'update.applying-hint');
+    const ui = openUpdateProgressModal();
 
-    let a = null, err = null;
+    let result = null, err = null;
     try {
-      a = await api('update/apply', { method: 'POST' });
+      result = await apiStream('update/apply', (evt) => ui.update(evt), { method: 'POST' });
     } catch (e) {
       err = e;
     }
-    Modal.close();
     updateBusy = false;
 
-    if (err) { setStatus(I18N.t('update.failed')); showUpdateModal('error', { message: trLang('更新失败: ', 'Update failed: ') + err.message }); return; }
-    if (!a || !a.ok) { setStatus(I18N.t('update.failed')); showUpdateModal('error', { message: trLang('更新失败: ', 'Update failed: ') + String((a && (a.output || a.error)) || '') }); return; }
-    if (!a.changed) { setStatus(I18N.t('update.up-to-date')); showUpdateModal('info', { message: trLang('已是最新版本，无需重启。', 'Already up to date; no restart needed.') }); return; }
+    if (err) {
+      Modal.close();
+      setStatus(I18N.t('update.failed'));
+      showUpdateModal('error', { message: trLang('更新失败: ', 'Update failed: ') + err.message });
+      return;
+    }
+    if (!result || !result.ok) {
+      Modal.close();
+      setStatus(I18N.t('update.failed'));
+      showUpdateModal('error', { message: trLang('更新失败: ', 'Update failed: ') + String((result && (result.output || result.error)) || '') });
+      return;
+    }
+
+    ui.complete(result.after ? `${result.before} → ${result.after}` : '');
+
+    if (!result.changed) {
+      Modal.close();
+      setStatus(I18N.t('update.up-to-date'));
+      showUpdateModal('info', { message: trLang('已是最新版本，无需重启。', 'Already up to date; no restart needed.') });
+      return;
+    }
 
     setStatus(I18N.t('update.done'));
+    ui.setDetail(I18N.t('update.reload-hint'));
+
     const ask = trLang(
-      `更新完成（${a.before} → ${a.after}）。\n\n是否立即重启后端使更新生效？`,
-      `Update complete (${a.before} -> ${a.after}).\n\nRestart the backend now to apply the update?`
+      `更新完成（${result.before} → ${result.after}）。\n\n是否立即重启后端使更新生效？\n（无论是否重启，界面都会自动刷新）`,
+      `Update complete (${result.before} -> ${result.after}).\n\nRestart the backend now to apply the update?\n(The page will reload either way.)`
     ) + restartWarn();
-    if (confirm(ask)) await restartServer(true);
+    const wantRestart = confirm(ask);
+    Modal.close();
+
+    if (wantRestart) {
+      await restartServer(true);
+      await waitForServerAndReload();
+    } else {
+      // 新前端文件已经落盘, 直接刷新即可加载新界面
+      setTimeout(() => location.reload(), 600);
+    }
   }
 
   // 设置里的"版本回退": 列出历史版本供选择
@@ -1207,6 +1355,21 @@ const App = (() => {
 
   // ---------- 菜单事件 ----------
   function bindMenu() {
+    // 手机端 "⋮" 菜单: 点击展开/收起, 选中任意一项或点击菜单外部都会收起
+    function closeMenu() { document.body.classList.remove('menu-open'); }
+    const menuToggle = $('.menu-toggle');
+    if (menuToggle) {
+      menuToggle.addEventListener('click', (e) => {
+        e.stopPropagation();
+        document.body.classList.toggle('menu-open');
+      });
+    }
+    document.addEventListener('click', (e) => {
+      if (!document.body.classList.contains('menu-open')) return;
+      if (e.target && e.target.closest && e.target.closest('.menu')) return;
+      closeMenu();
+    });
+
     $$('.menu-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         const action = btn.dataset.action;
@@ -1220,6 +1383,8 @@ const App = (() => {
         else if (action === 'restart-server') restartServer();
         else if (action === 'stop-server') stopServer();
         else if (action === 'toggle-nav') toggleNav();
+        // ⋮ 开关自身不收起菜单, 其余操作完成后收起
+        if (action !== 'toggle-nav' && action !== 'toggle-menu') closeMenu();
       });
     });
 
@@ -1242,6 +1407,17 @@ const App = (() => {
     $$('.modal-close, .modal-backdrop').forEach(el => {
       el.addEventListener('click', () => Modal.close());
     });
+    // 弹窗内容每次 Modal.open 都会重建, 逐个绑定容易漏。这里统一做事件委托,
+    // 覆盖所有 data-action="modal-close"。
+    const modalContainer = document.getElementById('modal-container');
+    if (modalContainer) {
+      modalContainer.addEventListener('click', (e) => {
+        const btn = e.target && e.target.closest ? e.target.closest('[data-action="modal-close"]') : null;
+        if (!btn) return;
+        e.preventDefault();
+        Modal.close();
+      });
+    }
   }
 
   // ---------- 启动 ----------

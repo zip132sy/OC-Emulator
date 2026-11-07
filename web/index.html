@@ -3,7 +3,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>OC Emulator</title>
-  <link rel="stylesheet" href="styles.css?v=29">
+  <link rel="stylesheet" href="styles.css?v=33">
 </head>
 <body>
   <div id="app" class="app">
@@ -15,6 +15,7 @@
         <span class="brand-name">OC Emulator</span>
         <span class="brand-sub err" id="lua-badge" title="Lua Interpreter Status">Lua: error</span>
       </div>
+      <button class="menu-btn menu-toggle" data-action="toggle-menu" aria-label="菜单">⋮</button>
       <nav class="menu">
         <button class="menu-btn" id="menu-new-vm" data-action="new-vm">＋ New VM</button>
         <button class="menu-btn" id="menu-new-mod" data-action="new-mod">＋ New Mod</button>
@@ -86,8 +87,8 @@
   </div>
 
   <script src="errorReporter.js?v=3"></script>
-  <script src="i18n.js?v=39"></script>
-  <script src="app.js?v=26"></script>
+  <script src="i18n.js?v=40"></script>
+  <script src="app.js?v=29"></script>
   <script src="wizard.js?v=4"></script>
   <script src="exportWizard.js?v=3"></script>
   <script src="console.js?v=54"></script>
