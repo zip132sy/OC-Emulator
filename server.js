@@ -1925,6 +1925,14 @@ async function main() {
   const luaResult = await luaCheck.ensure();
   if (luaResult.ok) {
     logger.log(`  ✓ Lua OK: ${luaResult.version} ${luaResult.cached ? '(cached)' : '(verified)'}`);
+    // 自动探测/安装得到的真实路径可能和 settings.json 里的命令名不同
+    // (例如 Termux 下检测到 lua5.3), 同步给所有需要启动 Lua 的模块。
+    if (luaResult.path && luaResult.path !== settings.luaExe) {
+      settings.luaExe = luaResult.path;
+      diskIO.luaExe = luaResult.path;
+      vmManager.luaExe = luaResult.path;
+      modsManager.luaExe = luaResult.path;
+    }
   } else {
     logger.error(`  ✗ Lua check failed: ${(luaResult.errors || []).join(', ')}`);
     logger.error(`  Path: ${settings.luaExe}`);

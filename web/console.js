@@ -192,6 +192,8 @@ const Console = (() => {
             </div>
           </div>
           <button class="fs-btn" id="fs-btn-${cssEsc(vmName)}" title="${t('fs.btn.title')}">${t('fs.btn')}</button>
+          <button class="ime-btn" id="ime-btn-${cssEsc(vmName)}" title="${t('ime.btn.title')}">${t('ime.btn')}</button>
+          <textarea class="ime-input" id="ime-input-${cssEsc(vmName)}" rows="1" enterkeyhint="enter" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-hidden="true"></textarea>
         </div>
         <div class="log-panel" id="log-panel-${cssEsc(vmName)}">
           <div class="log-panel-header" id="log-header-${cssEsc(vmName)}">
@@ -217,6 +219,8 @@ const Console = (() => {
     view.logContainer = pane.querySelector(`#log-panel-${cssEsc(vmName)}`);
     view.canvasWrap = pane.querySelector(`#canvas-wrap-${cssEsc(vmName)}`);
     view.canvasStage = pane.querySelector(`#canvas-stage-${cssEsc(vmName)}`);
+    view.imeBtn = pane.querySelector(`#ime-btn-${cssEsc(vmName)}`);
+    view.imeInput = pane.querySelector(`#ime-input-${cssEsc(vmName)}`);
 
     // 日志面板最小化/展开
     const logHeader = pane.querySelector(`#log-header-${cssEsc(vmName)}`);
@@ -323,6 +327,60 @@ const Console = (() => {
       }, { passive: false });
     }
     view.canvasWrap.addEventListener('mousedown', () => view.canvas.focus());
+
+    // 触屏: 浏览器在触屏上只会合成迟到的鼠标事件, 拖动过程收不到 mousemove,
+    // 因此单独把 touchstart/touchmove/touchend 映射成 touch/drag/drop。
+    // touchstart 里 preventDefault 可同时抑制重复的兼容鼠标事件与页面滚动/缩放。
+    const findTouch = (list, id) => {
+      for (let i = 0; i < (list ? list.length : 0); i++) {
+        if (list[i].identifier === id) return list[i];
+      }
+      return null;
+    };
+    view.canvas.addEventListener('touchstart', (e) => {
+      if (e.touches.length !== 1) return;
+      const touch = e.changedTouches[0];
+      if (!touch) return;
+      e.preventDefault();
+      view._touchId = touch.identifier;
+      // 点屏幕时把焦点拉回画布 (若软键盘正开着, 同时会收起键盘)
+      try { view.canvas.focus({ preventScroll: true }); } catch (err) { view.canvas.focus(); }
+      onTouch(touch, vmName, 'touch');
+    }, { passive: false });
+    view.canvas.addEventListener('touchmove', (e) => {
+      if (view._touchId == null) return;
+      const touch = findTouch(e.changedTouches, view._touchId) || e.touches[0];
+      if (!touch) return;
+      e.preventDefault();
+      // 与鼠标拖拽一样按帧合并, 避免高频事件把消息刷爆
+      if (view._touchPending) {
+        view._touchMoveEvent = touch;
+        return;
+      }
+      view._touchPending = true;
+      view._touchMoveEvent = touch;
+      requestAnimationFrame(() => {
+        view._touchPending = false;
+        if (view._touchMoveEvent && view._touchId != null) {
+          onTouch(view._touchMoveEvent, vmName, 'drag');
+        }
+        view._touchMoveEvent = null;
+      });
+    }, { passive: false });
+    view.canvas.addEventListener('touchend', (e) => {
+      const touch = findTouch(e.changedTouches, view._touchId);
+      if (!touch) return;
+      e.preventDefault();
+      view._touchId = null;
+      view._touchPending = false;
+      view._touchMoveEvent = null;
+      onTouch(touch, vmName, 'drop');
+    }, { passive: false });
+    view.canvas.addEventListener('touchcancel', () => {
+      view._touchId = null;
+      view._touchPending = false;
+      view._touchMoveEvent = null;
+    });
     // 双击逻辑:
     // - 非全屏时: 双击进入全屏
     // - 全屏且系统未运行/报错时: 双击退出全屏
@@ -349,6 +407,8 @@ const Console = (() => {
         toggleFullscreen(vmName);
       });
     }
+
+    bindImeInput(view, vmName);
 
     // 窗口大小变化时重绘画布并重新渲染所有单元格
     view._resizeHandler = () => {
@@ -1603,9 +1663,12 @@ const Console = (() => {
         }
       };
       document.addEventListener('keydown', view._escHandler, true);
-      // 全屏区域内点击任意位置都把焦点拉回 canvas
+      // 全屏区域内点击任意位置都把焦点拉回 canvas (输入法按钮/输入框除外)
       view._fsFocusHandler = (e) => {
-        if (e.target !== view.canvas) view.canvas.focus();
+        const target = e.target;
+        if (target === view.canvas) return;
+        if (target && target.closest && target.closest('.ime-btn, .ime-input')) return;
+        view.canvas.focus();
       };
       wrap.addEventListener('mousedown', view._fsFocusHandler, true);
       // 进入全屏后立即聚焦 canvas, 否则 keydown 收不到
@@ -1623,6 +1686,8 @@ const Console = (() => {
         wrap.removeEventListener('mousedown', view._fsFocusHandler, true);
         view._fsFocusHandler = null;
       }
+      // 退出全屏时收起软键盘
+      if (view.imeInput) view.imeInput.blur();
       setTimeout(() => { fitCanvasToContainer(vmName); repaintAll(vmName); }, 30);
     }
   }
@@ -2099,26 +2164,159 @@ const Console = (() => {
     sendInput(vmName, { event: 'key_up',   char: e.charCode, code: e.charCode });
   }
 
-  function onMouse(e, vmName, evName) {
-    const view = getView(vmName);
-    if (!view.canvas || !view.w || !view.h) return;
+  // 移动端输入法 (软键盘) 桥接:
+  // 画布本身只能接收物理键盘事件, 手机软键盘需要可聚焦的输入元素。
+  // 这里用隐藏 textarea 接住输入法提交的文本/删除/回车, 再翻译成 key_down/key_up。
+  const IME_SPECIAL_KEYS = {
+    Enter: 0x1C, Backspace: 0x0E, Tab: 0x0F, Escape: 0x01,
+    ArrowUp: 0xC8, ArrowDown: 0xD0, ArrowLeft: 0xCB, ArrowRight: 0xCD,
+    Home: 0xC7, End: 0xCF, Delete: 0xD3, PageUp: 0xC9, PageDown: 0xD1,
+  };
+
+  // ASCII 字符 → PS/2 扫描码; 非 ASCII 字符没有对应键位, 传 0。
+  function charScanCode(ch) {
+    const lower = {
+      ' ': 0x39,
+      '1': 0x02, '2': 0x03, '3': 0x04, '4': 0x05, '5': 0x06,
+      '6': 0x07, '7': 0x08, '8': 0x09, '9': 0x0A, '0': 0x0B,
+      'a': 0x1E, 'b': 0x30, 'c': 0x2E, 'd': 0x20, 'e': 0x12,
+      'f': 0x21, 'g': 0x22, 'h': 0x23, 'i': 0x17, 'j': 0x24,
+      'k': 0x25, 'l': 0x26, 'm': 0x32, 'n': 0x31, 'o': 0x18,
+      'p': 0x19, 'q': 0x10, 'r': 0x13, 's': 0x1F, 't': 0x14,
+      'u': 0x16, 'v': 0x2F, 'w': 0x11, 'x': 0x2D, 'y': 0x15,
+      'z': 0x2C,
+      '-': 0x0C, '=': 0x0D, '[': 0x1A, ']': 0x1B, '\\': 0x2B,
+      ';': 0x27, "'": 0x28, '`': 0x29, ',': 0x33, '.': 0x34, '/': 0x35,
+    };
+    const shifted = {
+      '!': '1', '@': '2', '#': '3', '$': '4', '%': '5', '^': '6',
+      '&': '7', '*': '8', '(': '9', ')': '0', '_': '-', '+': '=',
+      '{': '[', '}': ']', '|': '\\', ':': ';', '"': "'", '~': '`',
+      '<': ',', '>': '.', '?': '/',
+    };
+    if (ch >= 'A' && ch <= 'Z') ch = ch.toLowerCase();
+    if (shifted[ch]) ch = shifted[ch];
+    return lower[ch] || 0;
+  }
+
+  function bindImeInput(view, vmName) {
+    const btn = view.imeBtn;
+    const input = view.imeInput;
+    if (!btn || !input) return;
+
+    // 部分输入法只触发 keydown (回车/退格), 部分只触发 input; 两条路径都接,
+    // 用 200ms 的时间窗口去重, 避免一次按键发出两条信号。
+    let lastKey = '';
+    let lastKeyAt = 0;
+    const markKey = (name) => {
+      lastKey = name;
+      lastKeyAt = Date.now();
+    };
+    const isRecent = (name) => lastKey === name && (Date.now() - lastKeyAt) < 200;
+
+    const sendKeyPair = (code, char) => {
+      sendInput(vmName, { event: 'key_down', char: char || 0, code });
+      sendInput(vmName, { event: 'key_up', char: char || 0, code });
+    };
+
+    btn.addEventListener('mousedown', (e) => e.stopPropagation());
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (document.activeElement === input) {
+        input.blur();
+      } else {
+        input.value = '';
+        input.focus();
+      }
+    });
+
+    input.addEventListener('focus', () => btn.classList.add('active'));
+    input.addEventListener('blur', () => {
+      input.value = '';
+      btn.classList.remove('active');
+    });
+
+    input.addEventListener('input', (e) => {
+      // 组词过程中不要清空/转发, 否则会打断输入法 (拼音/日文等)
+      if (e.isComposing) return;
+      const inputType = e.inputType || '';
+      // 退格/删除: 输入法通常只给 input 事件, 不给可用的 keydown
+      if (inputType.indexOf('delete') === 0) {
+        input.value = '';
+        const isForward = inputType.indexOf('Forward') >= 0;
+        const name = isForward ? 'Delete' : 'Backspace';
+        if (!isRecent(name)) {
+          markKey(name);
+          sendKeyPair(isForward ? 0xD3 : 0x0E, 0);
+        }
+        return;
+      }
+
+      const text = input.value;
+      input.value = '';
+      if (!text) return;
+
+      for (const ch of Array.from(text)) {
+        if (ch === '\n' || ch === '\r') {
+          if (!isRecent('Enter')) {
+            markKey('Enter');
+            sendKeyPair(0x1C, 0);
+          }
+          continue;
+        }
+        const codePoint = ch.codePointAt(0);
+        // OpenOS 的 string.char 只接受 0-255, 更高的码位会让客户机报错
+        if (codePoint < 32 || codePoint > 255) continue;
+        const code = charScanCode(ch);
+        sendInput(vmName, { event: 'key_down', char: codePoint, code });
+        sendInput(vmName, { event: 'key_up', char: codePoint, code });
+      }
+    });
+
+    input.addEventListener('keydown', (e) => {
+      // 输入法组词过程中的按键不要拦截, 交给 input 事件
+      if (e.isComposing || e.keyCode === 229) return;
+      const code = IME_SPECIAL_KEYS[e.key];
+      if (code == null) return;
+      e.preventDefault();
+      markKey(e.key);
+      sendKeyPair(code, 0);
+    });
+  }
+
+  // 把浏览器坐标换算成 OC 的字符坐标与精确像素坐标 (OC 标准: 每字符 6x9 像素)
+  function computePoint(view, clientX, clientY) {
     const rect = view.canvas.getBoundingClientRect();
     // getBoundingClientRect 已反映 CSS transform 缩放后的实际渲染尺寸
     const realCharW = rect.width / view.w;
     const realCharH = rect.height / view.h;
-    const x = Math.max(1, Math.min(view.w, Math.floor((e.clientX - rect.left) / realCharW) + 1));
-    const y = Math.max(1, Math.min(view.h, Math.floor((e.clientY - rect.top) / realCharH) + 1));
-    const btn = e.button === 0 ? 0 : e.button === 2 ? 1 : 2;
-    // 精确像素坐标 (OC 标准: 每字符 6x9 像素)
-    // 计算鼠标在当前字符内的相对位置 (0-1)
-    const fx = (e.clientX - rect.left) / realCharW - (x - 1);
-    const fy = (e.clientY - rect.top) / realCharH - (y - 1);
+    const x = Math.max(1, Math.min(view.w, Math.floor((clientX - rect.left) / realCharW) + 1));
+    const y = Math.max(1, Math.min(view.h, Math.floor((clientY - rect.top) / realCharH) + 1));
+    // 计算指针在当前字符内的相对位置 (0-1)
+    const fx = (clientX - rect.left) / realCharW - (x - 1);
+    const fy = (clientY - rect.top) / realCharH - (y - 1);
     // 像素坐标: 1-based, 总像素 = 字符数 * 每字符像素数
     const px = Math.max(1, Math.min(view.w * 6, (x - 1) * 6 + Math.floor(fx * 6) + 1));
     const py = Math.max(1, Math.min(view.h * 9, (y - 1) * 9 + Math.floor(fy * 9) + 1));
-    // 记住鼠标在屏幕内的最后位置: 兼容模式下 PageUp/PageDown 没有坐标, 用这个位置滚
+    // 记住指针在屏幕内的最后位置: 兼容模式下 PageUp/PageDown 没有坐标, 用这个位置滚
     view.lastPt = { x, y, px, py };
-    sendInput(vmName, { event: evName, x, y, px, py, btn });
+    return { x, y, px, py };
+  }
+
+  function onMouse(e, vmName, evName) {
+    const view = getView(vmName);
+    if (!view.canvas || !view.w || !view.h) return;
+    const point = computePoint(view, e.clientX, e.clientY);
+    const btn = e.button === 0 ? 0 : e.button === 2 ? 1 : 2;
+    sendInput(vmName, { event: evName, ...point, btn });
+  }
+
+  // 触屏事件与鼠标语义一致 (touch / drag / drop), 由 touchstart/touchmove/touchend 调用
+  function onTouch(touch, vmName, evName) {
+    const view = getView(vmName);
+    if (!view.canvas || !view.w || !view.h) return;
+    const point = computePoint(view, touch.clientX, touch.clientY);
+    sendInput(vmName, { event: evName, ...point, btn: 0 });
   }
 
   function onWheel(e, vmName) {
@@ -2128,25 +2326,13 @@ const Console = (() => {
       flog('debug', 'wheel ignored: canvas not ready');
       return;
     }
-    const rect = view.canvas.getBoundingClientRect();
-    const realCharW = rect.width / view.w;
-    const realCharH = rect.height / view.h;
-    const x = Math.max(1, Math.min(view.w, Math.floor((e.clientX - rect.left) / realCharW) + 1));
-    const y = Math.max(1, Math.min(view.h, Math.floor((e.clientY - rect.top) / realCharH) + 1));
-    // 精确像素坐标 (OC 标准: 每字符 6x9 像素)
-    const fx = (e.clientX - rect.left) / realCharW - (x - 1);
-    const fy = (e.clientY - rect.top) / realCharH - (y - 1);
-    const px = Math.max(1, Math.min(view.w * 6, (x - 1) * 6 + Math.floor(fx * 6) + 1));
-    const py = Math.max(1, Math.min(view.h * 9, (y - 1) * 9 + Math.floor(fy * 9) + 1));
+    const point = computePoint(view, e.clientX, e.clientY);
     // OC scroll 信号: scroll(address, x, y, direction, playerName)
     // 官方约定: direction 正值 = 向上滚动, 负值 = 向下滚动。
     // 浏览器 wheel 事件的 deltaY > 0 表示"向下滚", 方向与 OC 相反, 因此取反。
-    // 参考 OpenOS bin/edit.lua 的消费方式:
-    //   onScroll(direction) -> setCursor(cbx, cby - direction * 12)
     // 注意: x/y 坐标空间与 touch 信号保持一致 (精确模式下用像素坐标)。
     const delta = e.deltaY < 0 ? 1 : -1;
-    view.lastPt = { x, y, px, py };
-    sendScroll(vmName, x, y, px, py, delta);
+    sendScroll(vmName, point.x, point.y, point.px, point.py, delta);
   }
 
   function mapKeyCode(e) {

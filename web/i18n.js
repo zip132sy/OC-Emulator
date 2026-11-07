@@ -72,6 +72,10 @@ const I18N = (() => {
       'fs.btn': '⛶ 全屏',
       'fs.btn.title': '全屏 (双击画布也可全屏)',
 
+      // 输入法 (软键盘) 按钮
+      'ime.btn': '⌨ 输入法',
+      'ime.btn.title': '打开手机软键盘输入 (再次点击收起)',
+
       // 日志面板
       'log.title': '日志',
       'log.export': '📥 导出',
@@ -891,6 +895,10 @@ const I18N = (() => {
       // Fullscreen
       'fs.btn': '⛶ Fullscreen',
       'fs.btn.title': 'Fullscreen (double-click canvas)',
+
+      // On-screen keyboard
+      'ime.btn': '⌨ Keyboard',
+      'ime.btn.title': 'Open the on-screen keyboard (tap again to close)',
 
       // Log panel
       'log.title': 'Log',
