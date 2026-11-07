@@ -224,11 +224,14 @@ html, body {
   font-size: 10px;
   color: var(--fg-muted);
 }
-/* 列表项右侧的"更多操作"按钮 (手机端点它打开菜单, 桌面也可用) */
+/* 列表项右侧的"更多操作"按钮: 仅触屏显示, 桌面用右键菜单 */
 .vm-more {
+  display: none;
   flex: 0 0 auto;
-  width: 24px;
-  height: 24px;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
   padding: 0;
   border: 0;
   border-radius: 3px;
@@ -237,17 +240,14 @@ html, body {
   font-size: 16px;
   line-height: 1;
   cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.12s, background 0.12s, color 0.12s;
+  transition: background 0.12s, color 0.12s;
 }
-.vm-item:hover .vm-more,
-.vm-item.active .vm-more { opacity: 1; }
 .vm-more:hover {
   background: var(--bg-input);
   color: var(--fg-primary);
 }
 @media (pointer: coarse) {
-  .vm-more { opacity: 1; width: 32px; height: 32px; }
+  .vm-more { display: inline-flex; }
 }
 
 /* ---------- 内容区 ---------- */
@@ -1647,11 +1647,21 @@ html, body {
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  /* 手机顶栏只放常用入口, 连接状态让位给 ⋮ 菜单按钮 */
-  .conn-status { display: none; }
+  /* 连接状态紧跟在 Lua 徽标后面 (DOM 里在菜单之后, 用 order 调整位置) */
+  .brand { order: 1; }
+  .conn-status {
+    display: inline-flex;
+    align-items: center;
+    order: 2;
+    margin-left: 0;
+    font-size: 10px;
+    white-space: nowrap;
+    flex: 0 0 auto;
+  }
 
   /* 所有操作收进 ⋮ 下拉菜单: 竖排列表, 比横向滚动的按钮更容易点到 */
   .menu-toggle {
+    order: 3;
     display: inline-flex;
     align-items: center;
     justify-content: center;
