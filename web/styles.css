@@ -1684,8 +1684,31 @@ html, body {
     border-bottom: 1px solid var(--border-dark);
   }
 
-  /* 日志面板在手机上限制高度, 保证画布和工具栏可用 */
-  .log-panel { flex-basis: 84px; max-height: 120px; }
+  /* 日志: 独立成底部抽屉, 不参与画布列布局, 展开后有足够高度看完整内容 */
+  .log-panel {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 38;
+    height: 46vh;
+    min-height: 0;
+    max-height: 46vh;
+    flex: 0 0 auto;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    box-shadow: 0 -8px 20px rgba(0, 0, 0, 0.55);
+  }
+  .log-panel-header { min-height: 34px; }
+  .log-show-handle {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 38;
+    height: calc(30px + env(safe-area-inset-bottom, 0px));
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    border-top: 1px solid var(--border-dark);
+  }
 
   /* 磁盘编辑器右侧工具条同样允许换行, 否则右侧按钮被 overflow:hidden 裁掉 */
   .disk-file-toolbar { flex-wrap: wrap; row-gap: 6px; }

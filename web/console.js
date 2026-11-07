@@ -259,6 +259,11 @@ const Console = (() => {
         toggleLogPanel(vmName);
       });
     }
+    // 手机上日志是底部抽屉, 默认收起, 避免一打开就遮住半个画布
+    const isPhone = !!(window.matchMedia && window.matchMedia('(max-width: 767px)').matches);
+    if (view.logMinimized === undefined) view.logMinimized = isPhone;
+    if (view.logContainer) view.logContainer.style.display = view.logMinimized ? 'none' : '';
+    if (showHandle) showHandle.style.display = view.logMinimized ? '' : 'none';
 
     // 工具栏事件
     pane.querySelectorAll('button[data-action]').forEach(btn => {
