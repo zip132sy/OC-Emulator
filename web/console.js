@@ -194,6 +194,10 @@ const Console = (() => {
           <button class="fs-btn" id="fs-btn-${cssEsc(vmName)}" title="${t('fs.btn.title')}">${t('fs.btn')}</button>
           <button class="ime-btn" id="ime-btn-${cssEsc(vmName)}" title="${t('ime.btn.title')}">${t('ime.btn')}</button>
           <textarea class="ime-input" id="ime-input-${cssEsc(vmName)}" rows="1" enterkeyhint="enter" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-hidden="true"></textarea>
+          <div class="scroll-pad" id="scroll-pad-${cssEsc(vmName)}">
+            <button class="scroll-btn" id="scroll-up-${cssEsc(vmName)}" title="${t('scroll.up.title')}" aria-label="${t('scroll.up.title')}">▲</button>
+            <button class="scroll-btn" id="scroll-down-${cssEsc(vmName)}" title="${t('scroll.down.title')}" aria-label="${t('scroll.down.title')}">▼</button>
+          </div>
         </div>
         <div class="log-panel" id="log-panel-${cssEsc(vmName)}">
           <div class="log-panel-header" id="log-header-${cssEsc(vmName)}">
@@ -345,10 +349,18 @@ const Console = (() => {
       view._touchId = touch.identifier;
       // 点屏幕时把焦点拉回画布 (若软键盘正开着, 同时会收起键盘)
       try { view.canvas.focus({ preventScroll: true }); } catch (err) { view.canvas.focus(); }
+      // 全屏 + 运行中: 连点两下映射为右键, 第二次按下不再发送左键
+      if (isRightClickGesture(view) && isSecondTap(view, touch)) {
+        view._lastTap = null;
+        view._tapRightClick = true;
+        return;
+      }
+      view._tapRightClick = false;
       onTouch(touch, vmName, 'touch');
     }, { passive: false });
     view.canvas.addEventListener('touchmove', (e) => {
       if (view._touchId == null) return;
+      if (view._tapRightClick) return; // 右键手势期间不发送拖动
       const touch = findTouch(e.changedTouches, view._touchId) || e.touches[0];
       if (!touch) return;
       e.preventDefault();
@@ -374,17 +386,25 @@ const Console = (() => {
       view._touchId = null;
       view._touchPending = false;
       view._touchMoveEvent = null;
+      if (view._tapRightClick) {
+        view._tapRightClick = false;
+        onTouch(touch, vmName, 'touch', 1);
+        onTouch(touch, vmName, 'drop', 1);
+        return;
+      }
       onTouch(touch, vmName, 'drop');
+      recordTap(view, touch);
     }, { passive: false });
     view.canvas.addEventListener('touchcancel', () => {
       view._touchId = null;
       view._touchPending = false;
       view._touchMoveEvent = null;
+      view._tapRightClick = false;
     });
     // 双击逻辑:
     // - 非全屏时: 双击进入全屏
     // - 全屏且系统未运行/报错时: 双击退出全屏
-    // - 全屏且系统运行中: 双击正常映射到系统, 不切换全屏
+    // - 全屏且系统运行中: 不切换全屏 (触屏下连点两下由 touch 处理映射为右键)
     view.canvas.addEventListener('dblclick', (e) => {
       const view = getView(vmName);
       if (!view.isFullscreen) {
@@ -409,6 +429,22 @@ const Console = (() => {
     }
 
     bindImeInput(view, vmName);
+
+    // 虚拟滚轮: 触屏全屏时显示, 按指针最后位置滚动
+    const scrollUpBtn = pane.querySelector(`#scroll-up-${cssEsc(vmName)}`);
+    const scrollDownBtn = pane.querySelector(`#scroll-down-${cssEsc(vmName)}`);
+    if (scrollUpBtn) {
+      scrollUpBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        sendScrollAtPointer(vmName, 1);
+      });
+    }
+    if (scrollDownBtn) {
+      scrollDownBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        sendScrollAtPointer(vmName, -1);
+      });
+    }
 
     // 窗口大小变化时重绘画布并重新渲染所有单元格
     view._resizeHandler = () => {
@@ -1721,6 +1757,9 @@ const Console = (() => {
     const wrap = view.canvasWrap;
     if (!wrap || view.isFullscreen === on) return;
     view.isFullscreen = on;
+    // 切换全屏时清掉上一轮点击记录, 避免刚进全屏就被判定成双击
+    view._lastTap = null;
+    view._tapRightClick = false;
     wrap.classList.toggle('fullscreen', on);
     // ESC 退出全屏 (在 capture 阶段拦截, 防止冒泡到 canvas 的 onKey)
     if (on) {
@@ -2425,11 +2464,44 @@ const Console = (() => {
   }
 
   // 触屏事件与鼠标语义一致 (touch / drag / drop), 由 touchstart/touchmove/touchend 调用
-  function onTouch(touch, vmName, evName) {
+  function onTouch(touch, vmName, evName, btn = 0) {
     const view = getView(vmName);
     if (!view.canvas || !view.w || !view.h) return;
     const point = computePoint(view, touch.clientX, touch.clientY);
-    sendInput(vmName, { event: evName, ...point, btn: 0 });
+    sendInput(vmName, { event: evName, ...point, btn });
+  }
+
+  // 双击映射为右键的可用状态: 全屏、系统运行中 (错误/停止时双击用于退出全屏)
+  function isRightClickGesture(view) {
+    return !!view.isFullscreen && view.state === 'running';
+  }
+
+  const DOUBLE_TAP_MS = 320;
+  const DOUBLE_TAP_DIST = 40;
+
+  function isSecondTap(view, touch) {
+    const last = view._lastTap;
+    if (!last) return false;
+    return (Date.now() - last.at) <= DOUBLE_TAP_MS
+      && Math.abs(touch.clientX - last.x) <= DOUBLE_TAP_DIST
+      && Math.abs(touch.clientY - last.y) <= DOUBLE_TAP_DIST;
+  }
+
+  function recordTap(view, touch) {
+    view._lastTap = { at: Date.now(), x: touch.clientX, y: touch.clientY };
+  }
+
+  // 虚拟滚轮: 以指针最后位置为准, 没有则用屏幕中心
+  function sendScrollAtPointer(vmName, delta) {
+    const view = getView(vmName);
+    if (!view.canvas || !view.w || !view.h) return;
+    const point = view.lastPt || {
+      x: Math.ceil(view.w / 2),
+      y: Math.ceil(view.h / 2),
+      px: Math.ceil(view.w * 3),
+      py: Math.ceil(view.h * 4.5),
+    };
+    sendScroll(vmName, point.x, point.y, point.px, point.py, delta);
   }
 
   function onWheel(e, vmName) {

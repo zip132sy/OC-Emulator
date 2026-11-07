@@ -84,6 +84,8 @@ const I18N = (() => {
       // 输入法 (软键盘) 按钮
       'ime.btn': '⌨ 输入法',
       'ime.btn.title': '打开手机软键盘输入 (再次点击收起)',
+      'scroll.up.title': '向上滚动',
+      'scroll.down.title': '向下滚动',
 
       // 日志面板
       'log.title': '日志',
@@ -921,6 +923,8 @@ const I18N = (() => {
       // On-screen keyboard
       'ime.btn': '⌨ Keyboard',
       'ime.btn.title': 'Open the on-screen keyboard (tap again to close)',
+      'scroll.up.title': 'Scroll up',
+      'scroll.down.title': 'Scroll down',
 
       // Log panel
       'log.title': 'Log',
