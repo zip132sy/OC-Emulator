@@ -1149,6 +1149,14 @@ html, body {
 .log-show-handle span {
   letter-spacing: 0.5px;
 }
+/* 日志内容允许长按选取并复制 (body 默认禁止选中) */
+.log-panel-body,
+.log-panel-body * {
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
+  cursor: text;
+}
 .log-line { margin: 0; }
 .log-line.error { color: var(--err); }
 .log-line.warn  { color: var(--warn); }
