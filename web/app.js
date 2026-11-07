@@ -218,6 +218,17 @@ const App = (() => {
             <span class="hint">${I18N.t('settings.wheel-keys-hint')}</span>
           </div>
           <div class="form-row">
+            <label for="settings-showfps">${I18N.t('settings.show-fps')}</label>
+            <label class="checkbox-line">
+              <input type="checkbox" id="settings-showfps" ${(window.Console && Console.isShowFps && Console.isShowFps()) ? 'checked' : ''}>
+              <span id="settings-showfps-state">${(window.Console && Console.isShowFps && Console.isShowFps()) ? I18N.t('settings.show-fps-on') : I18N.t('settings.show-fps-off')}</span>
+            </label>
+          </div>
+          <div class="form-row">
+            <label></label>
+            <span class="hint">${I18N.t('settings.show-fps-hint')}</span>
+          </div>
+          <div class="form-row">
             <label for="settings-autoupdate">${I18N.t('settings.auto-update')}</label>
             <label class="checkbox-line">
               <input type="checkbox" id="settings-autoupdate" ${cur.autoUpdate !== false ? 'checked' : ''}>
@@ -294,6 +305,18 @@ const App = (() => {
               if (window.Console && Console.setWheelKeyCompat) Console.setWheelKeyCompat(on);
               if (wheelKeysState) {
                 wheelKeysState.textContent = on ? I18N.t('settings.wheel-keys-on') : I18N.t('settings.wheel-keys-off');
+              }
+            });
+          }
+          // 显示帧率 (前端本地开关, 即时生效)
+          const fpsBox = body.querySelector('#settings-showfps');
+          const fpsState = body.querySelector('#settings-showfps-state');
+          if (fpsBox) {
+            fpsBox.addEventListener('change', () => {
+              const on = fpsBox.checked;
+              if (window.Console && Console.setShowFps) Console.setShowFps(on);
+              if (fpsState) {
+                fpsState.textContent = on ? I18N.t('settings.show-fps-on') : I18N.t('settings.show-fps-off');
               }
             });
           }

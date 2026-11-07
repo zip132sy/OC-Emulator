@@ -411,6 +411,22 @@ html, body {
     box-shadow: none;
   }
 }
+/* 帧率显示 (设置里可开关) */
+.fps-overlay {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  z-index: 4;
+  padding: 0 6px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.55);
+  color: var(--ok);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.6;
+  pointer-events: none;
+  user-select: none;
+}
 /* 全屏按钮 */
 .fs-btn {
   position: absolute;

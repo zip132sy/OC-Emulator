@@ -115,6 +115,25 @@ const Console = (() => {
   // WebSocket 不可用时只提示一次, 避免日志刷屏
   let inputDropWarned = false;
 
+  // 帧率显示 (客户端偏好, 存 localStorage)
+  const SHOW_FPS_KEY = 'oc-show-fps';
+  let showFps = false;
+  try { showFps = localStorage.getItem(SHOW_FPS_KEY) === '1'; } catch (e) { /* 忽略 */ }
+
+  function isShowFps() { return showFps; }
+
+  function setShowFps(on) {
+    showFps = !!on;
+    try {
+      if (showFps) localStorage.setItem(SHOW_FPS_KEY, '1');
+      else localStorage.removeItem(SHOW_FPS_KEY);
+    } catch (e) { /* 忽略 */ }
+    views.forEach((view) => {
+      if (view.fpsEl) view.fpsEl.style.display = showFps ? '' : 'none';
+      view._fpsFrames = 0;
+    });
+  }
+
   // ---------- 前端日志 ----------
   // 与设置里的「日志级别」共用开关:
   //   full  -> 渲染帧统计 / 滚轮与输入等调试信息
@@ -190,6 +209,7 @@ const Console = (() => {
               <div class="restarting-text">${t('restarting.overlay')}</div>
               <div class="restarting-hint">${t('restarting.overlay.hint')}</div>
             </div>
+            <div class="fps-overlay" id="fps-${cssEsc(vmName)}" style="display:none;">0 FPS</div>
           </div>
           <button class="fs-btn" id="fs-btn-${cssEsc(vmName)}" title="${t('fs.btn.title')}">${t('fs.btn')}</button>
           <button class="ime-btn" id="ime-btn-${cssEsc(vmName)}" title="${t('ime.btn.title')}">${t('ime.btn')}</button>
@@ -225,6 +245,8 @@ const Console = (() => {
     view.canvasStage = pane.querySelector(`#canvas-stage-${cssEsc(vmName)}`);
     view.imeBtn = pane.querySelector(`#ime-btn-${cssEsc(vmName)}`);
     view.imeInput = pane.querySelector(`#ime-input-${cssEsc(vmName)}`);
+    view.fpsEl = pane.querySelector(`#fps-${cssEsc(vmName)}`);
+    if (view.fpsEl) view.fpsEl.style.display = showFps ? '' : 'none';
 
     // 日志面板最小化/展开
     const logHeader = pane.querySelector(`#log-header-${cssEsc(vmName)}`);
@@ -2008,6 +2030,7 @@ const Console = (() => {
     }
 
     // 渲染统计 (仅 full 级别输出, 每 5 秒一行)
+    if (showFps) view._fpsFrames = (view._fpsFrames || 0) + 1;
     _renderStats.frames++;
     _renderStats.cells += repaint.size;
     if (info.full) _renderStats.full++;
@@ -2640,7 +2663,18 @@ const Console = (() => {
   // 页面加载时异步加载 hexfont, 加载完成后自动重绘
   loadHexFont();
 
-  return { renderVMView, onServerMessage, loadHexFont, onConnectionLost, applyServerState, reloadView, diag, isWheelKeyCompat, setWheelKeyCompat };
+  // 每秒刷新一次帧率读数
+  setInterval(() => {
+    if (!showFps) return;
+    views.forEach((view) => {
+      if (!view.fpsEl) return;
+      const frames = view._fpsFrames || 0;
+      view._fpsFrames = 0;
+      view.fpsEl.textContent = frames + ' FPS';
+    });
+  }, 1000);
+
+  return { renderVMView, onServerMessage, loadHexFont, onConnectionLost, applyServerState, reloadView, diag, isWheelKeyCompat, setWheelKeyCompat, isShowFps, setShowFps };
 })();
 
 window.Console = Console;
