@@ -470,6 +470,7 @@ const App = (() => {
           `本地 ${d.current}，远端 ${d.latest}，落后 ${d.behind} 个提交`,
           `local ${d.current}, remote ${d.latest}, ${d.behind} commit(s) behind`
         ))}</div>
+        ${d.source ? `<div style="margin-bottom:10px;color:var(--fg-muted);font-size:12px;">${escapeHtml(trLang('更新源', 'Source'))}: ${escapeHtml(String(d.source))}</div>` : ''}
         <div style="margin:10px 0 4px;color:var(--fg-muted);font-size:12px;">${escapeHtml(trLang('本次更新内容', 'Changes in this update'))}</div>
         <ul style="margin:0;padding-left:18px;max-height:280px;overflow:auto;font-size:12px;">${commitListHtml(d.log)}</ul>`;
       footer = `<button class="btn" data-action="modal-close">${escapeHtml(trLang('取消', 'Cancel'))}</button>`
@@ -479,6 +480,7 @@ const App = (() => {
       title = trLang('已是最新版本', 'Already up to date');
       body = `
         <div style="margin-bottom:10px;">${escapeHtml(trLang(`当前版本：${d.current}`, `current version: ${d.current}`))}</div>
+        ${d.source ? `<div style="margin-bottom:10px;color:var(--fg-muted);font-size:12px;">${escapeHtml(trLang('更新源', 'Source'))}: ${escapeHtml(String(d.source))}</div>` : ''}
         <div style="margin:10px 0 4px;color:var(--fg-muted);font-size:12px;">${escapeHtml(trLang('当前版本更新日志', 'Changelog of the current version'))}</div>
         <ul style="margin:0;padding-left:18px;max-height:280px;overflow:auto;font-size:12px;">${commitListHtml(d.log)}</ul>`;
       footer = `<button class="btn" data-action="modal-close">${escapeHtml(trLang('关闭', 'Close'))}</button>`;
@@ -651,8 +653,8 @@ const App = (() => {
     ui.setDetail(I18N.t('update.reload-hint'));
 
     const ask = trLang(
-      `更新完成（${result.before} → ${result.after}）。\n\n是否立即重启后端使更新生效？\n（无论是否重启，界面都会自动刷新）`,
-      `Update complete (${result.before} -> ${result.after}).\n\nRestart the backend now to apply the update?\n(The page will reload either way.)`
+      `更新完成（${result.before} → ${result.after}${result.source ? `，来源 ${result.source}` : ''}）。\n\n是否立即重启后端使更新生效？\n（无论是否重启，界面都会自动刷新）`,
+      `Update complete (${result.before} -> ${result.after}${result.source ? ` via ${result.source}` : ''}).\n\nRestart the backend now to apply the update?\n(The page will reload either way.)`
     ) + restartWarn();
     const wantRestart = confirm(ask);
     Modal.close();

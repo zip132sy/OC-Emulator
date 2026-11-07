@@ -19,6 +19,7 @@ const { InternetProxy } = require('./lib/internetProxy');
 const { DeviceBus } = require('./lib/deviceBus');
 const floppyTemplates = require('./lib/floppyTemplates');
 const sysInfo = require('./lib/sysInfo');
+const updateSource = require('./lib/updateSource');
 
 // 软盘模板兼容性别名（旧名称 → 新名称）
 const floppyAliases = {
@@ -153,23 +154,101 @@ async function resolveUpstreamRef() {
   return null;
 }
 
+// 当前分支名 (detached HEAD 时回退到 main)
+async function currentBranchName() {
+  const r = await gitRun(['rev-parse', '--abbrev-ref', 'HEAD'], 10000);
+  const name = r.ok ? r.stdout.trim() : '';
+  return name && name !== 'HEAD' ? name : 'main';
+}
+
+// 更新源候选列表, 顺序即尝试顺序:
+//   1. cache/update-source.json 里上次测速选出的更快的源
+//   2. Gitee
+//   3. GitHub
+// 仓库里配置了对应远端就用远端名; 没有配置时直接用官方镜像 URL
+// (更新器只读访问, 不需要改动用户的 git 配置)。
+function listUpdateTargets() {
+  const remotes = updateSource.detectRemotes();
+  const cache = updateSource.readCache();
+  const targets = [];
+  const add = (key) => {
+    const remote = remotes[key] || updateSource.MIRRORS[key];
+    if (!remote) return;
+    if (targets.some((t) => t.remote === remote)) return;
+    targets.push({
+      key,
+      remote,
+      isUrl: !remotes[key],
+      label: updateSource.SOURCES[key].label,
+    });
+  };
+  if (cache && cache.source) add(cache.source);
+  add('gitee');
+  add('github');
+  return { targets, remotes };
+}
+
+// 更新源名称 (用于前端展示); 自定义远端直接显示远端名
+function sourceLabel(target) {
+  if (!target) return '';
+  return target.label || target.remote || '';
+}
+
 // 检查是否存在可用更新
 async function checkForUpdate() {
-  const out = { ok: false, available: false, behind: 0, current: null, latest: null, subject: '', error: null, detail: '' };
+  const out = { ok: false, available: false, behind: 0, current: null, latest: null, subject: '', error: null, detail: '', source: null, ref: null };
   if (!fs.existsSync(path.join(PROJECT_DIR, '.git'))) { out.error = 'not-a-repo'; return out; }
 
-  const fetch = await gitRun(['fetch', '--quiet']);
-  if (!fetch.ok) {
+  // 逐个更新源 fetch, 第一个成功的作为比较基准 (Gitee / GitHub 都尝试)
+  const branch = await currentBranchName();
+  const { targets } = listUpdateTargets();
+  let ref = null;
+  let detail = '';
+  for (const target of targets) {
+    // 按 URL 访问时必须显式给出分支, 结果落在 FETCH_HEAD
+    const fetchArgs = target.isUrl
+      ? ['fetch', '--quiet', target.remote, branch]
+      : ['fetch', '--quiet', target.remote];
+    const fetch = await gitRun(fetchArgs, 45000);
+    if (!fetch.ok) {
+      detail = (fetch.stderr || fetch.err || '').trim().slice(0, 500);
+      logger.log(`[update] ${target.label} 拉取失败, 尝试下一个源`);
+      continue;
+    }
+    const candidate = target.isUrl ? 'FETCH_HEAD' : `${target.remote}/${branch}`;
+    const verify = await gitRun(['rev-parse', '--verify', candidate], 10000);
+    if (!verify.ok) {
+      detail = `remote branch not found: ${candidate}`;
+      continue;
+    }
+    ref = candidate;
+    out.source = sourceLabel(target);
+    break;
+  }
+
+  // 没识别出 GitHub / Gitee 远端 (自定义镜像等) 时, 退回默认上游逻辑
+  if (!ref) {
+    const upstream = await resolveUpstreamRef();
+    if (upstream) {
+      const fetch = await gitRun(['fetch', '--quiet'], 30000);
+      if (fetch.ok) {
+        ref = upstream;
+        out.source = upstream.split('/')[0];
+      } else {
+        detail = (fetch.stderr || fetch.err || '').trim().slice(0, 500);
+      }
+    }
+  }
+
+  if (!ref) {
     out.error = 'fetch-failed';
-    out.detail = (fetch.stderr || fetch.err || '').trim().slice(0, 500);
+    out.detail = detail;
     return out;
   }
+  out.ref = ref;
 
   const cur = await gitRun(['rev-parse', 'HEAD'], 15000);
   out.current = cur.ok ? cur.stdout.trim().slice(0, 7) : null;
-
-  const ref = await resolveUpstreamRef();
-  if (!ref) { out.error = 'no-upstream'; return out; }
 
   const cnt = await gitRun(['rev-list', '--count', `HEAD..${ref}`], 15000);
   out.behind = cnt.ok ? (parseInt(cnt.stdout.trim(), 10) || 0) : 0;
@@ -196,23 +275,42 @@ async function checkForUpdate() {
   return out;
 }
 
+// 依次尝试各更新源执行 git pull --ff-only, 全部失败再退回默认上游。
+// onLine 用于流式进度 (传 null 表示普通调用)。
+async function pullFromUpdateSources(onLine) {
+  const branch = await currentBranchName();
+  const { targets } = listUpdateTargets();
+  const note = (text) => { if (onLine) onLine(text); };
+  const runPull = (args) => (onLine
+    ? runGitStreaming(args, onLine)
+    : gitRun(args, 180000));
+
+  for (const target of targets) {
+    logger.log(`[update] 从 ${target.label} 拉取`);
+    note(`git pull ${target.remote} ${branch}`);
+    const r = await runPull(['pull', '--ff-only', '--progress', target.remote, branch]);
+    if (r.ok) return { ok: true, source: sourceLabel(target), remote: target.remote, result: r };
+    note(`${target.label} 拉取失败, 尝试下一个源`);
+  }
+
+  // 没有匹配的 GitHub / Gitee 远端, 或全部失败: 退回默认上游
+  logger.log('[update] 使用默认上游拉取');
+  note('git pull --ff-only');
+  const r = await runPull(['pull', '--ff-only', '--progress']);
+  return { ok: r.ok, source: r.ok ? 'upstream' : null, remote: null, result: r };
+}
+
 // 执行更新 (git pull --ff-only); 仅拉取, 不重启, 由前端决定是否重启
 async function applyUpdate() {
-  const out = { ok: false, changed: false, before: null, after: null, output: '', error: null };
+  const out = { ok: false, changed: false, before: null, after: null, output: '', error: null, source: null };
   if (!fs.existsSync(path.join(PROJECT_DIR, '.git'))) { out.error = 'not-a-repo'; return out; }
 
   const before = await gitRun(['rev-parse', 'HEAD'], 15000);
   out.before = before.ok ? before.stdout.trim().slice(0, 7) : null;
 
-  let pull = await gitRun(['pull', '--ff-only'], 180000);
-  if (!pull.ok) {
-    const ref = await resolveUpstreamRef();
-    if (ref && ref.indexOf('/') > 0) {
-      const remote = ref.slice(0, ref.indexOf('/'));
-      const branch = ref.slice(ref.indexOf('/') + 1);
-      pull = await gitRun(['pull', '--ff-only', remote, branch], 180000);
-    }
-  }
+  const pulled = await pullFromUpdateSources(null);
+  const pull = pulled.result;
+  out.source = pulled.source;
   out.output = ((pull.stdout || '') + (pull.stderr || '')).trim().slice(0, 2000);
   if (!pull.ok) { out.error = 'pull-failed'; return out; }
 
@@ -271,7 +369,7 @@ function parseGitPercent(line) {
 // 以 NDJSON 流的形式执行更新: 每行一个 JSON 事件
 // { stage, percent, line } … 最后一行 { done: true, result }
 async function applyUpdateStreaming(res) {
-  const out = { ok: false, changed: false, before: null, after: null, output: '', error: null };
+  const out = { ok: false, changed: false, before: null, after: null, output: '', error: null, source: null };
   const startedAt = Date.now();
   let percent = 0;
 
@@ -313,16 +411,10 @@ async function applyUpdateStreaming(res) {
   };
 
   progress('fetch', 18);
-  let pull = await runGitStreaming(['pull', '--ff-only', '--progress'], onLine);
-  if (!pull.ok) {
-    const ref = await resolveUpstreamRef();
-    if (ref && ref.indexOf('/') > 0) {
-      const remote = ref.slice(0, ref.indexOf('/'));
-      const branch = ref.slice(ref.indexOf('/') + 1);
-      emit({ stage: 'fetch', percent, line: `git pull ${remote} ${branch}` });
-      pull = await runGitStreaming(['pull', '--ff-only', '--progress', remote, branch], onLine);
-    }
-  }
+  // 按 Gitee / GitHub 候选顺序拉取, 任一成功即完成
+  const pulled = await pullFromUpdateSources(onLine);
+  const pull = pulled.result;
+  out.source = pulled.source;
   out.output = ((pull.stdout || '') + (pull.stderr || '')).trim().slice(0, 2000);
   if (!pull.ok) {
     out.error = 'pull-failed';
