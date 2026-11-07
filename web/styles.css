@@ -411,11 +411,12 @@ html, body {
     box-shadow: none;
   }
 }
-/* 帧率显示 (设置里可开关) */
+/* 帧率显示 (设置里可开关): 画布上方正中央 */
 .fps-overlay {
   position: absolute;
   top: 4px;
-  left: 4px;
+  left: 50%;
+  transform: translateX(-50%);
   z-index: 4;
   padding: 0 6px;
   border-radius: 3px;
