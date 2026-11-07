@@ -1638,7 +1638,8 @@ html, body {
     padding: 6px 10px;
     flex: 0 0 auto;
   }
-  .brand { flex: 1 1 auto; min-width: 0; overflow: hidden; }
+  /* 品牌不撑开, WS 状态才能紧贴 Lua 徽标; 剩余空间留给右侧的 ⋮ 按钮 */
+  .brand { order: 1; flex: 0 1 auto; min-width: 0; overflow: hidden; }
   .brand-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .brand-sub {
     flex: 0 1 auto;
@@ -1648,7 +1649,6 @@ html, body {
     white-space: nowrap;
   }
   /* 连接状态紧跟在 Lua 徽标后面 (DOM 里在菜单之后, 用 order 调整位置) */
-  .brand { order: 1; }
   .conn-status {
     display: inline-flex;
     align-items: center;
@@ -1662,6 +1662,7 @@ html, body {
   /* 所有操作收进 ⋮ 下拉菜单: 竖排列表, 比横向滚动的按钮更容易点到 */
   .menu-toggle {
     order: 3;
+    margin-left: auto;
     display: inline-flex;
     align-items: center;
     justify-content: center;
