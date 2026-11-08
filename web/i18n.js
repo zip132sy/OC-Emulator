@@ -84,6 +84,11 @@ const I18N = (() => {
       // 输入法 (软键盘) 按钮
       'ime.btn': '⌨ 输入法',
       'ime.btn.title': '打开手机软键盘输入 (再次点击收起)',
+      'vkbd.btn': '⌨ 按键',
+      'vkbd.btn.title': '虚拟键盘 (F1-F12 等手机软键盘没有的按键)',
+      'vkbd.title': '虚拟键盘',
+      'vkbd.hint': '先点 Ctrl / Alt / Shift, 再点目标键',
+      'vkbd.close.title': '收起虚拟键盘',
       'scroll.up.title': '向上滚动',
       'scroll.down.title': '向下滚动',
 
@@ -938,6 +943,11 @@ const I18N = (() => {
       // On-screen keyboard
       'ime.btn': '⌨ Keyboard',
       'ime.btn.title': 'Open the on-screen keyboard (tap again to close)',
+      'vkbd.btn': '⌨ Keys',
+      'vkbd.btn.title': 'Virtual keyboard (F1-F12 and other keys phones lack)',
+      'vkbd.title': 'Virtual keyboard',
+      'vkbd.hint': 'Tap Ctrl / Alt / Shift, then the target key',
+      'vkbd.close.title': 'Hide virtual keyboard',
       'scroll.up.title': 'Scroll up',
       'scroll.down.title': 'Scroll down',
 

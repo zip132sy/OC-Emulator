@@ -562,6 +562,112 @@ html, body {
   background: var(--accent);
   border-color: var(--accent);
 }
+/* 虚拟键盘: 触屏设备的完整键盘 (手机软键盘缺少 F1-F12 等按键) */
+.vkbd-btn {
+  position: absolute;
+  top: 44px;
+  left: 8px;
+  display: none;
+  background: rgba(0, 0, 0, 0.6);
+  border: 1px solid var(--border);
+  color: var(--fg-primary);
+  padding: 4px 10px;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 12px;
+  font-family: inherit;
+  z-index: 5;
+  opacity: 0.6;
+  transition: opacity 0.15s, background 0.15s;
+}
+@media (pointer: coarse) {
+  .vkbd-btn { display: inline-flex; }
+}
+.vkbd-btn:hover,
+.vkbd-btn.active {
+  opacity: 1;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.console-canvas-wrap.fullscreen .vkbd-btn {
+  top: calc(48px + env(safe-area-inset-top, 0px));
+  left: calc(12px + env(safe-area-inset-left, 0px));
+}
+.vkbd {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 70;
+  display: none;
+  padding: 6px 6px calc(6px + env(safe-area-inset-bottom, 0px));
+  background: var(--bg-sidebar);
+  border-top: 1px solid var(--border);
+  box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.45);
+  max-height: 58vh;
+  overflow-y: auto;
+  touch-action: manipulation;
+}
+.vkbd.open { display: block; }
+.vkbd-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 4px 6px;
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+.vkbd-title { font-weight: 600; }
+.vkbd-hint {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.vkbd-close {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+.vkbd-rows { display: flex; flex-direction: column; gap: 4px; }
+.vkbd-row { display: flex; gap: 4px; }
+.vkbd-key {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 34px;
+  padding: 0 2px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-input);
+  color: var(--fg-primary);
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.vkbd-key:active,
+.vkbd-key.active {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.vkbd-key.wide { font-size: 10px; }
+@media (max-width: 380px) {
+  .vkbd-key { font-size: 10px; }
+}
 /* 暂停遮罩 (VMware 风格) */
 .paused-overlay {
   position: absolute;

@@ -218,6 +218,15 @@ const Console = (() => {
             <button class="scroll-btn" id="scroll-up-${cssEsc(vmName)}" title="${t('scroll.up.title')}" aria-label="${t('scroll.up.title')}">▲</button>
             <button class="scroll-btn" id="scroll-down-${cssEsc(vmName)}" title="${t('scroll.down.title')}" aria-label="${t('scroll.down.title')}">▼</button>
           </div>
+          <button class="vkbd-btn" id="vkbd-btn-${cssEsc(vmName)}" title="${t('vkbd.btn.title')}">${t('vkbd.btn')}</button>
+          <div class="vkbd" id="vkbd-${cssEsc(vmName)}" aria-hidden="true">
+            <div class="vkbd-head">
+              <span class="vkbd-title">${t('vkbd.title')}</span>
+              <span class="vkbd-hint">${t('vkbd.hint')}</span>
+              <button class="vkbd-close" id="vkbd-close-${cssEsc(vmName)}" title="${t('vkbd.close.title')}">✕</button>
+            </div>
+            <div class="vkbd-rows" id="vkbd-rows-${cssEsc(vmName)}"></div>
+          </div>
         </div>
         <div class="log-panel" id="log-panel-${cssEsc(vmName)}">
           <div class="log-panel-header" id="log-header-${cssEsc(vmName)}">
@@ -245,6 +254,10 @@ const Console = (() => {
     view.canvasStage = pane.querySelector(`#canvas-stage-${cssEsc(vmName)}`);
     view.imeBtn = pane.querySelector(`#ime-btn-${cssEsc(vmName)}`);
     view.imeInput = pane.querySelector(`#ime-input-${cssEsc(vmName)}`);
+    view.vkbdBtn = pane.querySelector(`#vkbd-btn-${cssEsc(vmName)}`);
+    view.vkbdPanel = pane.querySelector(`#vkbd-${cssEsc(vmName)}`);
+    view.vkbdRows = pane.querySelector(`#vkbd-rows-${cssEsc(vmName)}`);
+    view.vkbdClose = pane.querySelector(`#vkbd-close-${cssEsc(vmName)}`);
     view.fpsEl = pane.querySelector(`#fps-${cssEsc(vmName)}`);
     if (view.fpsEl) view.fpsEl.style.display = showFps ? '' : 'none';
 
@@ -456,6 +469,7 @@ const Console = (() => {
     }
 
     bindImeInput(view, vmName);
+    bindVirtualKeyboard(view, vmName);
 
     // 虚拟滚轮: 触屏全屏时显示, 按指针最后位置滚动
     const scrollUpBtn = pane.querySelector(`#scroll-up-${cssEsc(vmName)}`);
@@ -2352,6 +2366,156 @@ const Console = (() => {
     if (ch >= 'A' && ch <= 'Z') ch = ch.toLowerCase();
     if (shifted[ch]) ch = shifted[ch];
     return lower[ch] || 0;
+  }
+
+  // ============================================================
+  // 虚拟键盘 (手机端)
+  //
+  // 手机软键盘没有 F1-F12、Insert、Delete 这类按键, 客户机程序却经常用到。
+  // 这里给出一整套键盘: 普通键按下发送一次 key_down + key_up;
+  // Ctrl / Alt / Shift 是一次性修饰键, 先点它再点目标键即可组合。
+  // ============================================================
+  const VKBD_MODS = {
+    ctrl: { char: 0, code: 0x1D },
+    alt: { char: 0, code: 0x38 },
+    shift: { char: 0, code: 0x2A },
+  };
+
+  const VKBD_ROWS = [
+    [
+      { l: 'Esc', c: 0x01, w: 1.4 },
+      { l: 'F1', c: 0x3B }, { l: 'F2', c: 0x3C }, { l: 'F3', c: 0x3D }, { l: 'F4', c: 0x3E },
+      { l: 'F5', c: 0x3F }, { l: 'F6', c: 0x40 }, { l: 'F7', c: 0x41 }, { l: 'F8', c: 0x42 },
+      { l: 'F9', c: 0x43 }, { l: 'F10', c: 0x44 }, { l: 'F11', c: 0x45 }, { l: 'F12', c: 0x46 },
+    ],
+    [
+      { l: '`', c: 0x29, ch: 0x60 },
+      { l: '1', c: 0x02, ch: 0x31 }, { l: '2', c: 0x03, ch: 0x32 }, { l: '3', c: 0x04, ch: 0x33 },
+      { l: '4', c: 0x05, ch: 0x34 }, { l: '5', c: 0x06, ch: 0x35 }, { l: '6', c: 0x07, ch: 0x36 },
+      { l: '7', c: 0x08, ch: 0x37 }, { l: '8', c: 0x09, ch: 0x38 }, { l: '9', c: 0x0A, ch: 0x39 },
+      { l: '0', c: 0x0B, ch: 0x30 },
+      { l: '-', c: 0x0C, ch: 0x2D }, { l: '=', c: 0x0D, ch: 0x3D },
+      { l: '⌫', c: 0x0E, ch: 0x08, w: 1.9, wide: true },
+    ],
+    [
+      { l: 'Tab', c: 0x0F, ch: 0x09, w: 1.5, wide: true },
+      { l: 'Q', c: 0x10, ch: 0x71, alpha: true }, { l: 'W', c: 0x11, ch: 0x77, alpha: true },
+      { l: 'E', c: 0x12, ch: 0x65, alpha: true }, { l: 'R', c: 0x13, ch: 0x72, alpha: true },
+      { l: 'T', c: 0x14, ch: 0x74, alpha: true }, { l: 'Y', c: 0x15, ch: 0x79, alpha: true },
+      { l: 'U', c: 0x16, ch: 0x75, alpha: true }, { l: 'I', c: 0x17, ch: 0x69, alpha: true },
+      { l: 'O', c: 0x18, ch: 0x6F, alpha: true }, { l: 'P', c: 0x19, ch: 0x70, alpha: true },
+      { l: '[', c: 0x1A, ch: 0x5B }, { l: ']', c: 0x1B, ch: 0x5D },
+      { l: '\\', c: 0x2B, ch: 0x5C, w: 1.5 },
+    ],
+    [
+      { l: 'Caps', c: 0x3A, w: 1.7, wide: true },
+      { l: 'A', c: 0x1E, ch: 0x61, alpha: true }, { l: 'S', c: 0x1F, ch: 0x73, alpha: true },
+      { l: 'D', c: 0x20, ch: 0x64, alpha: true }, { l: 'F', c: 0x21, ch: 0x66, alpha: true },
+      { l: 'G', c: 0x22, ch: 0x67, alpha: true }, { l: 'H', c: 0x23, ch: 0x68, alpha: true },
+      { l: 'J', c: 0x24, ch: 0x6A, alpha: true }, { l: 'K', c: 0x25, ch: 0x6B, alpha: true },
+      { l: 'L', c: 0x26, ch: 0x6C, alpha: true },
+      { l: ';', c: 0x27, ch: 0x3B }, { l: "'", c: 0x28, ch: 0x27 },
+      { l: 'Enter', c: 0x1C, ch: 0x0D, w: 2, wide: true },
+    ],
+    [
+      { l: 'Shift', mod: 'shift', w: 1.9, wide: true },
+      { l: 'Z', c: 0x2C, ch: 0x7A, alpha: true }, { l: 'X', c: 0x2D, ch: 0x78, alpha: true },
+      { l: 'C', c: 0x2E, ch: 0x63, alpha: true }, { l: 'V', c: 0x2F, ch: 0x76, alpha: true },
+      { l: 'B', c: 0x30, ch: 0x62, alpha: true }, { l: 'N', c: 0x31, ch: 0x6E, alpha: true },
+      { l: 'M', c: 0x32, ch: 0x6D, alpha: true },
+      { l: ',', c: 0x33, ch: 0x2C }, { l: '.', c: 0x34, ch: 0x2E },
+      { l: '/', c: 0x35, ch: 0x2F },
+      { l: 'Shift', mod: 'shift', w: 1.9, wide: true },
+    ],
+    [
+      { l: 'Ctrl', mod: 'ctrl', w: 1.3, wide: true },
+      { l: 'Alt', mod: 'alt', w: 1.3, wide: true },
+      { l: 'Space', c: 0x39, ch: 0x20, w: 4.5 },
+      { l: 'Alt', mod: 'alt', w: 1.3, wide: true },
+      { l: 'Ctrl', mod: 'ctrl', w: 1.3, wide: true },
+    ],
+    [
+      { l: '←', c: 0xCB, w: 1.2 }, { l: '↑', c: 0xC8, w: 1.2 },
+      { l: '↓', c: 0xD0, w: 1.2 }, { l: '→', c: 0xCD, w: 1.2 },
+      { l: 'Ins', c: 0xD2, w: 1.2 }, { l: 'Del', c: 0xD3, w: 1.2 },
+      { l: 'Home', c: 0xC7, w: 1.2 }, { l: 'End', c: 0xCF, w: 1.2 },
+      { l: 'PgUp', c: 0xC9, w: 1.2 }, { l: 'PgDn', c: 0xD1, w: 1.2 },
+    ],
+  ];
+
+  function updateVkbdMods(view) {
+    if (!view.vkbdRows) return;
+    view.vkbdRows.querySelectorAll('.vkbd-key[data-mod]').forEach((el) => {
+      el.classList.toggle('active', !!view.vkMods[el.dataset.mod]);
+    });
+  }
+
+  function sendVkbdKey(view, vmName, key) {
+    const held = Object.keys(VKBD_MODS).filter((m) => view.vkMods[m]);
+    for (const m of held) {
+      sendInput(vmName, { event: 'key_down', char: VKBD_MODS[m].char, code: VKBD_MODS[m].code });
+    }
+    let ch = key.ch || 0;
+    if (key.alpha && view.vkMods.shift) ch = key.ch - 32;
+    sendInput(vmName, { event: 'key_down', char: ch, code: key.c });
+    sendInput(vmName, { event: 'key_up', char: ch, code: key.c });
+    for (const m of held.slice().reverse()) {
+      sendInput(vmName, { event: 'key_up', char: VKBD_MODS[m].char, code: VKBD_MODS[m].code });
+    }
+    // 修饰键只用一次, 避免下一次按键意外带着 Ctrl/Shift
+    if (held.length) {
+      view.vkMods = { ctrl: false, alt: false, shift: false };
+      updateVkbdMods(view);
+    }
+  }
+
+  function bindVirtualKeyboard(view, vmName) {
+    const btn = view.vkbdBtn;
+    const panel = view.vkbdPanel;
+    const rowsEl = view.vkbdRows;
+    if (!btn || !panel || !rowsEl) return;
+    view.vkMods = { ctrl: false, alt: false, shift: false };
+
+    rowsEl.innerHTML = VKBD_ROWS.map((row, r) =>
+      '<div class="vkbd-row">' + row.map((k, i) =>
+        `<button type="button" class="vkbd-key${k.wide ? ' wide' : ''}${k.mod ? ' mod' : ''}"`
+        + ` data-r="${r}" data-i="${i}"${k.mod ? ` data-mod="${k.mod}"` : ''}`
+        + ` style="flex-grow:${k.w || 1}">${k.l}</button>`
+      ).join('') + '</div>'
+    ).join('');
+
+    const setOpen = (open) => {
+      panel.classList.toggle('open', open);
+      btn.classList.toggle('active', open);
+      panel.setAttribute('aria-hidden', open ? 'false' : 'true');
+    };
+
+    btn.addEventListener('mousedown', (e) => e.stopPropagation());
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      setOpen(!panel.classList.contains('open'));
+    });
+    if (view.vkbdClose) {
+      view.vkbdClose.addEventListener('mousedown', (e) => e.stopPropagation());
+      view.vkbdClose.addEventListener('click', (e) => {
+        e.stopPropagation();
+        setOpen(false);
+      });
+    }
+
+    rowsEl.addEventListener('click', (e) => {
+      const el = e.target.closest('.vkbd-key');
+      if (!el) return;
+      e.stopPropagation();
+      const key = VKBD_ROWS[Number(el.dataset.r)][Number(el.dataset.i)];
+      if (!key) return;
+      if (key.mod) {
+        view.vkMods[key.mod] = !view.vkMods[key.mod];
+        updateVkbdMods(view);
+        return;
+      }
+      sendVkbdKey(view, vmName, key);
+    });
   }
 
   function bindImeInput(view, vmName) {
