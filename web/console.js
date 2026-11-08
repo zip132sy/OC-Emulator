@@ -389,21 +389,42 @@ const Console = (() => {
       view._touchId = touch.identifier;
       // 点屏幕时把焦点拉回画布 (若软键盘正开着, 同时会收起键盘)
       try { view.canvas.focus({ preventScroll: true }); } catch (err) { view.canvas.focus(); }
-      // 全屏 + 运行中: 连点两下映射为右键, 第二次按下不再发送左键
-      if (isRightClickGesture(view) && isSecondTap(view, touch)) {
-        view._lastTap = null;
-        view._tapRightClick = true;
+      // 全屏 + 运行中: 按下先不发送; 按住达到长按时长发送右键, 直接抬起发送左键
+      if (isRightClickGesture(view)) {
+        view._pressPoint = { x: touch.clientX, y: touch.clientY };
+        view._lpFired = false;
+        clearLongPress(view);
+        view._lpTimer = setTimeout(() => {
+          view._lpTimer = null;
+          if (!view._pressPoint) return;
+          const p = view._pressPoint;
+          view._pressPoint = null;
+          view._lpFired = true;
+          sendTouchAt(vmName, p.x, p.y, 'touch', 1);
+          sendTouchAt(vmName, p.x, p.y, 'drop', 1);
+        }, LONG_PRESS_MS);
         return;
       }
-      view._tapRightClick = false;
+      view._pressPoint = null;
+      view._lpFired = false;
       onTouch(touch, vmName, 'touch');
     }, { passive: false });
     view.canvas.addEventListener('touchmove', (e) => {
       if (view._touchId == null) return;
-      if (view._tapRightClick) return; // 右键手势期间不发送拖动
+      if (view._lpFired) return; // 右键已发送, 本次触摸不再产生拖动
       const touch = findTouch(e.changedTouches, view._touchId) || e.touches[0];
       if (!touch) return;
       e.preventDefault();
+      // 按下尚未发送: 移动超过阈值才转为拖动, 并补发左键按下
+      if (view._pressPoint) {
+        const dx = touch.clientX - view._pressPoint.x;
+        const dy = touch.clientY - view._pressPoint.y;
+        if (dx * dx + dy * dy <= LONG_PRESS_DIST * LONG_PRESS_DIST) return;
+        clearLongPress(view);
+        const p = view._pressPoint;
+        view._pressPoint = null;
+        sendTouchAt(vmName, p.x, p.y, 'touch');
+      }
       // 与鼠标拖拽一样按帧合并, 避免高频事件把消息刷爆
       if (view._touchPending) {
         view._touchMoveEvent = touch;
@@ -426,25 +447,33 @@ const Console = (() => {
       view._touchId = null;
       view._touchPending = false;
       view._touchMoveEvent = null;
-      if (view._tapRightClick) {
-        view._tapRightClick = false;
-        onTouch(touch, vmName, 'touch', 1);
-        onTouch(touch, vmName, 'drop', 1);
+      clearLongPress(view);
+      if (view._lpFired) {
+        view._lpFired = false;
+        view._pressPoint = null;
+        return;
+      }
+      if (view._pressPoint) {
+        // 未达到长按时长: 一次左键点击
+        view._pressPoint = null;
+        sendTouchAt(vmName, touch.clientX, touch.clientY, 'touch');
+        sendTouchAt(vmName, touch.clientX, touch.clientY, 'drop');
         return;
       }
       onTouch(touch, vmName, 'drop');
-      recordTap(view, touch);
     }, { passive: false });
     view.canvas.addEventListener('touchcancel', () => {
       view._touchId = null;
       view._touchPending = false;
       view._touchMoveEvent = null;
-      view._tapRightClick = false;
+      view._pressPoint = null;
+      view._lpFired = false;
+      clearLongPress(view);
     });
     // 双击逻辑:
     // - 非全屏时: 双击进入全屏
     // - 全屏且系统未运行/报错时: 双击退出全屏
-    // - 全屏且系统运行中: 不切换全屏 (触屏下连点两下由 touch 处理映射为右键)
+    // - 全屏且系统运行中: 不切换全屏 (触屏连点两下就是两次左键, 长按为右键)
     view.canvas.addEventListener('dblclick', (e) => {
       const view = getView(vmName);
       if (!view.isFullscreen) {
@@ -456,7 +485,7 @@ const Console = (() => {
         e.preventDefault();
         toggleFullscreen(vmName);
       }
-      // 全屏 + 运行中 → 不拦截, 双击映射到系统
+      // 全屏 + 运行中 → 不拦截, 双击交给系统
     });
 
     // 全屏按钮
@@ -1798,9 +1827,10 @@ const Console = (() => {
     const wrap = view.canvasWrap;
     if (!wrap || view.isFullscreen === on) return;
     view.isFullscreen = on;
-    // 切换全屏时清掉上一轮点击记录, 避免刚进全屏就被判定成双击
-    view._lastTap = null;
-    view._tapRightClick = false;
+    // 切换全屏时清掉未完成的触摸手势, 避免半途按下留在旧模式里
+    view._pressPoint = null;
+    view._lpFired = false;
+    clearLongPress(view);
     wrap.classList.toggle('fullscreen', on);
     // ESC 退出全屏 (在 capture 阶段拦截, 防止冒泡到 canvas 的 onKey)
     if (on) {
@@ -2657,30 +2687,31 @@ const Console = (() => {
 
   // 触屏事件与鼠标语义一致 (touch / drag / drop), 由 touchstart/touchmove/touchend 调用
   function onTouch(touch, vmName, evName, btn = 0) {
+    sendTouchAt(vmName, touch.clientX, touch.clientY, evName, btn);
+  }
+
+  // 按屏幕坐标发送触屏事件 (长按定时器触发时原始 touch 对象可能已失效)
+  function sendTouchAt(vmName, x, y, evName, btn = 0) {
     const view = getView(vmName);
     if (!view.canvas || !view.w || !view.h) return;
-    const point = computePoint(view, touch.clientX, touch.clientY);
+    const point = computePoint(view, x, y);
     sendInput(vmName, { event: evName, ...point, btn });
   }
 
-  // 双击映射为右键的可用状态: 全屏、系统运行中 (错误/停止时双击用于退出全屏)
+  // 右键手势的可用状态: 全屏、系统运行中 (错误/停止时长按不触发右键)
   function isRightClickGesture(view) {
     return !!view.isFullscreen && view.state === 'running';
   }
 
-  const DOUBLE_TAP_MS = 320;
-  const DOUBLE_TAP_DIST = 40;
+  // 长按判定: 按住不动达到时长发送右键, 位移超过阈值则按拖动处理
+  const LONG_PRESS_MS = 500;
+  const LONG_PRESS_DIST = 15;
 
-  function isSecondTap(view, touch) {
-    const last = view._lastTap;
-    if (!last) return false;
-    return (Date.now() - last.at) <= DOUBLE_TAP_MS
-      && Math.abs(touch.clientX - last.x) <= DOUBLE_TAP_DIST
-      && Math.abs(touch.clientY - last.y) <= DOUBLE_TAP_DIST;
-  }
-
-  function recordTap(view, touch) {
-    view._lastTap = { at: Date.now(), x: touch.clientX, y: touch.clientY };
+  function clearLongPress(view) {
+    if (view._lpTimer) {
+      clearTimeout(view._lpTimer);
+      view._lpTimer = null;
+    }
   }
 
   // 虚拟滚轮: 以指针最后位置为准, 没有则用屏幕中心
