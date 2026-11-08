@@ -1851,7 +1851,7 @@ function computer.beep(freq, dur) end
 function computer.getProgramLocations() return {} end
 
 -- 网卡单包最大字节数 (真实 OC 的 modem.maxPacketSize() / DeviceInfo.capacity 默认值)。
--- MineOS / PixelOS 的网络层 (Libraries/Network.lua) 用它给大消息分片:
+-- MineOS 的网络层 (Libraries/Network.lua) 用它给大消息分片:
 --   可通过 modem.maxPacketSize() 或 computer.getDeviceInfo()[addr].capacity 获取。
 -- 两者都缺失时分片长度会算成 nil, 于是 FTP 目录列表之类的大响应发不回去,
 -- 客户端最终报 "Text.lua:98: bad argument #1 (string expected, got nil)"。
@@ -2715,7 +2715,7 @@ eepromLabel = "OC-Emulator EEPROM"
 eepromCode = nil  -- 从 .oce 文件加载的 EEPROM 代码
 
 -- 内置 OC 模组 BIOS (Lua 版) - 作为默认 EEPROM
--- 兼容两种引导布局: /init.lua 与 /BIOS/Manager.lua
+-- 依次尝试常见的引导脚本路径
 local BUILTIN_EEPROM = [[local init
 do
   local component_invoke = component.invoke
@@ -3875,7 +3875,7 @@ for i = 1, 3 do
         end
         return ports
       end
-      -- 单包最大字节数 (modem.maxPacketSize)。MineOS / PixelOS 的网络层优先检测这个方法,
+      -- 单包最大字节数 (modem.maxPacketSize)。MineOS 的网络层优先检测这个方法,
       -- 缺失时才会退回 getDeviceInfo()[addr].capacity (见上面的 MODEM_MAX_PACKET_SIZE)。
       -- 用不了就会导致大消息分片长度算成 nil, 大响应发不回去。
       modem.maxPacketSize = function()
@@ -5113,18 +5113,12 @@ else
 end
 
 -- 检测操作系统类型 (仅用于日志显示)
-dlog("/BIOS/Manager.lua exists:", vfsExists("/BIOS/Manager.lua"))
 dlog("/init.lua exists:", vfsExists("/init.lua"))
 dlog("/OS.lua exists:", vfsExists("/OS.lua"))
-if vfsExists("/BIOS/Manager.lua") then
-  _stderr:write("[emulator] detected: /BIOS/Manager.lua\n")
-elseif vfsExists("/init.lua") then
+if vfsExists("/init.lua") then
   _stderr:write("[emulator] detected: OpenOS (/init.lua)\n")
 elseif vfsExists("/OS.lua") then
   _stderr:write("[emulator] detected: MineOS (/OS.lua)\n")
-else
-  _stderr:write("[emulator] WARNING: no bootable OS found on disk\n")
-  showScreenMessage("No bootable OS found\nNo /init.lua or /OS.lua on disk")
 end
 
 -- ============================================================
@@ -5178,7 +5172,7 @@ local function resolveBootAddress()
 end
 
 gpu.bind(screenAddr)
--- 根据启动顺序设置启动地址，BIOS 会从该磁盘加载 /init.lua 或 /BIOS/Manager.lua
+-- 根据启动顺序设置启动地址，BIOS 会从该磁盘加载引导脚本
 local bootAddr = resolveBootAddress()
 eepromData = bootAddr
 computer._bootAddr = bootAddr
