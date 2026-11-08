@@ -1,5 +1,4 @@
 @echo off
-chcp 65001 >nul
 cd /d "%~dp0"
 title OC Emulator - Web Control Panel
 setlocal EnableDelayedExpansion
@@ -14,9 +13,10 @@ REM ============================================================
 REM Guardian log: records every start / crash exit / hung restart.
 REM   Keeps a record even when the console window is closed or the
 REM   output has already scrolled away.
-REM   NOTE: this file is UTF-8. The code page is switched to 65001 right
-REM   after @echo off so Chinese text parses and prints correctly. Lines
-REM   above that switch must stay ASCII-only.
+REM   NOTE: keep this file ASCII-only. cmd parses batch files with the
+REM   active OEM code page, so non-ASCII bytes can shift parsing and run
+REM   part of a comment line as a command. Localized text belongs in the
+REM   Node / Lua output, which the console renders correctly.
 REM ============================================================
 set "GUARD_LOG=%~dp0logs\guardian.log"
 if not exist "%~dp0logs" mkdir "%~dp0logs" >nul 2>nul
@@ -27,23 +27,23 @@ echo ===============================================
 echo.
 
 REM ============================================================
-REM 依赖版本要求
+REM Required versions
 REM ============================================================
 set "REQUIRED_NODE_MAJOR=18"
 set "NODE_INSTALL_VERSION=v20.17.0"
 
 REM ============================================================
-REM 1. 依赖检查与安装
-REM    - Node.js:   未安装则自动安装; 主版本过低则询问后安装
-REM    - npm 依赖 / Lua: 交给 lib\ensureDeps.js
-REM      (npm 依赖版本不符会询问; Lua 强制固定 5.1.x, 不询问直接安装)
-REM    只有依赖全部就绪才会继续启动。
+REM 1. Dependency check and install
+REM    - Node.js: install when missing; ask before upgrading an old major
+REM    - npm packages / Lua: handled by lib\ensureDeps.js
+REM      npm version mismatches ask first; Lua is pinned and installed silently
+REM    Startup continues only after every dependency is ready.
 REM ============================================================
 call :ensure_node
 if not "!DEP_OK!"=="1" goto :dep_failed
 
 echo.
-echo [INFO] 检查 npm 依赖与 Lua...
+echo [INFO] Checking npm packages and Lua...
 node "%~dp0lib\ensureDeps.js"
 if !ERRORLEVEL! neq 0 goto :dep_failed
 echo.
@@ -255,8 +255,8 @@ goto :guardian_loop
 
 :dep_failed
 echo.
-echo [ERROR] 依赖未就绪, 服务器未启动。
-echo         请按上面的提示处理依赖后重新运行本脚本。
+echo [ERROR] Dependencies are not ready; server not started.
+echo         Fix the issues above, then run this script again.
 echo.
 pause
 goto :end
@@ -265,10 +265,10 @@ goto :end
 exit /b 0
 
 REM ------------------------------------------------------------
-REM 子程序: 检查 / 安装 Node.js
-REM   - 已安装且满足主版本要求 -> DEP_OK=1
-REM   - 未安装 -> 自动下载安装
-REM   - 主版本过低 -> 询问是否下载安装
+REM Subroutine: check / install Node.js
+REM   - installed and major version OK -> DEP_OK=1
+REM   - missing -> download and install
+REM   - too old -> ask before downloading and installing
 REM ------------------------------------------------------------
 :ensure_node
 set "DEP_OK=0"
@@ -286,16 +286,16 @@ set "DEP_OK=1"
 goto :eof
 
 :en_old
-echo [WARNING] 当前 Node.js !NODE_VERSION! 低于要求的 v%REQUIRED_NODE_MAJOR%+。
-choice /C YN /M "是否下载并安装 Node.js %NODE_INSTALL_VERSION%"
+echo [WARNING] Node.js !NODE_VERSION! is older than the required v%REQUIRED_NODE_MAJOR%+.
+choice /C YN /M "Download and install Node.js %NODE_INSTALL_VERSION%"
 if errorlevel 2 (
-    echo [ERROR] 已取消: Node.js 版本未满足要求。
+    echo [ERROR] Cancelled: Node.js version requirement not met.
     goto :eof
 )
 goto :en_install
 
 :en_missing
-echo [INFO] 未检测到 Node.js, 开始自动安装...
+echo [INFO] Node.js not found, installing automatically...
 goto :en_install
 
 :en_install
@@ -307,19 +307,19 @@ set "NODE_URL=https://nodejs.org/dist/%NODE_INSTALL_VERSION%/node-%NODE_INSTALL_
 set "NODE_INSTALLER=%TEMP%\node-%NODE_INSTALL_VERSION%-!NODE_ARCH!.msi"
 
 echo.
-echo [INFO] 正在下载 Node.js %NODE_INSTALL_VERSION% (!NODE_ARCH!)...
+echo [INFO] Downloading Node.js %NODE_INSTALL_VERSION% (!NODE_ARCH!)...
 echo        !NODE_URL!
 call :download "!NODE_URL!" "!NODE_INSTALLER!"
 if not exist "!NODE_INSTALLER!" (
-    echo [ERROR] Node.js 下载失败 ^(已重试^)。
+    echo [ERROR] Node.js download failed after retries.
     goto :en_fail
 )
 
 echo.
-echo [INFO] 正在安装 Node.js ^(如弹出权限提示请允许^)...
+echo [INFO] Installing Node.js; allow the permission prompt if it appears...
 msiexec /i "!NODE_INSTALLER!" /qb /norestart
 if !ERRORLEVEL! neq 0 (
-    echo [INFO] 尝试按当前用户安装...
+    echo [INFO] Retrying as a per-user install...
     msiexec /i "!NODE_INSTALLER!" /qb /norestart INSTALLDIR="%LOCALAPPDATA%\Nodejs"
 )
 del "!NODE_INSTALLER!" >nul 2>nul
@@ -328,21 +328,21 @@ set "PATH=%ProgramFiles%\nodejs;%LOCALAPPDATA%\Nodejs;%PATH%"
 where node >nul 2>nul
 if %ERRORLEVEL% neq 0 goto :en_fail
 for /f "tokens=*" %%v in ('node --version 2^>nul') do set "NODE_VERSION=%%v"
-echo [OK] Node.js 安装完成: !NODE_VERSION!
+echo [OK] Node.js installed: !NODE_VERSION!
 set "DEP_OK=1"
 goto :eof
 
 :en_fail
 echo.
-echo [ERROR] Node.js 安装未成功。
-echo         请手动安装 Node.js 后重新运行本脚本: https://nodejs.org/
+echo [ERROR] Node.js installation failed.
+echo         Install Node.js manually, then run this script again: https://nodejs.org/
 echo.
 goto :eof
 
 REM ------------------------------------------------------------
-REM 子程序: 带进度显示与重试的下载
-REM   用法: call :download <url> <dest>
-REM   成功时生成 <dest>, 失败时不生成 (返回码非 0)
+REM Subroutine: download with progress and retries
+REM   usage: call :download <url> <dest>
+REM   creates <dest> on success; leaves it absent on failure
 REM ------------------------------------------------------------
 :download
 set "_dl_url=%~1"
@@ -353,7 +353,7 @@ if exist "%_dl_part%" del "%_dl_part%" >nul 2>nul
 
 where curl >nul 2>nul
 if !ERRORLEVEL! equ 0 (
-    echo [download] 使用 curl 下载 ^(显示实时进度^)...
+    echo [download] Downloading with curl...
     curl.exe -L --fail --retry 3 --retry-delay 2 --connect-timeout 20 --max-time 900 -o "%_dl_part%" "%_dl_url%"
     if !ERRORLEVEL! equ 0 (
         if exist "%_dl_part%" set "_dl_ok=1"
@@ -362,7 +362,7 @@ if !ERRORLEVEL! equ 0 (
 
 if "!_dl_ok!"=="0" (
     if exist "%_dl_part%" del "%_dl_part%" >nul 2>nul
-    echo [download] 使用 PowerShell 下载 ^(显示实时进度^)...
+    echo [download] Downloading with PowerShell...
     set "_dl_ps=%TEMP%\oc_download.ps1"
     > "!_dl_ps!" echo $ProgressPreference = 'Continue'
     >> "!_dl_ps!" echo [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
