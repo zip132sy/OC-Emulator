@@ -1046,6 +1046,21 @@ html, body {
   color: var(--fg-secondary);
   font-size: 12px;
 }
+/* 编辑磁盘: 磁盘选择与"记住选项" */
+.disk-pick {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.disk-pick-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--fg-primary);
+  font-size: 13px;
+  cursor: pointer;
+}
+.disk-pick-item input { margin: 0; }
 .form-row select, .form-row input {
   background: var(--bg-input);
   border: 1px solid var(--border);

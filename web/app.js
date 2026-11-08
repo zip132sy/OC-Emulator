@@ -1417,28 +1417,102 @@ const App = (() => {
     }
   }
 
+  // ---------- 编辑磁盘: 两个磁盘时询问编辑哪个 ----------
+  const DISK_CHOICE_PREFIX = 'oc-disk-choice-';
+
+  function getDiskChoice(vmName) {
+    try {
+      const v = localStorage.getItem(DISK_CHOICE_PREFIX + vmName);
+      return (v === 'disk1' || v === 'disk2') ? v : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function setDiskChoice(vmName, slot) {
+    try {
+      if (slot) localStorage.setItem(DISK_CHOICE_PREFIX + vmName, slot);
+      else localStorage.removeItem(DISK_CHOICE_PREFIX + vmName);
+    } catch (e) { /* 存储不可用时不影响本次操作 */ }
+  }
+
+  function openDiskEditorTab(vmName, slot, diskFile) {
+    openTab({
+      id: 'disk-' + vmName + '-' + slot,
+      type: 'disk-editor',
+      title: `${vmName} / ${I18N.t('hw.' + slot)}`,
+      vm: vmName,
+      diskPath: `vms/${vmName}/${diskFile}`,
+    });
+  }
+
+  function openEditDisk(vmName) {
+    api(`vms/${encodeURIComponent(vmName)}`).then(cfg => {
+      const hw = (cfg && cfg.hardware) || {};
+      const slots = ['disk1', 'disk2'].filter(s => !!hw[s]);
+      if (slots.length === 0) {
+        alert(I18N.t('ctx.edit-disk.none'));
+        return;
+      }
+      // 记住过且该磁盘仍在: 直接打开
+      const remembered = getDiskChoice(vmName);
+      if (remembered && hw[remembered]) {
+        openDiskEditorTab(vmName, remembered, hw[remembered]);
+        return;
+      }
+      if (slots.length === 1) {
+        openDiskEditorTab(vmName, slots[0], hw[slots[0]]);
+        return;
+      }
+      Modal.open({
+        title: I18N.t('ctx.edit-disk.title'),
+        size: 'small',
+        bodyHTML: `
+          <div class="form-row">
+            <label></label>
+            <div class="disk-pick">
+              ${slots.map((s, i) => `
+                <label class="disk-pick-item">
+                  <input type="radio" name="disk-pick" value="${s}" ${i === 0 ? 'checked' : ''}>
+                  <span>${I18N.t('hw.' + s)}</span>
+                </label>`).join('')}
+            </div>
+          </div>
+          <div class="form-row">
+            <label></label>
+            <label class="disk-pick-item">
+              <input type="checkbox" id="disk-pick-remember">
+              <span>${I18N.t('ctx.edit-disk.remember')}</span>
+            </label>
+          </div>`,
+        footerHTML: `
+          <button class="btn" data-action="modal-close">${I18N.t('settings.cancel')}</button>
+          <button class="btn btn-primary" id="disk-pick-ok">${I18N.t('ctx.edit-disk.confirm')}</button>`,
+        onMount(body, footer) {
+          const cancel = footer.querySelector('[data-action="modal-close"]');
+          if (cancel) cancel.addEventListener('click', () => Modal.close());
+          footer.querySelector('#disk-pick-ok').addEventListener('click', () => {
+            const chosen = body.querySelector('input[name="disk-pick"]:checked');
+            const slot = chosen ? chosen.value : slots[0];
+            if (body.querySelector('#disk-pick-remember').checked) setDiskChoice(vmName, slot);
+            Modal.close();
+            openDiskEditorTab(vmName, slot, hw[slot]);
+          });
+        },
+      });
+    });
+  }
+
   function showVMContextMenu(vmName, x, y) {
     closeVMContextMenu();
     const items = [
       { label: I18N.t('ctx.open'), action: () => openVMTab(vmName) },
       { label: I18N.t('ctx.start'), action: () => api(`vms/${encodeURIComponent(vmName)}/start`, { method: 'POST' }).then(refreshVMs) },
       { label: I18N.t('ctx.stop'), action: () => api(`vms/${encodeURIComponent(vmName)}/stop`, { method: 'POST' }).then(refreshVMs) },
-      { label: I18N.t('ctx.edit-disk'), action: () => {
-        // 找到该 VM 的 disk1
-        api(`vms/${encodeURIComponent(vmName)}`).then(cfg => {
-          const hw = cfg && cfg.hardware || {};
-          const diskFile = hw.disk1;
-          if (diskFile) {
-            openTab({
-              id: 'disk-' + vmName + '-disk1',
-              type: 'disk-editor',
-              title: `${vmName} / ${I18N.t('hw.disk1')}`,
-              vm: vmName,
-              diskPath: `vms/${vmName}/${diskFile}`,
-            });
-          }
-        });
-      } },
+      { label: I18N.t('ctx.edit-disk'), action: () => openEditDisk(vmName) },
+      ...(getDiskChoice(vmName)
+        ? [{ label: I18N.t('ctx.edit-disk.forget'), action: () => setDiskChoice(vmName, null) }]
+        : []),
       { separator: true },
       { label: I18N.t('ctx.rename'), action: () => openRenameVM(vmName) },
       { label: I18N.t('ctx.export-vm'), action: () => ExportWizard.open(vmName) },
