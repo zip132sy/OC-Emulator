@@ -303,8 +303,8 @@ set "NODE_ARCH=x64"
 if "%PROCESSOR_ARCHITECTURE%"=="x86" (
     if not defined PROCESSOR_ARCHITEW6432 set "NODE_ARCH=x86"
 )
-set "NODE_URL=https://nodejs.org/dist/%NODE_INSTALL_VERSION%/node-%NODE_INSTALL_VERSION%-win-!NODE_ARCH!.msi"
-set "NODE_INSTALLER=%TEMP%\node-%NODE_INSTALL_VERSION%-win-!NODE_ARCH!.msi"
+set "NODE_URL=https://nodejs.org/dist/%NODE_INSTALL_VERSION%/node-%NODE_INSTALL_VERSION%-!NODE_ARCH!.msi"
+set "NODE_INSTALLER=%TEMP%\node-%NODE_INSTALL_VERSION%-!NODE_ARCH!.msi"
 
 echo.
 echo [INFO] 正在下载 Node.js %NODE_INSTALL_VERSION% (!NODE_ARCH!)...
