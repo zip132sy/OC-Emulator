@@ -1,4 +1,5 @@
 @echo off
+chcp 65001 >nul
 cd /d "%~dp0"
 title OC Emulator - Web Control Panel
 setlocal EnableDelayedExpansion
@@ -13,9 +14,9 @@ REM ============================================================
 REM Guardian log: records every start / crash exit / hung restart.
 REM   Keeps a record even when the console window is closed or the
 REM   output has already scrolled away.
-REM   NOTE: keep lines added here ASCII-only. run.bat is UTF-8 but cmd
-REM   reads batch files with the OEM code page, and a Chinese character
-REM   can swallow the next ASCII byte (^ | etc.) when parsed as DBCS.
+REM   NOTE: this file is UTF-8. The code page is switched to 65001 right
+REM   after @echo off so Chinese text parses and prints correctly. Lines
+REM   above that switch must stay ASCII-only.
 REM ============================================================
 set "GUARD_LOG=%~dp0logs\guardian.log"
 if not exist "%~dp0logs" mkdir "%~dp0logs" >nul 2>nul
