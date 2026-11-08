@@ -3046,13 +3046,13 @@ internet.request = function(url, postData, headers)
     })
 
     -- 阻塞等待响应 (最长 90 秒，大文件或网络慢时需要更多时间)
+    -- 只统计真正等待满 1 秒的轮次: 队列里已有的事件 (例如触发下载的那次点击)
+    -- 会让 pullSignal 立即返回, 把它们计入超时会提前放弃请求。
     local maxWait = 90
     local waited = 0
     while not gotResponse and waited < maxWait do
-      -- pullSignal 会阻塞直到收到消息或超时
-      -- server 在 pull_signal timeout 到期后发 tick, pullSignal 返回 nil
-      pullSignal(1)
-      waited = waited + 1
+      local sig = pullSignal(1)
+      if sig == nil then waited = waited + 1 end
     end
 
     -- 超时清理回调
@@ -3088,6 +3088,7 @@ internet.request = function(url, postData, headers)
 
     -- 请求失败时返回 nil, 与真实 OC 行为一致
     if responseError then
+      elog("internet.request failed: " .. tostring(url) .. " (" .. tostring(responseError) .. ")")
       return nil, responseError
     end
     return handle

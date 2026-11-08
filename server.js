@@ -21,6 +21,9 @@ const floppyTemplates = require('./lib/floppyTemplates');
 const sysInfo = require('./lib/sysInfo');
 const updateSource = require('./lib/updateSource');
 
+// 部分网络的 IPv6 不可用, 优先解析 IPv4, 避免虚拟机的 HTTP 请求连接失败
+try { require('dns').setDefaultResultOrder('ipv4first'); } catch (_) { /* 旧版 Node 无此 API */ }
+
 // 软盘模板兼容性别名（旧名称 → 新名称）
 const floppyAliases = {
   'DataCard': 'Data',
