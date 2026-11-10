@@ -22,7 +22,7 @@
 
 ## 🧭 项目说明
 
-OC Emulator 用一个独立的 Lua 进程模拟整台 OpenComputers 计算机：磁盘、屏幕、GPU、键盘、网卡、红石等都以组件形式暴露给系统，因此可以直接安装并运行真实的 OpenOS、MineOS、Plan9k 等系统，而不是脚本模拟的假界面。
+OC Emulator 用一个独立的 Lua 进程模拟整台 OpenComputers 计算机：磁盘、屏幕、GPU、键盘、网卡、红石等都以组件形式暴露给系统，因此可以直接安装并运行真实的 OpenOS、MineOS、Plan9k 等系统。
 
 主要能力：
 
@@ -58,7 +58,7 @@ Mods 的完整 API 映射、与原版的差异说明、API 快捷索引与调用
 
 ### 1. Windows
 
-下载后直接双击 `run.bat`。脚本会依次完成：
+下载发布包（zip）后先解压到任意目录，再双击解压出来的 `run.bat`。脚本会依次完成：
 
 1. 检查 / 安装 Node.js；
 2. 检查 npm 依赖与 Lua（缺失自动安装；需要 Lua 5.3 或 5.4）；
