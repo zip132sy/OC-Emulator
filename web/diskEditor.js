@@ -54,8 +54,8 @@ const DiskEditor = (() => {
               <button class="btn btn-icon" title="${I18N.t('disk.new-file')}" data-action="new-file" id="disk-newfile-${cssEsc(diskPath)}">📄</button>
               <button class="btn btn-icon" title="${I18N.t('disk.upload-file')}" data-action="upload" id="disk-upload-${cssEsc(diskPath)}">⬆</button>
               <div class="disk-tree-divider"></div>
-              <button class="btn disk-tree-lock-btn" data-action="unlock" id="disk-tree-unlock-${cssEsc(diskPath)}" title="${I18N.t('disk.unlock')}">🔓 ${I18N.t('disk.unlock')}</button>
-              <button class="btn disk-tree-lock-btn" data-action="lock" id="disk-tree-lock-${cssEsc(diskPath)}" title="${I18N.t('disk.lock')}">🔒 ${I18N.t('disk.lock')}</button>
+              <button class="btn disk-tree-lock-btn" data-action="unlock" id="disk-tree-unlock-${cssEsc(diskPath)}" title="${I18N.t('disk.unlock')}">${I18N.t('disk.unlock')}</button>
+              <button class="btn disk-tree-lock-btn" data-action="lock" id="disk-tree-lock-${cssEsc(diskPath)}" title="${I18N.t('disk.lock')}">${I18N.t('disk.lock')}</button>
               <button class="btn btn-icon" title="${I18N.t('disk.expand-all')}" data-action="expand-all" id="disk-expand-all-${cssEsc(diskPath)}">⊞</button>
               <button class="btn btn-icon" title="${I18N.t('disk.collapse-all')}" data-action="collapse-all" id="disk-collapse-all-${cssEsc(diskPath)}">⊟</button>
             </div>
