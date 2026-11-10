@@ -4,6 +4,48 @@
 
 ---
 
+## 目录
+
+- [1. 这是什么](#1-这是什么)
+- [2. 快速开始](#2-快速开始)
+- [3. 设计说明与差异](#3-设计说明与差异)
+  - [3.2 side 编号](#32-side-编号)
+  - [3.4 与真实 OC 的差异](#34-与真实-oc-的差异)
+  - [3.5 机器人高层 API 的参数含义](#35-机器人高层-api-的参数含义)
+  - [3.6 调用约定与返回值](#36-调用约定与返回值)
+- [4. 完整 API 映射表](#4-完整-api-映射表)
+  - [4.1 机器人组件 (component robot)](#41-机器人组件-component-robot)
+  - [4.2 无人机组件 (component drone)](#42-无人机组件-component-drone)
+  - [4.3 单片机组件 (component microcontroller)](#43-单片机组件-component-microcontroller)
+  - [4.4 机器人高层 API (require("robot") 风格)](#44-机器人高层-api-requirerobot-风格)
+  - [4.5 Mods 扩展 API](#45-mods-扩展-api)
+- [5. 命名空间与扁平别名](#5-命名空间与扁平别名)
+- [6. 扩展 API 速查](#6-扩展-api-速查)
+- [7. 示例](#7-示例)
+- [8. 控制面板中的 Mods 设备](#8-控制面板中的-mods-设备)
+- [9. Mods 文件夹与内置 EFI](#9-mods-文件夹与内置-efi)
+- [10. 无线控制协议（T1 / T2 均可）](#10-无线控制协议t1--t2-均可)
+- [11. 3D 场景与标记点](#11-3d-场景与标记点)
+- [12. 实现与测试](#12-实现与测试)
+
+### API 快捷定位
+
+| 想查什么 | 去哪里 |
+|----------|--------|
+| 原版 `robot` / `drone` / `microcontroller` 的 API 对应哪个 `mods` 调用 | [§4.1](#41-机器人组件-component-robot) – [§4.3](#43-单片机组件-component-microcontroller) |
+| 机器人高层写法（`require("robot")` 风格） | [§4.4](#44-机器人高层-api-requirerobot-风格) |
+| 物品栏、储罐、虚拟世界等 Mods 独有 API | [§4.5](#45-mods-扩展-api)、[§6](#6-扩展-api-速查) |
+| 参数写法、返回值与失败原因 | [§3.6](#36-调用约定与返回值) |
+| side 编号与字符串别名 | [§3.2](#32-side-编号) |
+| 与 OpenComputers 原版的行为差异 | [§3.4](#34-与真实-oc-的差异) |
+| 可直接运行的完整例子 | [§7](#7-示例) |
+| 核电站组件 API | [§9.4](#94-核电站组件-apireactor_chamber--redstone--transposer) |
+| 运行时列出全部 API | `mods.listAPIs()` |
+| 运行时按原版名反查 | `mods.map("robot.move")` |
+| 运行时中文帮助 | `print(mods.help())` |
+
+---
+
 ## 1. 这是什么
 
 OpenComputers 原版把移动自动化拆成了三个组件：
@@ -98,14 +140,16 @@ print(mods.help())
 
 ### 3.4 与真实 OC 的差异
 
-- 模拟器没有 Minecraft 世界，因此内置虚拟世界 `mods.world`。方块、液体、容器、实体、掉落物都由脚本创建。
-- 机器人移动不做重力/飞行高度限制，只检查目标格是否被实体或实心方块阻挡，以及是否超出世界边界（默认 ±256）。
-- `detect` 统一采用机器人语义：`air` / `solid` / `liquid` / `replaceable` / `passable` / `entity`。真实 OC 中无人机对可穿过方块也返回 `true`，这里不区分设备。
-- `swing` 不检查方块硬度与工具等级；装备工具时每次消耗 1 点耐久。
-- 物品栏固定 16 格，没有工具腰带。外部 `getInventory(side)` 在左/右侧返回空表。
-- 流体采用简化模型：默认 1000mB 容量，储罐默认容量 16000mB。
-- 世界与设备状态**不跨 VM 重启持久化**。
-- 无人机飞行进度依赖 `os.clock()`（VM 的 CPU 时间），查询 `getOffset()`/`getVelocity()` 时会自动推进。
+| 方面 | OpenComputers 原版 | 本模拟器 |
+|------|--------------------|----------|
+| 世界 | Minecraft 真实世界 | 内置虚拟世界 `mods.world`，方块、液体、容器、实体、掉落物都由脚本创建 |
+| 移动限制 | 受重力、飞行高度、方块碰撞影响 | 不做重力与飞行高度限制，只检查目标格是否被实体或实心方块阻挡，以及是否超出世界边界（默认 ±256） |
+| `detect` 语义 | 无人机对可穿过方块也返回 `true`，按设备区分 | 统一采用机器人语义：`air` / `solid` / `liquid` / `replaceable` / `passable` / `entity` |
+| `swing` | 检查方块硬度与工具等级 | 不检查硬度与工具等级；装备工具时每次消耗 1 点耐久 |
+| 物品栏 | 可升级，含工具腰带 | 固定 16 格，没有工具腰带；外部 `getInventory(side)` 在左/右侧返回空表 |
+| 流体 | 完整流体模型 | 简化模型：默认 1000mB 容量，储罐默认容量 16000mB |
+| 持久化 | 世界与设备状态存档 | **不跨 VM 重启持久化** |
+| 无人机推进 | 由服务器 tick 推进 | 依赖 `os.clock()`（VM 的 CPU 时间），查询 `getOffset()` / `getVelocity()` 时自动推进 |
 
 ### 3.5 机器人高层 API 的参数含义
 
@@ -115,6 +159,37 @@ print(mods.help())
 - `placeUp/dropDown/...` 作用在正上/正下方。
 - `place/swing/use` 的第一个参数是**作用面**，不是机器人侧。
 - 对应地，扁平 `mods.place(side, face, sneaky)` / `mods.swing(side, face, sneaky)` 采用**组件语义**：第一个参数是机器人侧。
+
+### 3.6 调用约定与返回值
+
+**调用方式**（三者等价）：
+
+```lua
+local mods = require("mods")
+print(mods.getVersion())
+-- print(component.mods.getVersion())
+-- print(component.proxy(component.list("mods")()).getVersion())
+```
+
+**参数约定**
+
+- `side` 接受数字 0–5 或字符串别名（见 3.2），`mods.detect(3)` 与 `mods.detect("front")` 等价。
+- 方块坐标统一为 `(x, y, z)`：`+x` 向东、`+y` 向上、`+z` 向南。
+- 方括号表示可选参数，例如 `mods.give(name[, count[, meta]])`。
+- `place` / `swing` / `use` 的 `face` 参数是作用面；`mods.robot.*` 的第一个参数是机器人侧（见 3.5）。
+
+**返回值约定**
+
+| 类型 | 返回形式 |
+|------|----------|
+| 动作类（移动、挖掘、放置、丢弃、吸取、流体） | 成功返回 `true`；失败返回 `nil, 原因` |
+| 查询类（`getPosition` / `getTank` / `getInventory` 等） | 直接返回一个或多个值，字段含义见对应条目；无对应数据时通常返回 `nil` 或空表 |
+| 物品增减（`give` / `take`） | 返回实际放入或取出的数量 |
+| 映射查询（`map` / `apiMap` / `help` / `listAPIs`） | 返回字符串、表或可直接 `print` 的文本 |
+
+失败原因字符串为英文，例如 `nil, "impossible move: blocked by stone"`，可以直接打印，也可以按前缀匹配后转成自己的提示。
+
+单片机处于停止状态时，动作类 API 返回 `nil, "microcontroller is stopped"`，查询类仍可用（见 3.3）。
 
 ---
 
