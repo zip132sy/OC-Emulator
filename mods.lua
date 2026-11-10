@@ -642,7 +642,6 @@ end
 -- ============================================================
 -- The control panel stores main/offhand tools by id; this table lists their default durability
 local TOOL_DURABILITY = {
-  diamond_drill = 2400,
   diamond_pickaxe = 1561,
   diamond_axe = 1561,
   diamond_shovel = 1561,
