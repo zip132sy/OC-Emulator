@@ -570,7 +570,7 @@ const Wizard = (() => {
         </div>
         <div class="form-row">
           <label>${T('wizard.disk-size', '磁盘大小')}</label>
-          <input type="number" id="dc-size-kb" value="${Math.floor(currentSize / 1024)}" min="${Math.floor(OPTIONS.diskMinSize / 1024)}" max="${Math.floor(maxSize / 1024)}" step="1" style="width:100px;"> KB
+          <input type="number" id="dc-size-mb" value="${(currentSize / 1024 / 1024).toFixed(3).replace(/\.?0+$/, '')}" min="${OPTIONS.diskMinSize / 1024 / 1024}" max="${maxSize / 1024 / 1024}" step="0.125" style="width:100px;"> MB
           <span class="hint" id="dc-size-hint">${I18N.t('wizard.disk-range', { min: formatSize(OPTIONS.diskMinSize), max: formatSize(maxSize) })}</span>
         </div>
         <div class="form-row">
@@ -609,19 +609,19 @@ const Wizard = (() => {
         const modalFooter = document.getElementById('modal-footer');
 
         const tierSel = modalBody.querySelector('#dc-tier');
-        const sizeInput = modalBody.querySelector('#dc-size-kb');
+        const sizeInput = modalBody.querySelector('#dc-size-mb');
         const sizeHint = modalBody.querySelector('#dc-size-hint');
 
         // 等级变化时自动调整大小和范围
         tierSel.addEventListener('change', () => {
           const newTier = parseInt(tierSel.value, 10);
           const newMax = OPTIONS.diskSize[newTier];
-          sizeInput.max = Math.floor(newMax / 1024);
+          sizeInput.max = newMax / 1024 / 1024;
           sizeHint.textContent = I18N.t('wizard.disk-range', { min: formatSize(OPTIONS.diskMinSize), max: formatSize(newMax) });
           // 如果当前大小超过新上限, 调整为最大
-          const currentKB = parseInt(sizeInput.value, 10);
-          if (currentKB > newMax / 1024) {
-            sizeInput.value = Math.floor(newMax / 1024);
+          const currentMB = parseFloat(sizeInput.value);
+          if (currentMB > newMax / 1024 / 1024) {
+            sizeInput.value = newMax / 1024 / 1024;
           }
         });
 
@@ -650,14 +650,14 @@ const Wizard = (() => {
             } else if (action === 'dc-ok') {
               const newTier = parseInt(tierSel.value, 10);
               const newLabel = modalBody.querySelector('#dc-label').value.trim() || (spec.name + '-' + diskKey);
-              const sizeKB = parseInt(sizeInput.value, 10);
-              const maxKB = Math.floor(OPTIONS.diskSize[newTier] / 1024);
-              const minKB = Math.floor(OPTIONS.diskMinSize / 1024);
-              const finalSizeKB = Math.max(minKB, Math.min(maxKB, sizeKB || maxKB));
+              const sizeMB = parseFloat(sizeInput.value);
+              const maxMB = OPTIONS.diskSize[newTier] / 1024 / 1024;
+              const minMB = OPTIONS.diskMinSize / 1024 / 1024;
+              const finalSizeMB = Math.max(minMB, Math.min(maxMB, isFinite(sizeMB) ? sizeMB : maxMB));
 
               hw[diskKey] = 'new';
               hw[diskKey + 'Tier'] = newTier;
-              hw[diskKey + 'Size'] = finalSizeKB * 1024;
+              hw[diskKey + 'Size'] = Math.round(finalSizeMB * 1024 * 1024);
               hw[diskKey + 'Label'] = newLabel;
 
               // 检查是否有文件夹导入

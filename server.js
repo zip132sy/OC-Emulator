@@ -20,6 +20,7 @@ const { DeviceBus } = require('./lib/deviceBus');
 const floppyTemplates = require('./lib/floppyTemplates');
 const sysInfo = require('./lib/sysInfo');
 const updateSource = require('./lib/updateSource');
+const modTransfer = require('./lib/modTransfer');
 
 // 部分网络的 IPv6 不可用, 优先解析 IPv4, 避免虚拟机的 HTTP 请求连接失败
 try { require('dns').setDefaultResultOrder('ipv4first'); } catch (_) { /* 旧版 Node 无此 API */ }
@@ -899,6 +900,36 @@ async function handleApi(req, res, body) {
         return json(res, { error: 'Method not allowed' }, 405);
       }
 
+      // /api/mods/import 与 /api/mods/download 是固定路由,
+      // 要在 modName 解析之前拦截 ("import" / "download" 不是合法设备名, 但先拦更稳妥)
+      if (parts.length === 3 && parts[2] === 'import' && method === 'POST') {
+        try {
+          const payload = JSON.parse(body || '{}');
+          if (typeof payload.data !== 'string' || !payload.data) {
+            return json(res, { error: '缺少 zip 数据' }, 400);
+          }
+          if (payload.data.length > modTransfer.MAX_DOWNLOAD_BYTES * 2) {
+            return json(res, { error: '文件过大 (上限 64MB)' }, 413);
+          }
+          const zipBuf = Buffer.from(payload.data, 'base64');
+          const name = modTransfer.importModFromZip(zipBuf, modsManager, payload.name);
+          return json(res, { ok: true, name });
+        } catch (e) {
+          return json(res, { error: e.message }, 400);
+        }
+      }
+      if (parts.length === 3 && parts[2] === 'download' && method === 'POST') {
+        try {
+          const payload = JSON.parse(body || '{}');
+          const dlUrl = await modTransfer.resolveDownloadUrl(payload.url);
+          const zipBuf = await modTransfer.fetchToBuffer(dlUrl, 5);
+          const name = modTransfer.importModFromZip(zipBuf, modsManager, payload.name);
+          return json(res, { ok: true, name });
+        } catch (e) {
+          return json(res, { error: e.message }, 400);
+        }
+      }
+
       const modName = decodeURIComponent(parts[2] || '');
       if (!validModName(modName)) return json(res, { error: 'Invalid mod name' }, 400);
 
@@ -920,6 +951,28 @@ async function handleApi(req, res, body) {
 
       if (parts.length === 4) {
         const action = parts[3];
+
+        // 导出为 zip 下载; 运行中的设备磁盘可能正被子进程写入, 先停止再导出
+        if (action === 'export' && method === 'GET') {
+          const dir = modsManager.modDir(modName);
+          if (!fs.existsSync(dir)) return json(res, { error: 'Mod not found' }, 404);
+          const mod = modsManager.getMod(modName);
+          if (mod && (mod.state === 'running' || mod.state === 'paused' || mod.state === 'starting')) {
+            return json(res, { error: '设备正在运行, 请先停止再导出' }, 409);
+          }
+          try {
+            const zipBuf = modTransfer.buildModZip(dir);
+            res.writeHead(200, {
+              'Content-Type': 'application/zip',
+              'Content-Length': zipBuf.length,
+              'Content-Disposition': `attachment; filename="${encodeURIComponent(modName)}.zip"`,
+            });
+            res.end(zipBuf);
+          } catch (e) {
+            return json(res, { error: e.message }, 500);
+          }
+          return;
+        }
 
         if (action === 'start' && method === 'POST') {
           return json(res, modsManager.start(modName));

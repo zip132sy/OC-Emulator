@@ -751,7 +751,7 @@ const Console = (() => {
             <label style="display:flex; align-items:center; gap:6px;">
               <input type="radio" name="floppy-size" value="custom">
               <span>${t('hw.floppy-size-custom')}</span>
-              <input type="number" id="floppy-custom-size" min="131072" max="4194304" step="1024" placeholder="131072~4194304" style="width:140px;">
+              <input type="number" id="floppy-custom-size" min="0.125" max="4" step="0.125" placeholder="0.125 ~ 4" style="width:140px;">
               <span style="color:var(--muted); font-size:12px;">${t('hw.floppy-size-custom-hint')}</span>
             </label>
           </div>
@@ -768,8 +768,9 @@ const Console = (() => {
         let size = 524288; // 默认 512KB
         if (checked) {
           if (checked.value === 'custom') {
-            const v = parseInt(document.querySelector('#floppy-custom-size').value, 10);
-            if (!v || v < 131072 || v > 4194304 || (v % 1024 !== 0)) {
+            const mb = parseFloat(document.querySelector('#floppy-custom-size').value);
+            const v = Math.round(mb * 1024 * 1024);
+            if (!isFinite(mb) || v < 131072 || v > 4194304 || (v % 1024 !== 0)) {
               alert(t('hw.floppy-size-invalid'));
               return;
             }
@@ -829,8 +830,8 @@ const Console = (() => {
           </div>
           <div class="form-row" id="row-disk-size-custom" style="display:none;">
             <label></label>
-            <input type="number" id="new-disk-size-custom" min="131072" max="16777216" step="1024" value="4194304" style="flex:1;">
-            <span style="color:var(--muted); font-size:12px; margin-left:6px;">bytes</span>
+            <input type="number" id="new-disk-size-custom" min="0.125" max="16" step="0.125" value="4" style="flex:1;">
+            <span style="color:var(--muted); font-size:12px; margin-left:6px;">MB</span>
           </div>
           <div class="form-row" id="row-disk-tier">
             <label>${t('hw.disk-tier')}</label>
@@ -916,8 +917,9 @@ const Console = (() => {
 
         let size = parseInt(sizeSelect.value, 10);
         if (isNaN(size)) {
-          size = parseInt(sizeCustomInput.value, 10);
-          if (!size || size < 131072 || size > 16777216 || (size % 1024 !== 0)) {
+          const mb = parseFloat(sizeCustomInput.value);
+          size = Math.round(mb * 1024 * 1024);
+          if (!isFinite(mb) || size < 131072 || size > 16777216 || (size % 1024 !== 0)) {
             alert(t('hw.disk-size-invalid'));
             return;
           }

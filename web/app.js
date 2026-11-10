@@ -1081,6 +1081,7 @@ const App = (() => {
       { label: I18N.t('ctx.start'), action: () => api(`mods/${encodeURIComponent(modName)}/start`, { method: 'POST' }).then(() => refreshMods(true)) },
       { label: I18N.t('ctx.stop'), action: () => api(`mods/${encodeURIComponent(modName)}/stop`, { method: 'POST' }).then(() => refreshMods(true)) },
       { label: I18N.t('ctx.restart'), action: () => api(`mods/${encodeURIComponent(modName)}/restart`, { method: 'POST' }).then(() => refreshMods(true)) },
+      { label: I18N.t('ctx.export-mod'), action: () => exportMod(modName) },
       { label: I18N.t('ctx.delete'), action: async () => {
         if (confirm(I18N.t('ctx.confirm-delete-mod').replace('{name}', modName))) {
           await api(`mods/${encodeURIComponent(modName)}`, { method: 'DELETE' });
@@ -1096,6 +1097,131 @@ const App = (() => {
       const i = parseInt(idx, 10);
       if (items[i]) items[i].action();
     }
+  }
+
+  // 导出 Mod: 拉取服务端打包好的 zip 并触发浏览器下载
+  async function exportMod(modName) {
+    try {
+      const res = await fetch(`/api/mods/${encodeURIComponent(modName)}/export`);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || `HTTP ${res.status}`);
+      }
+      const blob = await res.blob();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `${modName}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+      setStatus(I18N.t('mods.export.done').replace('{name}', modName));
+    } catch (e) {
+      alert(e.message);
+    }
+  }
+
+  // 导入 Mod: 本地 zip 上传, 或从网络地址 (直链 / GitHub / Gitee 仓库) 下载
+  function openImportModDialog() {
+    Modal.open({
+      title: I18N.t('mods.import.title'),
+      size: 'small',
+      bodyHTML: `
+        <div class="form-row"><label>${I18N.t('mods.import.source')}</label>
+          <select id="import-mod-source">
+            <option value="file">${I18N.t('mods.import.source-file')}</option>
+            <option value="url">${I18N.t('mods.import.source-url')}</option>
+          </select>
+        </div>
+        <div class="form-row" id="import-mod-file-row">
+          <label>${I18N.t('mods.import.file')}</label>
+          <input type="file" id="import-mod-file" accept=".zip,application/zip">
+        </div>
+        <div class="form-row hidden" id="import-mod-url-row">
+          <label>${I18N.t('mods.import.url')}</label>
+          <input type="text" id="import-mod-url" placeholder="https://github.com/owner/repo" style="flex:1;">
+        </div>
+        <div class="form-row hidden" id="import-mod-url-hint-row">
+          <div></div>
+          <div class="hint">${I18N.t('mods.import.url-hint')}</div>
+        </div>
+        <div class="form-row">
+          <label>${I18N.t('mods.import.name')}</label>
+          <input type="text" id="import-mod-name" placeholder="${I18N.t('mods.import.name-placeholder')}" style="flex:1;">
+        </div>
+      `,
+      footerHTML: `
+        <button class="btn" data-action="modal-close">${I18N.t('wizard.cancel')}</button>
+        <button class="btn btn-primary" id="import-mod-ok">${I18N.t('mods.import.ok')}</button>
+      `,
+      onMount(body, footer) {
+        const sourceSel = body.querySelector('#import-mod-source');
+        const fileRow = body.querySelector('#import-mod-file-row');
+        const urlRow = body.querySelector('#import-mod-url-row');
+        const urlHintRow = body.querySelector('#import-mod-url-hint-row');
+        const fileInput = body.querySelector('#import-mod-file');
+        const urlInput = body.querySelector('#import-mod-url');
+        const nameInput = body.querySelector('#import-mod-name');
+        const okBtn = footer.querySelector('#import-mod-ok');
+        const cancel = footer.querySelector('[data-action="modal-close"]');
+        if (cancel) cancel.addEventListener('click', () => Modal.close());
+
+        sourceSel.addEventListener('change', () => {
+          const isFile = sourceSel.value === 'file';
+          fileRow.classList.toggle('hidden', !isFile);
+          urlRow.classList.toggle('hidden', isFile);
+          urlHintRow.classList.toggle('hidden', isFile);
+        });
+
+        okBtn.addEventListener('click', async () => {
+          const name = nameInput.value.trim();
+          if (name && !/^[A-Za-z0-9_-]{1,32}$/.test(name)) {
+            alert(I18N.t('mods.new.invalid-name'));
+            return;
+          }
+          okBtn.disabled = true;
+          try {
+            let result;
+            if (sourceSel.value === 'file') {
+              const file = fileInput.files && fileInput.files[0];
+              if (!file) {
+                alert(I18N.t('mods.import.no-file'));
+                okBtn.disabled = false;
+                return;
+              }
+              if (file.size > 64 * 1024 * 1024) {
+                alert(I18N.t('mods.import.too-large'));
+                okBtn.disabled = false;
+                return;
+              }
+              const buf = await file.arrayBuffer();
+              const bytes = new Uint8Array(buf);
+              let bin = '';
+              for (let i = 0; i < bytes.length; i += 0x8000) {
+                bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+              }
+              result = await api('mods/import', { method: 'POST', body: { name, data: btoa(bin) } });
+            } else {
+              const url = urlInput.value.trim();
+              if (!url) {
+                alert(I18N.t('mods.import.no-url'));
+                okBtn.disabled = false;
+                return;
+              }
+              setStatus(I18N.t('mods.import.downloading'));
+              result = await api('mods/download', { method: 'POST', body: { name, url } });
+            }
+            Modal.close();
+            await refreshMods(true);
+            setSidebarMode('mod');
+            if (result && result.name) openModTab(result.name);
+          } catch (e) {
+            alert(e.message);
+            okBtn.disabled = false;
+          }
+        });
+      },
+    });
   }
 
   function openNewModDialog() {
@@ -1660,6 +1786,7 @@ const App = (() => {
         const action = btn.dataset.action;
         if (action === 'new-vm') Wizard.open(refreshVMs);
         else if (action === 'new-mod') openNewModDialog();
+        else if (action === 'import-mod') openImportModDialog();
         else if (action === 'refresh') { refreshVMs(true); refreshMods(true); }
         else if (action === 'check-update') checkUpdate();
         else if (action === 'lua-recheck') checkLua();
@@ -1775,6 +1902,7 @@ const App = (() => {
     const set = (id, key) => { const el = document.getElementById(id); if (el) el.textContent = t(key); };
     set('menu-new-vm', 'menu.new-vm');
     set('menu-new-mod', 'menu.new-mod');
+    set('menu-import-mod', 'menu.import-mod');
     set('menu-import-vm', 'menu.import-vm');
     set('menu-refresh', 'menu.refresh');
     set('menu-check-update', 'menu.check-update');
