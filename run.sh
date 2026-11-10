@@ -7,8 +7,9 @@ echo "==============================================="
 echo ""
 
 # ------------------------------------------------------------
-# 守护日志: 记录每次启动 / 崩溃退出 / 卡死重启。
-#   即使终端输出被滚动掉或窗口被关闭, 也能事后查看发生了什么。
+# Guardian log: records every start / crash exit / hung restart.
+#   Lets you investigate afterwards even when the terminal output has scrolled
+#   away or the window was closed.
 # ------------------------------------------------------------
 GUARD_LOG="$(pwd)/logs/guardian.log"
 mkdir -p "$(dirname "$GUARD_LOG")" 2>/dev/null
@@ -195,16 +196,17 @@ echo ""
 RESTART_COUNT=0
 MAX_RESTARTS=10
 BACKOFF_SECONDS=2
-# 服务器启动时会把"实际监听端口"和"自己的进程号"写到这两个文件; 配置端口(8080)被
-# 占用时服务器会自动换到 8081 等端口, 看门狗若只认 8080 就会监视错误端口 ——
-# 结果是服务真的卡死时反而没人管。这里始终以文件里的实际值为准。
+# The server writes its actual listening port and its own PID to these two files
+# at startup; if the configured port (8080) is taken it auto-switches to 8081 and
+# so on, and a watchdog that only knew 8080 would watch the wrong port -- leaving
+# a genuinely hung server unmanaged. Always trust the values written to the files.
 WATCHDOG_PORT_FILE="$(pwd)/cache/.server-port"
 WATCHDOG_PID_FILE="$(pwd)/cache/.server-pid"
 WATCHDOG_INTERVAL=30
 WATCHDOG_TIMEOUT=10
-# 连续 N 次探测失败才认为卡死 (每次间隔 WATCHDOG_INTERVAL 秒)。
+# Only N consecutive failed probes count as a hang (probes are WATCHDOG_INTERVAL seconds apart).
 WATCHDOG_MAX_FAILS=3
-# 服务器刚启动的前 N 轮不做判定: 此时端口可能还没开始监听、状态文件也可能还没写。
+# The first N rounds after startup are not judged: the port may not be listening yet and the state files may not be written.
 WATCHDOG_WARMUP_ROUNDS=2
 
 WATCHDOG_SENTINEL=""
@@ -228,9 +230,9 @@ find_pid_on_port() {
     echo ""
 }
 
-# HTTP 探测: 优先 curl, 退回 wget。
-# 两者都没有时由 start_watchdog 直接禁用卡死检测 —— 否则健康检查永远失败,
-# 会把本来正常的服务反复杀掉。
+# HTTP probe: curl first, wget as fallback.
+# When neither exists, start_watchdog disables hang detection outright -- otherwise
+# the health check would always fail and repeatedly kill a healthy server.
 http_probe() {
     _url="$1"
     _timeout="$2"
@@ -270,17 +272,19 @@ start_watchdog() {
     fi
     WATCHDOG_SENTINEL="$(mktemp -t oc_watchdog.XXXXXX 2>/dev/null || echo "/tmp/oc_watchdog.$$")"
     (
-        _wf=0     # 连续探测失败次数
-        _wr=0     # 已运行的轮数 (用于启动宽限期)
+        _wf=0     # consecutive failed probes
+        _wr=0     # rounds elapsed (for the startup grace period)
         while true; do
             sleep "$WATCHDOG_INTERVAL"
             # Main loop finished -> watchdog stops too
             [ -f "$WATCHDOG_SENTINEL" ] || exit 0
             _wr=$((_wr + 1))
 
-            # 端口与进程号以服务器写入的实际值为准; 文件缺失/内容非法时本轮不做任何判定:
-            # 状态缺失可能只是写文件失败, 也可能正处在重启的空档, 这时重启服务只会误伤
-            # 正在正常工作的进程。宁可少管一次, 也不要错误地杀掉健康的服务。
+            # Port and PID come from the actual values the server wrote; when a file
+            # is missing or invalid this round makes no decision at all:
+            # a missing state may just be a failed write, or a restart gap, and
+            # restarting then would only hurt a process that is working fine.
+            # Better to miss one round than to kill a healthy server.
             _wd_port=""
             if [ -f "$WATCHDOG_PORT_FILE" ]; then
                 _p="$(head -n 1 "$WATCHDOG_PORT_FILE" 2>/dev/null | tr -d '[:space:]')"
@@ -307,21 +311,24 @@ start_watchdog() {
                 continue
             fi
 
-            # 启动宽限期: 服务器可能还在起服务(磁盘镜像同步等 IO 会阻塞事件循环),
-            # 这段时间里的探测失败不能算作卡死。
+            # Startup grace period: the server may still be coming up (disk image
+            # sync and similar IO block the event loop), so probe failures during
+            # this window do not count as a hang.
             if [ "$_wr" -le "$WATCHDOG_WARMUP_ROUNDS" ]; then
                 _wf=0
                 continue
             fi
 
-            # 连续失败才动手: 服务可能只是短暂繁忙(磁盘操作会阻塞事件循环数十秒),
-            # 一次失败就杀掉会误伤正常运行中的服务。
+            # Act only after consecutive failures: the server may just be briefly
+            # busy (disk operations block the event loop for tens of seconds), and
+            # killing on a single failure would hit a normally running server.
             _wf=$((_wf + 1))
             if [ "$_wf" -lt "$WATCHDOG_MAX_FAILS" ]; then
                 continue
             fi
 
-            # 已经连续失败多轮, 动手前再立刻复查一次, 避免把偶发的探测失败当成卡死。
+            # Several failures in a row: re-check once right before acting, so an
+            # isolated probe failure is not treated as a hang.
             if http_probe "http://127.0.0.1:${_wd_port}/api/version" "$WATCHDOG_TIMEOUT"; then
                 _wf=0
                 continue
@@ -329,22 +336,23 @@ start_watchdog() {
 
             _hung_pid="$(find_pid_on_port "$_wd_port")"
             if [ -z "$_hung_pid" ]; then
-                # 端口上根本没有监听进程: 说明服务已经退出(守护脚本会负责重启),
-                # 这里不需要也不应该杀任何进程。
+                # No listener on the port at all: the server already exited (the
+                # guardian handles restarts), so nothing should or needs to be killed.
                 _wf=0
                 echo "[$(date '+%Y-%m-%d %H:%M:%S')] watchdog: port ${_wd_port} unresponsive (no listening process)" >> "$GUARD_LOG" 2>/dev/null
                 continue
             fi
             if [ -n "$_wd_pid" ] && [ "$_hung_pid" != "$_wd_pid" ]; then
-                # 状态文件里的进程号与端口上的监听进程对不上: 状态已过期(来自上一次运行
-                # 或另一个实例), 此时杀掉监听进程可能误伤无关的服务。
+                # The PID in the state file does not match the listener on the port:
+                # the state is stale (from a previous run or another instance), and
+                # killing the listener could hit an unrelated service.
                 _wf=0
                 echo "[$(date '+%Y-%m-%d %H:%M:%S')] watchdog: port ${_wd_port} unresponsive but listener PID ${_hung_pid} != recorded PID ${_wd_pid}, skipped" >> "$GUARD_LOG" 2>/dev/null
                 continue
             fi
 
-            # 无响应: 先请求优雅重启(服务会先停掉所有虚拟机再退出, 退出码 5),
-            # 该请求也失败时才强杀进程。
+            # Unresponsive: ask for a graceful restart first (the server stops all
+            # VMs and exits with code 5), and only force-kill if that request fails.
             if http_post "http://127.0.0.1:${_wd_port}/api/server/restart" 5; then
                 _wf=0
                 echo "[watchdog] server on port ${_wd_port} unresponsive; graceful restart requested"
@@ -384,8 +392,9 @@ while true; do
     glog "starting server (attempt ${RESTART_COUNT}/${MAX_RESTARTS})"
     start_watchdog
 
-    # 稳定运行标记: 服务器启动满 60 秒后会创建该文件, 守护脚本据此判断
-    # "上一次运行是健康的" 并重置重启计数。
+    # Uptime marker: the server creates this file after running for 60 seconds;
+    # the guardian uses it to tell that "the last run was healthy" and resets the
+    # restart counter.
     UPTIME_MARK="${TMPDIR:-/tmp}/oc_uptime_ok.$$"
     rm -f "$UPTIME_MARK"
     export OC_UPTIME_MARKER="$UPTIME_MARK"
@@ -442,8 +451,9 @@ while true; do
         continue
     fi
 
-    # 上一次运行是健康的 (服务器自己打了稳定运行标记) -> 重置重启计数与退避。
-    # 否则长时间运行期间的偶发崩溃会累积消耗重启预算, 守护脚本最终放弃。
+    # The previous run was healthy (the server set the uptime marker) -> reset the
+    # restart counter and backoff. Otherwise occasional crashes during long runs
+    # would eat the restart budget until the guardian gives up.
     if [ "$RAN_LONG" -eq 1 ]; then
         RESTART_COUNT=0
         BACKOFF_SECONDS=2

@@ -1,6 +1,6 @@
 // ============================================================
-// i18n.js - 多语言支持 (中文 / English)
-// 语言选择保存在 localStorage, 首次使用弹出选择框
+// i18n.js - multi-language support (Chinese / English)
+// The chosen language lives in localStorage; first-time visitors get a picker
 // ============================================================
 
 const I18N = (() => {
@@ -8,7 +8,7 @@ const I18N = (() => {
 
   const translations = {
     zh: {
-      // 顶部菜单栏
+      // Top menu bar
       'app.title': 'OC Emulator',
       'app.page-title': 'OC Emulator - Web 控制面板',
       'menu.new-vm': '＋ 新建虚拟机',
@@ -47,7 +47,7 @@ const I18N = (() => {
       'ws.connecting': 'WS: 连接中…',
       'ws.error': 'WS: 错误',
 
-      // 侧边栏
+      // Sidebar
       'sidebar.vm-library': '虚拟机库',
       'sidebar.mod-library': 'Mods 设备',
       'sidebar.vm-tab': '虚拟机',
@@ -55,13 +55,13 @@ const I18N = (() => {
       'sidebar.no-vm': '暂无虚拟机\n点击「新建虚拟机」开始',
       'sidebar.no-mod': '暂无 Mod\n点击「新建 Mod」开始',
 
-      // 欢迎页
+      // Welcome page
       'welcome.title': 'OC Emulator',
       'welcome.subtitle': 'OpenComputers 模拟器 · Web 控制面板 v2.0',
       'welcome.hint': '从左侧选择一个虚拟机,或点击「新建虚拟机」开始。',
       'tab.close': '关闭',
 
-      // VM 工具栏
+      // VM toolbar
       'vm.start': '▶ 启动',
       'vm.pause': '⏸ 暂停',
       'vm.resume': '▶ 恢复',
@@ -78,11 +78,11 @@ const I18N = (() => {
       'vm.state.error': '[错误]',
       'vm.state.unknown': '[未启动]',
 
-      // 全屏按钮
+      // Fullscreen button
       'fs.btn': '⛶ 全屏',
       'fs.btn.title': '全屏 (双击画布也可全屏)',
 
-      // 输入法 (软键盘) 按钮
+      // IME (on-screen keyboard) buttons
       'ime.btn': '⌨ 输入法',
       'ime.btn.title': '打开手机软键盘输入 (再次点击收起)',
       'vkbd.btn': '⌨ 按键',
@@ -93,7 +93,7 @@ const I18N = (() => {
       'scroll.up.title': '向上滚动',
       'scroll.down.title': '向下滚动',
 
-      // 日志面板
+      // Log panel
       'log.title': '日志',
       'log.export': '📥 导出',
       'log.export.title': '导出日志为 TXT 文件',
@@ -106,14 +106,14 @@ const I18N = (() => {
       'log.toggle.title': '最小化/展开',
       'log.waiting': '等待 VM 启动…',
 
-      // 状态
+      // Status
       'status.ready': '就绪',
       'status.vm-loaded': '已加载 {count} 个虚拟机',
       'status.mod-loaded': '已加载 {count} 个 Mod',
       'status.mod-load-failed': '加载 Mod 列表失败',
       'status.vm-load-failed': '加载虚拟机列表失败',
 
-      // Mods 设备
+      // Mod devices
       'mods.type.drone': '无人机',
       'mods.type.robot': '机器人',
       'mods.type.mcu': '单片机',
@@ -125,7 +125,7 @@ const I18N = (() => {
       'mods.new.autostart': '创建后立即启动',
       'mods.new.invalid-name': '名称只能包含字母、数字、下划线、连字符，最多 32 个字符',
 
-      // Mods 导入 / 导出
+      // Mod import / export
       'mods.import.title': '导入 Mod',
       'mods.import.source': '来源',
       'mods.import.source-file': '本地 zip 文件',
@@ -142,7 +142,7 @@ const I18N = (() => {
       'mods.import.downloading': '正在从网络下载 Mod…',
       'mods.export.done': '已导出 {name}.zip',
 
-      // Mods 配置
+      // Mod configuration
       'mods.config.title': '配置',
       'mods.config.efi': 'EFI 程序',
       'mods.config.hardware': '硬件',
@@ -324,7 +324,7 @@ const I18N = (() => {
       'mods.tool.shears': '剪刀',
       'mods.tool.flint_and_steel': '打火石',
 
-      // IC2 核电站
+      // IC2 nuclear reactor
       'mods.type.reactor': '核电站',
       'mods.type.machine': '自定义机器',
       'mods.tab.machine': '机器',
@@ -465,7 +465,7 @@ const I18N = (() => {
       'reactor.note.overheat': '温度达到上限，反应堆已自动停机；请先复位堆芯再启动。',
       'reactor.note.depleted': '燃料棒已耗尽，不再发电放热；请更换燃料棒或复位堆芯。',
 
-      // 设置
+      // Settings
       'settings.title': '设置',
       'settings.lua-path': 'Lua 解释器路径',
       'settings.lua-hint': '修改后需重启已运行的虚拟机才能生效。建议使用 Lua 5.1+。',
@@ -518,21 +518,21 @@ const I18N = (() => {
       'server.restarting': '正在重启服务…页面将在服务恢复后自动重连。',
       'server.stopped': '服务已停止。需要手动重新启动 run.bat / run.sh。',
 
-      // 暂停遮罩
+      // Pause overlay
       'paused.overlay': '已暂停',
       'paused.overlay.hint': '点击「恢复」继续运行',
 
-      // 重启遮罩
+      // Reboot overlay
       'restarting.overlay': '正在重启…',
       'restarting.overlay.hint': '系统重启完成后将自动恢复显示',
 
-      // 语言选择弹窗
+      // Language selection dialog
       'lang.select.title': '选择语言 / Select Language',
       'lang.select.hint': '请选择界面语言（可在设置中随时更改）',
       'lang.zh': '简体中文',
       'lang.en': 'English',
 
-      // 新建 VM 向导
+      // New VM wizard
       'wizard.title': '新建虚拟机',
       'wizard.vm-name': '虚拟机名称',
       'wizard.vm-name-hint': '只能使用字母、数字、下划线、连字符,最多 32 个字符',
@@ -601,7 +601,7 @@ const I18N = (() => {
       'wizard.creative': '创造',
       'wizard.disk-created': '新建磁盘',
 
-      // 导出/导入向导
+      // Export/import wizard
       'export.steps.summary': '摘要',
       'export.steps.extra': '额外文件',
       'export.steps.export': '导出',
@@ -659,12 +659,12 @@ const I18N = (() => {
       'import.failed': '✗ 导入失败: ',
       'import.retry': '重试',
 
-      // 硬件编辑器
+      // Hardware editor
       'hw.title': '硬件配置',
       'hw.screen': '屏幕',
       'hw.save': '保存',
 
-      // 磁盘编辑器
+      // Disk editor
       'disk.unlock': '🔓 解锁',
       'disk.lock': '🔒 锁定',
       'disk.format': '⚠ 格式化',
@@ -765,7 +765,7 @@ const I18N = (() => {
       'disk.delete': '🗑 删除',
       'disk.label-prefix': '磁盘: ',
 
-      // 硬件编辑器补充
+      // Hardware editor (continued)
       'hw.apu-tier': 'APU 等级',
       'hw.mem1': '内存 1',
       'hw.mem2': '内存 2',
@@ -845,7 +845,8 @@ const I18N = (() => {
       'hw.disk-mirror-browse-prompt': '输入同步目录路径：',
       'hw.disk-name-empty': '请输入磁盘文件名',
       'hw.disk-name-extension': '磁盘文件名必须以 .ocd 结尾',
-      'hw.disk-size-invalid': '磁盘容量必须在 0.125 ~ 16 MB 之间 (最小步进 0.125 MB)',
+      'hw.disk-size-invalid': '磁盘容量必须在 0.125 ~ 4 MB 之间 (最小步进 0.125 MB)',
+      'hw.disk-size-tier-invalid': '容量超过所选等级上限, 该等级最大 {size} MB',
       'hw.floppy-size-title': '选择软盘大小',
       'hw.floppy-size-hint': '请选择或输入软盘容量 (单位 MB, 最小步进 0.125, 限 0.125 ~ 4 MB)',
       'hw.floppy-size-128k': '128 KB',
@@ -885,12 +886,12 @@ const I18N = (() => {
       'hw.option-screen-t2': 'T2 (80x25)',
       'hw.option-screen-t3': 'T3 (160x50)',
 
-      // 通用按钮
+      // Shared buttons
       'btn.cancel': '取消',
       'btn.create': '创建',
       'btn.save-cfg': '保存配置',
 
-      // VM 列表元信息
+      // VM list metadata
       'vm.meta.apu': 'APU',
       'vm.meta.ram': '内存',
       'vm.meta.creative': '创造',
@@ -1421,7 +1422,7 @@ const I18N = (() => {
       'lang.zh': '简体中文',
       'lang.en': 'English',
 
-      // 新建 VM 向导
+      // New VM wizard
       'wizard.title': 'New VM',
       'wizard.vm-name': 'VM Name',
       'wizard.vm-name-hint': 'Use letters, digits, underscore, hyphen only. Max 32 chars.',
@@ -1548,7 +1549,7 @@ const I18N = (() => {
       'import.failed': '✗ Import failed: ',
       'import.retry': 'Retry',
 
-      // 硬件编辑器
+      // Hardware editor
       'hw.title': 'Hardware Configuration',
       'hw.screen': 'Screen',
       'hw.save': 'Save',
@@ -1631,7 +1632,8 @@ const I18N = (() => {
       'hw.disk-mirror-browse-prompt': 'Enter sync folder path:',
       'hw.disk-name-empty': 'Please enter disk file name',
       'hw.disk-name-extension': 'Disk file name must end with .ocd',
-      'hw.disk-size-invalid': 'Disk size must be between 0.125 and 16 MB (step 0.125 MB)',
+      'hw.disk-size-invalid': 'Disk size must be between 0.125 and 4 MB (step 0.125 MB)',
+      'hw.disk-size-tier-invalid': 'Size exceeds the selected tier limit, which is {size} MB',
       'hw.floppy-size-title': 'Select Floppy Size',
       'hw.floppy-size-hint': 'Choose or enter floppy capacity (in MB, step 0.125, 0.125 ~ 4 MB)',
       'hw.floppy-size-128k': '128 KB',
@@ -1671,7 +1673,7 @@ const I18N = (() => {
       'hw.option-screen-t2': 'T2 (80x25)',
       'hw.option-screen-t3': 'T3 (160x50)',
 
-      // 磁盘编辑器
+      // Disk editor
       'disk.unlock': '🔓 Unlock',
       'disk.lock': '🔒 Lock',
       'disk.format': '⚠ Format',
@@ -1772,7 +1774,7 @@ const I18N = (() => {
       'disk.delete': '🗑 Delete',
       'disk.label-prefix': 'Disk: ',
 
-      // 通用按钮
+      // Shared buttons
       'btn.cancel': 'Cancel',
       'btn.create': 'Create',
       'btn.save-cfg': 'Save Config',

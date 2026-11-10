@@ -1,20 +1,20 @@
 // ============================================================
-// diskEditor.js - 磁盘编辑器 (VMware 风格)
+// diskEditor.js - disk editor (VMware style)
 //
-// 调用: App.openTab({ type:'disk-editor', diskPath, vm, title })
-// diskPath 是相对 projectDir 的路径, 如 "vms/MyVM/disk1.ocd"
+// Usage: App.openTab({ type:'disk-editor', diskPath, vm, title })
+// diskPath is relative to projectDir, e.g. "vms/MyVM/disk1.ocd"
 //
 // REST API:
-//   GET    /api/disks/<path>/info        头信息(不读 body)
-//   POST   /api/disks/<path>/unlock     解锁磁盘
-//   POST   /api/disks/<path>/lock       锁定磁盘
-//   GET    /api/disks/<path>/tree        文件树(仅解锁后)
-//   GET    /api/disks/<path>/read?path=  读取内部文件
-//   GET    /api/disks/<path>/download?path= 下载内部文件 (带 Content-Length)
-//   PUT    /api/disks/<path>/write?path= 写入内部文件
-//   POST   /api/disks/<path>/mkdir       新建文件夹
-//   DELETE /api/disks/<path>/remove?path= 删除内部文件
-//   POST   /api/disks/<path>/format     格式化磁盘
+//   GET    /api/disks/<path>/info        header info (body is not read)
+//   POST   /api/disks/<path>/unlock     unlock the disk
+//   POST   /api/disks/<path>/lock       lock the disk
+//   GET    /api/disks/<path>/tree        file tree (only while unlocked)
+//   GET    /api/disks/<path>/read?path=  read an inner file
+//   GET    /api/disks/<path>/download?path= download an inner file (with Content-Length)
+//   PUT    /api/disks/<path>/write?path= write an inner file
+//   POST   /api/disks/<path>/mkdir       create a folder
+//   DELETE /api/disks/<path>/remove?path= delete an inner file
+//   POST   /api/disks/<path>/format     format the disk
 // ============================================================
 
 const DiskEditor = (() => {
@@ -29,15 +29,15 @@ const DiskEditor = (() => {
         tree: null,
         selectedPath: null,
         selectedFile: null,
-        expandedDirs: new Set(), // 展开的文件夹路径
-        searchQuery: '',         // 搜索关键词
-        currentDir: '/',         // 当前浏览的目录 (上传 / 新建时的默认位置)
-        clipboard: null,         // 右键菜单的复制 / 剪切内容 { mode, path, type }
-        groupCollapsed: { dirs: false, files: false }, // 文件树分组 (文件夹/文件) 折叠状态
-        uploadListCollapsed: false, // 上传列表 (进度) 折叠状态
-        uploadItems: [],         // 上传列表条目 [{ name, path, status, percent, error }]
-        uploadDone: 0,           // 上传完成数
-        uploadFailed: 0,         // 上传失败数
+        expandedDirs: new Set(), // expanded folder paths
+        searchQuery: '',         // search query
+        currentDir: '/',         // current folder (default target for uploads and new items)
+        clipboard: null,         // pending copy / cut payload { mode, path, type }
+        groupCollapsed: { dirs: false, files: false }, // collapsed state of the tree groups (folders / files)
+        uploadListCollapsed: false, // collapsed state of the upload list
+        uploadItems: [],         // upload list entries [{ name, path, status, percent, error }]
+        uploadDone: 0,           // number of completed uploads
+        uploadFailed: 0,         // number of failed uploads
       });
     }
     return sessions.get(diskPath);
@@ -108,14 +108,13 @@ const DiskEditor = (() => {
       </div>
     `;
 
-    // 绑定工具栏按钮
     pane.querySelector(`#disk-mirror-${cssEsc(diskPath)}`).addEventListener('click', () => openMirrorDialog(diskPath, vm));
     pane.querySelector(`#disk-unlock-${cssEsc(diskPath)}`).addEventListener('click', () => unlock(diskPath));
     pane.querySelector(`#disk-lock-${cssEsc(diskPath)}`).addEventListener('click', () => lock(diskPath));
     pane.querySelector(`#disk-format-${cssEsc(diskPath)}`).addEventListener('click', () => format(diskPath));
     const closeViewerBtn = pane.querySelector(`#disk-close-viewer-${cssEsc(diskPath)}`);
     if (closeViewerBtn) closeViewerBtn.addEventListener('click', () => closeViewer(diskPath));
-    // 手机端内容区是悬浮窗口, 文件树头部同样提供锁定 / 解锁入口
+    // On mobile the content area floats, so the tree header also offers lock / unlock
     pane.querySelector(`#disk-tree-unlock-${cssEsc(diskPath)}`).addEventListener('click', () => unlock(diskPath));
     pane.querySelector(`#disk-tree-lock-${cssEsc(diskPath)}`).addEventListener('click', () => lock(diskPath));
 
@@ -124,7 +123,6 @@ const DiskEditor = (() => {
     actionsBar.querySelector('button[data-action="download"]').addEventListener('click', () => downloadCurrent(diskPath));
     actionsBar.querySelector('button[data-action="delete"]').addEventListener('click', () => deleteCurrent(diskPath));
 
-    // 文件树操作按钮
     pane.querySelector(`#disk-newfolder-${cssEsc(diskPath)}`).addEventListener('click', () => newItemDialog(diskPath, 'folder'));
     pane.querySelector(`#disk-newfile-${cssEsc(diskPath)}`).addEventListener('click', () => newItemDialog(diskPath, 'file'));
     pane.querySelector(`#disk-upload-${cssEsc(diskPath)}`).addEventListener('click', async () => {
@@ -140,7 +138,6 @@ const DiskEditor = (() => {
     pane.querySelector(`#disk-expand-all-${cssEsc(diskPath)}`).addEventListener('click', () => expandAll(diskPath));
     pane.querySelector(`#disk-collapse-all-${cssEsc(diskPath)}`).addEventListener('click', () => collapseAll(diskPath));
 
-    // 搜索框
     const searchInput = pane.querySelector(`#disk-search-${cssEsc(diskPath)}`);
     searchInput.addEventListener('input', (e) => {
       const session = getSession(diskPath);
@@ -148,7 +145,6 @@ const DiskEditor = (() => {
       renderTree(diskPath);
     });
 
-    // 文件树右键菜单
     const treeBody = pane.querySelector(`#disk-tree-${cssEsc(diskPath)}`);
     treeBody.addEventListener('contextmenu', (e) => {
       const row = e.target.closest('.disk-tree-row');
@@ -157,7 +153,7 @@ const DiskEditor = (() => {
       openContextMenu(diskPath, e.clientX, e.clientY, row.dataset.path, row.dataset.type, row);
     });
 
-    // 上传列表: 点击标题折叠 / 展开; 恢复上次的上传记录
+    // Upload list: the header toggles collapse; restore the previous upload records
     const uploadHeader = pane.querySelector(`#disk-upload-header-${cssEsc(diskPath)}`);
     if (uploadHeader) {
       uploadHeader.addEventListener('click', () => toggleUploadList(diskPath));
@@ -166,9 +162,7 @@ const DiskEditor = (() => {
       showUploadList(diskPath);
     }
 
-    // 加载信息
     loadInfo(diskPath);
-    // 加载镜像状态
     loadMirrorStatus(diskPath, vm);
   }
 
@@ -181,7 +175,6 @@ const DiskEditor = (() => {
   }
 
   function diskApiPath(diskPath) {
-    // 转换为 URL 段 (相对路径, 比如 "vms/MyVM/disk1.ocd" -> "vms/MyVM/disk1.ocd")
     return encodeURIComponent(diskPath);
   }
 
@@ -216,7 +209,7 @@ const DiskEditor = (() => {
     syncLockButtons(diskPath, false);
   }
 
-  // 同步「内容区工具栏」与「文件树头部」两处锁定按钮的可用状态
+  // Keep both lock buttons (content toolbar and tree header) in the same enabled state
   function syncLockButtons(diskPath, locked) {
     const states = [
       [`disk-unlock-${cssEsc(diskPath)}`, locked],
@@ -253,18 +246,18 @@ const DiskEditor = (() => {
     }
     const query = session.searchQuery.trim().toLowerCase();
     if (query) {
-      // 搜索模式: 收集所有匹配的文件和文件夹
+      // Search mode: collect every matching file and folder
       const matches = [];
       collectMatches(session.tree, '', query, matches);
       if (matches.length === 0) {
         treeEl.innerHTML = `<div class="disk-tree-row" style="color:var(--fg-dim)">${I18N.t('disk.no-match')}</div>`;
         return;
       }
-      // 按路径排序, 并按「文件夹 / 文件」分组显示
+      // Sort by path and render grouped into folders / files
       matches.sort((a, b) => a.path.localeCompare(b.path));
       renderTreeGroups(diskPath, treeEl, matches, (body, m) => renderSearchRow(diskPath, body, m));
     } else {
-      // 正常树视图: 根级按「文件夹 / 文件」分组, 分组标题可折叠
+      // Normal tree: root entries grouped into folders / files with collapsible headers
       const rootChildren = getChildrenArray(session.tree).sort(sortTreeChildren);
       renderTreeGroups(diskPath, treeEl, rootChildren, (body, child) => {
         renderTreeChild(diskPath, body, child, '', 0);
@@ -272,13 +265,13 @@ const DiskEditor = (() => {
     }
   }
 
-  // 文件排序: 文件夹在前, 文件在后; 同类按名称
+  // Sort folders before files, then by name
   function sortTreeChildren(a, b) {
     if (a.type !== b.type) return a.type === 'dir' ? -1 : 1;
     return a.name.localeCompare(b.name);
   }
 
-  // 按「文件夹 / 文件」分组渲染; 点击分组标题可折叠 / 展开该组
+  // Render folders / files as groups; clicking a header collapses or expands it
   function renderTreeGroups(diskPath, container, items, renderItem) {
     const session = getSession(diskPath);
     const groups = [
@@ -308,7 +301,7 @@ const DiskEditor = (() => {
     }
   }
 
-  // 搜索结果的单行 (带完整路径提示)
+  // One search result row (shows the full path as a hint)
   function renderSearchRow(diskPath, container, m) {
     const session = getSession(diskPath);
     const row = document.createElement('div');
@@ -320,14 +313,14 @@ const DiskEditor = (() => {
     row.dataset.type = m.type;
     if (m.type === 'file') {
       bindFileRow(diskPath, row, () => {
-        // 找到这个文件, 展开其父目录
+        // Reveal the file by expanding its parent folder
         const parentPath = m.path.substring(0, m.path.lastIndexOf('/')) || '/';
         expandDirParents(diskPath, parentPath);
         selectFile(diskPath, m.path, row);
       });
     } else {
       row.addEventListener('click', () => {
-        // 跳转到该文件夹, 展开它
+        // Jump to the folder and expand it
         session.searchQuery = '';
         document.getElementById(`disk-search-${cssEsc(diskPath)}`).value = '';
         session.expandedDirs.add(m.path);
@@ -338,7 +331,7 @@ const DiskEditor = (() => {
     container.appendChild(row);
   }
 
-  // 收集搜索匹配的节点
+  // Collect the nodes matching the query
   function collectMatches(node, parentPath, query, results) {
     if (!node || !node.children) return;
     const children = getChildrenArray(node);
@@ -354,14 +347,14 @@ const DiskEditor = (() => {
     }
   }
 
-  // 统一获取子节点数组 (兼容数组和对象两种格式)
+  // Return children as an array (the server may send an array or an object)
   function getChildrenArray(node) {
     if (!node || !node.children) return [];
     if (Array.isArray(node.children)) return node.children;
     return Object.values(node.children);
   }
 
-  // 展开某路径的所有父目录
+  // Expand every ancestor of the given path
   function expandDirParents(diskPath, dirPath) {
     const session = getSession(diskPath);
     const parts = dirPath.split('/').filter(Boolean);
@@ -380,7 +373,7 @@ const DiskEditor = (() => {
     }
   }
 
-  // 渲染单个节点 (行 + 递归子节点容器)
+  // Render one node: its row plus a container for recursive child rows
   function renderTreeChild(diskPath, parentEl, child, parentPath, depth) {
     const session = getSession(diskPath);
     const childPath = parentPath ? `${parentPath}/${child.name}` : '/' + child.name;
@@ -392,7 +385,6 @@ const DiskEditor = (() => {
     if (child.size != null) {
       row.querySelector('.name').textContent += ` (${formatSize(child.size)})`;
     }
-    // 在节点上记录完整路径
     row.dataset.path = childPath;
     row.dataset.type = child.type;
     if (child.type === 'file') {
@@ -439,7 +431,7 @@ const DiskEditor = (() => {
 
   function expandAll(diskPath) {
     const session = getSession(diskPath);
-    // 收集所有文件夹路径
+    // Collect every folder path
     const allDirs = [];
     function walk(node, parentPath) {
       const children = getChildrenArray(node);
@@ -462,7 +454,7 @@ const DiskEditor = (() => {
     renderTree(diskPath);
   }
 
-  // 触屏下文件行单击只高亮, 双击才打开 (打开后内容在悬浮窗口里显示)
+  // On touch UIs a tap only highlights a file; a double tap opens it in the floating window
   function isTouchUi() {
     return !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
   }
@@ -483,7 +475,7 @@ const DiskEditor = (() => {
     });
   }
 
-  // 关闭悬浮的内容窗口 (手机端)
+  // Close the floating content window (mobile)
   function closeViewer(diskPath) {
     const editorEl = document.getElementById(`disk-editor-${cssEsc(diskPath)}`);
     if (editorEl) editorEl.classList.remove('viewer-open');
@@ -497,10 +489,9 @@ const DiskEditor = (() => {
     session.selectedFile = innerPath;
     session.selectedPath = innerPath;
     session.currentDir = parentOf(innerPath);
-    // 标记 active
     document.querySelectorAll(`#disk-tree-${cssEsc(diskPath)} .disk-tree-row`).forEach(r => r.classList.remove('active'));
     rowEl.classList.add('active');
-    // 手机上内容区是悬浮窗口, 打开文件时展开
+    // On mobile the content area floats; opening a file expands it
     const editorEl = document.getElementById(`disk-editor-${cssEsc(diskPath)}`);
     if (editorEl) editorEl.classList.add('viewer-open');
     document.getElementById(`disk-file-info-${cssEsc(diskPath)}`).innerHTML = `<span>${escapeHTML(innerPath)}${I18N.t('disk.loading-file')}</span>`;
@@ -540,7 +531,6 @@ const DiskEditor = (() => {
         body: { content },
       });
       if (result && result.error) throw new Error(result.error);
-      // 刷新
       await loadTree(diskPath);
       App.setStatus(I18N.t('disk.saved').replace('{path}', session.selectedPath));
     } catch (e) {
@@ -554,7 +544,7 @@ const DiskEditor = (() => {
     await deletePath(diskPath, session.selectedPath);
   }
 
-  // 删除文件或文件夹 (文件夹连同内容一起删除), 删除后立即清空选中并刷新树
+  // Delete a file or folder (folders recursively), then clear the selection and refresh the tree
   async function deletePath(diskPath, innerPath) {
     if (!confirm(I18N.t('disk.confirm-delete').replace('{path}', innerPath))) return;
     try {
@@ -567,7 +557,7 @@ const DiskEditor = (() => {
     }
   }
 
-  // 目标被删除后清空编辑器与操作栏, 避免继续对已删除的文件操作
+  // Clear the editor and action bar once the target is gone, so nothing touches a deleted file
   function clearSelection(diskPath, removedPath) {
     const session = getSession(diskPath);
     const selected = session.selectedPath;
@@ -587,7 +577,7 @@ const DiskEditor = (() => {
     if (actions) actions.style.display = 'none';
   }
 
-  // 下载当前文件: 边读边显示进度, 完成后保存到本地
+  // Download the selected file, reporting progress while streaming
   async function downloadCurrent(diskPath) {
     const session = getSession(diskPath);
     const innerPath = session.selectedPath;
@@ -603,7 +593,7 @@ const DiskEditor = (() => {
           const data = await res.json();
           if (data && data.error) message = data.error;
         } catch {
-          /* 响应不是 JSON 时保留状态码 */
+          /* keep the status code when the response is not JSON */
         }
         throw new Error(message);
       }
@@ -650,7 +640,7 @@ const DiskEditor = (() => {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
-  // ---------- 右键菜单: 复制 / 剪切 / 粘贴 / 删除 ----------
+  // ---------- Context menu: copy / cut / paste / delete ----------
 
   let contextMenuEl = null;
   let contextMenuClose = null;
@@ -781,7 +771,7 @@ const DiskEditor = (() => {
       if (ev && ev.type === 'keydown' && ev.key !== 'Escape') return;
       if (ev && ev.type === 'blur' && ev.target !== window) return;
       if (ev && ev.type === 'click') {
-        // 菜单内部的点击交给菜单项自己处理 (捕获阶段移除节点会让移动端丢失这次 click)
+        // Let menu items handle their own clicks (removing the node during capture makes mobile lose the click)
         if (menu.contains(ev.target)) return;
         if (Date.now() - openedAt < 250) return;
       }
@@ -794,7 +784,7 @@ const DiskEditor = (() => {
     }, 0);
   }
 
-  // ---------- 磁盘内复制 / 粘贴 ----------
+  // ---------- Copy / paste inside the disk ----------
 
   async function writeInner(diskPath, innerPath, content) {
     const result = await App.api(`disks/${diskApiPath(diskPath)}/write?path=${encodeURIComponent(innerPath)}`, {
@@ -912,13 +902,13 @@ const DiskEditor = (() => {
     App.setStatus(text);
   }
 
-  // ---------- 进度显示 ----------
+  // ---------- Progress display ----------
 
   function progressBox(diskPath) {
     return document.getElementById(`disk-progress-${cssEsc(diskPath)}`);
   }
 
-  // percent 为 null 时显示不确定进度 (滑块动画)
+  // A null percent shows an indeterminate (animated) bar
   function showProgress(diskPath, text, percent) {
     const box = progressBox(diskPath);
     if (!box) return;
@@ -946,13 +936,13 @@ const DiskEditor = (() => {
     box.classList.remove('indeterminate');
   }
 
-  // ---------- 上传列表 (多文件进度, 可折叠) ----------
+  // ---------- Upload list (per-file progress, collapsible) ----------
 
   function uploadListBox(diskPath) {
     return document.getElementById(`disk-upload-list-${cssEsc(diskPath)}`);
   }
 
-  // 应用折叠状态到列表 (标题箭头 / 列表主体显示)
+  // Apply the collapsed state (header arrow and body visibility)
   function applyUploadListCollapsed(diskPath) {
     const session = getSession(diskPath);
     const box = uploadListBox(diskPath);
@@ -963,14 +953,14 @@ const DiskEditor = (() => {
     if (body) body.style.display = session.uploadListCollapsed ? 'none' : '';
   }
 
-  // 点击标题折叠 / 展开上传列表
+  // Header click collapses / expands the upload list
   function toggleUploadList(diskPath) {
     const session = getSession(diskPath);
     session.uploadListCollapsed = !session.uploadListCollapsed;
     applyUploadListCollapsed(diskPath);
   }
 
-  // 显示上传列表 (保留已有条目) 并恢复折叠状态
+  // Show the upload list (keeping existing entries) and reapply the collapsed state
   function showUploadList(diskPath) {
     const box = uploadListBox(diskPath);
     if (!box) return;
@@ -980,7 +970,7 @@ const DiskEditor = (() => {
     updateUploadSummary(diskPath);
   }
 
-  // 开始新一轮上传: 重建条目
+  // Start a new upload batch: rebuild the entries
   function startUploadList(diskPath, files) {
     const session = getSession(diskPath);
     if (session.uploadTicker) {
@@ -1053,7 +1043,7 @@ const DiskEditor = (() => {
       const label = phase === 'reading' ? I18N.t('disk.upload-reading')
         : phase === 'writing' ? I18N.t('disk.upload-writing')
         : I18N.t('disk.uploading');
-      // 读取 / 发送有真实百分比; 服务器写盘阶段无法细分, 显示流动的不确定进度
+      // Reading and sending report real percentages; the server write phase cannot, so show an indeterminate bar
       const indeterminate = phase === 'writing' || pct == null;
       row.classList.toggle('indeterminate', indeterminate);
       statusEl.textContent = indeterminate ? label : `${label} ${Math.round(pct)}%`;
@@ -1065,13 +1055,13 @@ const DiskEditor = (() => {
     }
   }
 
-  // 更新单个文件的状态 / 进度; 只刷新这一行
+  // Update one file's state / progress and repaint only that row
   function updateUploadItem(diskPath, index, patch) {
     const session = getSession(diskPath);
     const item = session.uploadItems[index];
     if (!item) return;
     Object.assign(item, patch);
-    // 进入服务器写盘阶段: 记录开始时间, 用计时器给出真实的耗时反馈
+    // Entering the server write phase: record the start time and tick elapsed time for real feedback
     if (patch.phase === 'writing' && !item.writeStartedAt) item.writeStartedAt = Date.now();
     if (patch.status && patch.status !== 'uploading') {
       item.writeStartedAt = null;
@@ -1079,7 +1069,7 @@ const DiskEditor = (() => {
     }
     const row = document.querySelector(`#disk-upload-body-${cssEsc(diskPath)} .disk-upload-row[data-idx="${index}"]`);
     if (!row) {
-      // 标签页被重建时整表重渲染
+      // The tab was rebuilt, so re-render the whole list
       renderUploadRows(diskPath);
       return;
     }
@@ -1089,7 +1079,7 @@ const DiskEditor = (() => {
     paintUploadRow(diskPath, index);
   }
 
-  // 更新标题栏摘要: 已完成 / 总数 (失败数)
+  // Update the header summary: done / total (failures)
   function updateUploadSummary(diskPath) {
     const session = getSession(diskPath);
     const box = uploadListBox(diskPath);
@@ -1109,7 +1099,7 @@ const DiskEditor = (() => {
     box.classList.toggle('has-error', failed > 0);
   }
 
-  // ---------- 写盘阶段计时 (服务器同步落盘, 无法细分百分比) ----------
+  // ---------- Write-phase timer (the server writes synchronously, so no percentage exists) ----------
 
   function formatElapsed(sec) {
     if (sec < 60) return sec.toFixed(1) + 's';
@@ -1161,7 +1151,7 @@ const DiskEditor = (() => {
     }
   }
 
-  // ---------- 目录选择 ----------
+  // ---------- Folder picking ----------
 
   function parentOf(dirPath) {
     if (!dirPath || dirPath === '/') return '/';
@@ -1193,7 +1183,7 @@ const DiskEditor = (() => {
       .sort((a, b) => a.name.localeCompare(b.name));
   }
 
-  // 弹出目录选择框; 返回选中的路径, 取消时返回 null
+  // Open the folder picker; resolves to the chosen path, or null when cancelled
   function pickDirectory(diskPath, startPath) {
     return new Promise((resolve) => {
       let current = startPath && startPath !== '' ? startPath : '/';
@@ -1270,7 +1260,7 @@ const DiskEditor = (() => {
     });
   }
 
-  // ---------- 新建文件/文件夹 ----------
+  // ---------- New file / folder ----------
 
   function newItemDialog(diskPath, type) {
     const session = getSession(diskPath);
@@ -1278,7 +1268,7 @@ const DiskEditor = (() => {
       alert(I18N.t('disk.locked-alert'));
       return;
     }
-    // 默认父目录: 当前浏览的目录
+    // Default parent folder: the one currently browsed
     const parentDir = session.currentDir || '/';
 
     const isFolder = type === 'folder';
@@ -1365,7 +1355,7 @@ const DiskEditor = (() => {
           });
         }
         if (result && result.error) throw new Error(result.error);
-        // 展开父目录并刷新
+        // Expand the parent folder and refresh
         session.currentDir = parent;
         if (parent !== '/') {
           session.expandedDirs.add(parent);
@@ -1383,9 +1373,9 @@ const DiskEditor = (() => {
     modal.querySelector('[data-action="create"]').addEventListener('click', doCreate);
   }
 
-  // ---------- 上传文件 ----------
+  // ---------- Uploading files ----------
 
-  // 选择本地文件后上传到指定目录
+  // Pick local files and upload them into the target folder
   let pendingFileInput = null;
 
   function openFilePicker(diskPath, targetDir) {
@@ -1408,7 +1398,7 @@ const DiskEditor = (() => {
     input.click();
   }
 
-  // 上传遇到同名文件: 询问用户 取消 / 覆盖 / 重命名
+  // Upload hit an existing file: ask to cancel / overwrite / rename
   function askUploadConflict(targetPath) {
     return new Promise((resolve) => {
       const modal = document.createElement('div');
@@ -1452,7 +1442,7 @@ const DiskEditor = (() => {
     });
   }
 
-  // 收集文件树中的全部文件路径
+  // Collect every file path in the tree
   function collectFilePaths(node, parentPath, out) {
     for (const child of getChildrenArray(node)) {
       const childPath = parentPath ? `${parentPath}/${child.name}` : '/' + child.name;
@@ -1465,7 +1455,7 @@ const DiskEditor = (() => {
     return out;
   }
 
-  // 生成不重名的文件名: name_1.ext, name_2.ext ... 依此类推
+  // Generate a non-conflicting name: name_1.ext, name_2.ext, ...
   function makeUniqueName(name, dirPath, existingPaths) {
     const dot = name.lastIndexOf('.');
     const base = dot > 0 ? name.slice(0, dot) : name;
@@ -1492,18 +1482,18 @@ const DiskEditor = (() => {
     let successCount = 0;
     const errors = [];
 
-    // 上传前刷新文件树, 用于检测目标位置是否已有同名文件
+    // Refresh the tree first so existing names at the destination are detected
     await loadTree(diskPath);
     const existingPaths = collectFilePaths(session.tree, '', new Set());
 
-    // 逐文件上传, 在「上传列表」中显示每个文件的进度
+    // Upload the files one by one, tracking each in the upload list
     startUploadList(diskPath, list);
     for (let i = 0; i < list.length; i++) {
       const file = list[i];
       let targetName = file.name;
       let innerPath = joinPath(dir, file.name);
 
-      // 同名文件: 询问 取消 / 覆盖 / 重命名
+      // Name conflict: ask to cancel / overwrite / rename
       if (existingPaths.has(innerPath)) {
         const action = await askUploadConflict(innerPath);
         if (action === 'cancel') {
@@ -1519,7 +1509,7 @@ const DiskEditor = (() => {
         }
       }
 
-      // 进度分三段: 读取本地文件 0-30%, 发送数据 30-70%, 服务器写盘为不确定态
+      // Three phases: local read 0-30%, sending 30-70%, server write (indeterminate)
       updateUploadItem(diskPath, i, { path: innerPath, status: 'uploading', phase: 'reading', percent: 0 });
       try {
         const content = await readFileAsText(file, (loaded, total) => {
@@ -1543,7 +1533,7 @@ const DiskEditor = (() => {
       updateUploadSummary(diskPath);
     }
 
-    // 展开目标目录并刷新
+    // Expand the target folder and refresh
     session.currentDir = dir;
     if (dir !== '/') {
       session.expandedDirs.add(dir);
@@ -1552,7 +1542,7 @@ const DiskEditor = (() => {
     await loadTree(diskPath);
 
     if (errors.length === 0) {
-      // 全部文件都在冲突时被取消时不显示"已上传 0 个文件"
+      // When every file was cancelled at the conflict prompt, do not report "0 files uploaded"
       App.setStatus(successCount > 0
         ? I18N.t('disk.uploaded', { n: successCount })
         : I18N.t('disk.upload-skipped'));
@@ -1562,9 +1552,9 @@ const DiskEditor = (() => {
     }
   }
 
-  // 用 XHR 上传, 以便读取真实的上传字节进度
-  // onProgress 收到 { phase, loaded, total }: phase = 'sending' 发送中 |
-  // 'writing' 请求已发完, 服务器正在写盘 (写盘耗时无法细分, 由 UI 显示为不确定进度)
+  // Use XHR so the real upload byte progress is available
+  // onProgress receives { phase, loaded, total }: phase = 'sending' while transferring |
+  // 'writing' once the body is sent and the server is writing (shown as indeterminate)
   function uploadContent(diskPath, innerPath, content, onProgress) {
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
@@ -1574,7 +1564,7 @@ const DiskEditor = (() => {
         xhr.upload.onprogress = (e) => {
           if (e.lengthComputable) onProgress({ phase: 'sending', loaded: e.loaded, total: e.total });
         };
-        // 请求体发送完毕 -> 进入服务器写盘阶段
+        // Body fully sent -> enter the server write phase
         xhr.upload.onload = () => onProgress({ phase: 'writing', loaded: 0, total: 0 });
       }
       xhr.onload = () => {
@@ -1592,7 +1582,7 @@ const DiskEditor = (() => {
     });
   }
 
-  // 读取本地文件为文本; onProgress 报告真实的读取字节进度
+  // Read a local file as text; onProgress reports real read-byte progress
   function readFileAsText(file, onProgress) {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -1614,7 +1604,7 @@ const DiskEditor = (() => {
     return (bytes / 1024 / 1024).toFixed(2) + ' MB';
   }
 
-  // ---------- 镜像模式 ----------
+  // ---------- Mirror mode ----------
 
   async function loadMirrorStatus(diskPath, vm) {
     try {
@@ -1623,7 +1613,7 @@ const DiskEditor = (() => {
       session.mirror = status;
       renderMirrorStatus(diskPath);
     } catch (e) {
-      // 非 VM 磁盘（如模板磁盘）不支持镜像，忽略错误
+      // Non-VM disks (e.g. templates) do not support mirroring; ignore the error
       const statusEl = document.getElementById(`disk-mirror-status-${cssEsc(diskPath)}`);
       if (statusEl) statusEl.style.display = 'none';
     }

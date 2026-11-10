@@ -1,15 +1,15 @@
 // ============================================================
-// reactorView.js - IC2 风格核电站 GUI
+// reactorView.js - IC2-style nuclear reactor GUI
 //
-// 两个入口:
+// Two entry points:
 //   ReactorView.render(root, modName, data, opts)
-//     配置用: 可编辑网格 + 组件托盘 + 实时统计 + 保存
+//     editing: editable grid + parts tray + live stats + save
 //   ReactorView.renderInfo(root, data)
-//     只读用: 2D 网格 + 每个格子的详细信息 (设备页的「反应堆」标签)
+//     read-only: 2D grid + per-cell details (the "Reactor" tab of the device page)
 //
-// 网格与原版一致: 固定 6 行, 3 ~ 9 列 (每列相当于一个 Reactor Chamber)
-// 组件按等级区分: 铀/MOX 燃料棒 ×1/×2/×4, 冷却单元 10k/30k/60k,
-//                 冷凝模块 RSH 20k / LZH 100k
+// Grid matches the original mod: always 6 rows, 3-9 columns (one column per Reactor Chamber)
+// Parts differ by tier: uranium/MOX rods x1/x2/x4, coolant cells 10k/30k/60k,
+//                 condensators RSH 20k / LZH 100k
 // ============================================================
 
 const ReactorView = (() => {
@@ -17,10 +17,10 @@ const ReactorView = (() => {
   const MIN_COLUMNS = 3;
   const MAX_COLUMNS = 9;
   const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
-  // 与后端一致: 显示温度 = 环境温度 + 堆芯热量
+  // Matches the server: displayed temperature = ambient + hull heat
   const AMBIENT_TEMPERATURE = 20;
 
-  // 后端未提供组件表时的最小回退 (正常情况下组件表由 /reactor 接口下发)
+  // Minimal fallback when the server sends no part table (normally /reactor supplies it)
   const FALLBACK_PARTS = {
     uranium_1x: { icon: '☢', cls: 'fuel', tier: '1×', category: 'fuel', label: '铀燃料棒（单联）', rods: 1, eu: 5, heat: 4 },
     coolant_10k: { icon: '❄', cls: 'coolant', tier: '10k', category: 'coolant', label: '冷却单元 10k', capacity: 10000 },
@@ -60,7 +60,7 @@ const ReactorView = (() => {
     return grid;
   }
 
-  // 组件表归一化: 统一成前端需要的字段
+  // Normalize the part table into the fields this view needs
   function partsFrom(components) {
     const src = components && typeof components === 'object' && Object.keys(components).length
       ? components : FALLBACK_PARTS;
@@ -98,7 +98,7 @@ const ReactorView = (() => {
       const row = [];
       for (let c = 0; c < columns; c++) {
         const cell = src.grid && Array.isArray(src.grid[r]) ? src.grid[r][c] : null;
-        // 后端保存时会再归一化一次, 这里保留原始 id 以免丢失未知组件
+        // Keep raw ids: the server normalizes again on save, so unknown parts survive the round-trip
         row.push(typeof cell === 'string' && cell ? cell : null);
       }
       grid.push(row);
@@ -157,7 +157,7 @@ const ReactorView = (() => {
         if (p.category === 'fuel') {
           const pulses = pulsesAt(r, c, p.rods);
           const eu = p.eu * pulses;
-          // IC2: 单根燃料棒 p 脉冲时每秒产生 2 * p * (p + 1) 点热量
+          // IC2: a single rod with p pulses produces 2 * p * (p + 1) heat per second
           const factor = p.kind === 'mox' ? 1.5 : 1;
           const heat = 2 * pulses * (pulses + 1) * p.rods * factor;
           euPerTick += eu;
@@ -188,7 +188,7 @@ const ReactorView = (() => {
 
     let status = 'idle';
     let safeSeconds = null;
-    // 外壳自身散热: 本体 1 + 每个扩展舱 2
+    // Hull self-cooling: 1 for the core plus 2 per extra chamber
     const netHeat = heatPerSecond - (1 + (columns - MIN_COLUMNS) * 2);
     if (!config.active) {
       status = 'off';
@@ -256,7 +256,7 @@ const ReactorView = (() => {
     return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
   }
 
-  // 运行状态优先于布局推算的状态; 过热停机后仍显示过热, 直到复位堆芯
+  // Runtime status wins over the layout-derived one; an overheated reactor keeps reporting overheat until the core is reset
   function effectiveStatus(stats, runtime) {
     if (runtime && (runtime.running || runtime.status === 'overheat' || runtime.status === 'depleted')) {
       return runtime.status;
@@ -264,7 +264,7 @@ const ReactorView = (() => {
     return stats.status;
   }
 
-  // 组件耐久: 没有最大耐久的组件返回 null
+  // Durability info; returns null for parts without a maximum
   function durabilityInfo(cell) {
     if (!cell || !Number.isFinite(cell.maxDurability) || cell.maxDurability <= 0) return null;
     const max = cell.maxDurability;
@@ -278,7 +278,7 @@ const ReactorView = (() => {
     return `${T('reactor.info.durability', '耐久')} ${fmtNum(d.cur)} / ${fmtNum(d.max)} (${d.pct}%)`;
   }
 
-  // 单个格子的信息文本 (配置 GUI 的 tooltip 与 2D 面板的明细共用)
+  // One-line cell summary shared by the editor tooltip and the 2D detail panel
   function cellSummary(parts, cell) {
     if (!cell) return T('reactor.cell-empty', '空槽');
     const p = parts[cell.id];
@@ -299,8 +299,8 @@ const ReactorView = (() => {
     return `${fmtNum(Math.round(cell.temperature))} °C`;
   }
 
-  // 反应堆温度: 后端已提供 temperature/maxTemperature 时直接使用,
-  // 旧数据缺少字段时按 环境温度 + 堆芯热量 计算
+  // Reactor temperature: prefer the server's temperature/maxTemperature;
+  // older payloads without them fall back to ambient + hull heat
   function temperatureRange(runtime) {
     if (!runtime) return null;
     const hullCapacity = Number(runtime.hullHeatCapacity) || 0;
@@ -317,7 +317,7 @@ const ReactorView = (() => {
     return t.max > 0 ? `${fmtNum(t.value)} / ${fmtNum(t.max)} °C` : `${fmtNum(t.value)} °C`;
   }
 
-  // 格位悬浮提示: 组件信息 + 区间 + 具体耐久 + 自身温度
+  // Slot tooltip: part summary + position + durability + own temperature
   function slotTipText(parts, cell, r, c) {
     const lines = [`${cellSummary(parts, cell)} (${r + 1}, ${c + 1})`];
     const dur = durabilityLabel(cell);
@@ -335,7 +335,7 @@ const ReactorView = (() => {
   }
 
   // ============================================================
-  // 配置界面 (可编辑)
+  // Editor UI (editable)
   // ============================================================
   function render(root, modName, data, opts = {}) {
     if (!root) return null;
@@ -548,7 +548,7 @@ const ReactorView = (() => {
       updateStats();
     }
 
-    // ---------- 燃料箱 / 废料箱 ----------
+    // ---------- Fuel / waste boxes ----------
     const invEl = root.querySelector('[data-role="inventory"]');
     const inventory = { items: null, fuel: [], waste: [] };
 
@@ -613,7 +613,7 @@ const ReactorView = (() => {
         inventory.waste = data.waste;
         renderInventory();
       } catch {
-        /* 保持当前显示 */
+        /* keep the current display */
       }
     }
 
@@ -626,7 +626,7 @@ const ReactorView = (() => {
         inventory.waste = Array.isArray(data.waste) ? data.waste : [];
         renderInventory();
       } catch {
-        /* 库存区留空 */
+        /* leave the inventory area empty */
       }
     }
 
@@ -680,7 +680,7 @@ const ReactorView = (() => {
       const condId = hasPart(parts, 'condensator_100k') ? 'condensator_100k' : firstPartId(parts, 'condensator');
       state.grid = emptyGrid(state.columns);
       state.grid[0][0] = fuelId;
-      // 只有与燃料棒正交相邻的组件才会吸热
+      // Only components orthogonally adjacent to a fuel rod absorb heat
       if (state.columns >= 2) {
         if (coolantId) state.grid[0][1] = coolantId;
         if (condId) state.grid[1][0] = condId;
@@ -796,9 +796,9 @@ const ReactorView = (() => {
   }
 
   // ============================================================
-  // 只读 2D 面板: 每个格子的详细信息 (设备页「反应堆」标签)
+  // Read-only 2D panel: per-cell details (the "Reactor" tab of the device page)
   // ============================================================
-  // 运行中才显示: 堆芯热量 / 剩余吸热 / 累计发电 / 运行时长
+  // Live-only figures: hull heat / remaining capacity / total EU / elapsed time
   function runtimeBlockHTML(runtime) {
     if (!runtime) return '';
     const hullPct = Math.round(Math.max(0, Math.min(1, runtime.hullRatio || 0)) * 100);
@@ -829,7 +829,7 @@ const ReactorView = (() => {
       </div>`;
   }
 
-  // 只更新随运行变化的数值, 不重建 DOM (保留格位选择与滚动位置)
+  // Update only live values instead of rebuilding the DOM, keeping slot selection and scroll position
   function updateInfo(root, data) {
     if (!root) return null;
     const parts = partsFrom(data && data.components);
@@ -883,7 +883,7 @@ const ReactorView = (() => {
       setBar('hull-bar', runtime.hullRatio);
       setBar('cap-bar', runtime.capacityRatio);
     }
-    // 格位背景的耐久填充与悬浮提示随运行时间变化
+    // Slot durability fill and tooltip change as the reactor runs
     const byPos = new Map(stats.cells.map(cell => [`${cell.r}:${cell.c}`, cell]));
     root.querySelectorAll('.ic2-slot[data-r]').forEach(btn => {
       const r = parseInt(btn.dataset.r, 10);
@@ -904,14 +904,14 @@ const ReactorView = (() => {
       btn.classList.toggle('depleted', !!(cell && cell.depleted));
       btn.title = slotTipText(parts, cell, r, c);
     });
-    // 组件明细表里的温度也随运行变化
+    // Temperatures in the part table also drift while running
     root.querySelectorAll('[data-role="tbody"] tr[data-r]').forEach(tr => {
       const r = parseInt(tr.dataset.r, 10);
       const c = parseInt(tr.dataset.c, 10);
       const td = tr.querySelector('[data-info="temp"]');
       if (td) td.textContent = temperatureText(byPos.get(`${r}:${c}`) || null);
     });
-    // 耐久随运行时间变化, 重绘当前选中格子的详情
+    // Durability decays while running; refresh the selected slot detail
     if (typeof root.__ic2Detail === 'function') root.__ic2Detail();
     return stats;
   }

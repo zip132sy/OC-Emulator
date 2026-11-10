@@ -1,12 +1,12 @@
 // ============================================================
-// exportWizard.js - 虚拟机导出/导入向导
+// exportWizard.js - VM export/import wizard
 //
-// 导出步骤: 摘要 → 额外文件 → 导出
-//   Step 1 (摘要): 显示将要导出的内容 (配置/磁盘/EEPROM等)
-//   Step 2 (额外文件): 允许用户添加额外文件或文件夹, 默认直接下一步
-//   Step 3 (导出): 执行导出并触发下载
+// Export steps: summary → extra files → export
+//   Step 1 (summary): show what will be exported (config, disks, EEPROM, ...)
+//   Step 2 (extra files): optionally add files or folders; the default is to continue
+//   Step 3 (export): run the export and trigger the download
 //
-// 导入: 选择导出文件 → 显示摘要 → 导入
+// Import: pick an exported file → review the summary → import
 // ============================================================
 
 const ExportWizard = (() => {
@@ -19,12 +19,12 @@ const ExportWizard = (() => {
     }
   };
 
-  // ---------- 状态 ----------
+  // ---------- State ----------
   let mode = 'export';     // 'export' | 'import'
   let vmName = '';
   let currentStep = 0;
   let extraFiles = [];      // [{path, content(base64), binary, size}]
-  let importData = null;    // 解析后的导入数据
+  let importData = null;    // parsed import payload
   let onDone = null;
 
   function exportSteps() {
@@ -35,7 +35,7 @@ const ExportWizard = (() => {
     ];
   }
 
-  // ---------- 工具 ----------
+  // ---------- Utilities ----------
   function formatSize(bytes) {
     if (!bytes) return '0 B';
     if (bytes < 1024) return bytes + ' B';
@@ -62,7 +62,7 @@ const ExportWizard = (() => {
     `;
   }
 
-  // ---------- 文件读取 ----------
+  // ---------- File reading ----------
   function readFileAsBase64(file) {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -78,7 +78,7 @@ const ExportWizard = (() => {
     });
   }
 
-  // 读取文件夹中的所有文件 (递归)
+  // Read every file of a folder recursively
   async function readDirectoryEntries(item, prefix = '') {
     const entries = [];
     if (item.isFile) {
@@ -98,7 +98,7 @@ const ExportWizard = (() => {
     } else if (item.isDirectory) {
       const dirReader = item.createReader();
       const allEntries = [];
-      // readEntries 可能需要多次调用
+      // readEntries returns one batch per call, so keep reading until empty
       const readBatch = () => new Promise((resolve) => {
         dirReader.readEntries((batch) => {
           if (batch.length === 0) {
@@ -120,10 +120,10 @@ const ExportWizard = (() => {
   }
 
   // ============================================================
-  // 导出模式
+  // Export mode
   // ============================================================
 
-  // Step 0: 摘要
+  // Step 0: summary
   function exportSummaryHTML() {
     const steps = exportSteps();
     return `
@@ -151,7 +151,7 @@ const ExportWizard = (() => {
     `;
   }
 
-  // Step 1: 额外文件
+  // Step 1: extra files
   function exportExtraFilesHTML() {
     const steps = exportSteps();
     let fileListHTML = '';
@@ -201,7 +201,7 @@ const ExportWizard = (() => {
     `;
   }
 
-  // Step 2: 导出执行
+  // Step 2: run the export
   function exportExecHTML() {
     const steps = exportSteps();
     return `
@@ -248,7 +248,7 @@ const ExportWizard = (() => {
     const body = document.getElementById('modal-body');
     const footer = document.getElementById('modal-footer');
 
-    // Step 1: 额外文件 - 文件输入
+    // Step 1: extra files - file input
     const fileInput = body.querySelector('#ew-file-input');
     if (fileInput) {
       fileInput.addEventListener('change', async (e) => {
@@ -262,19 +262,19 @@ const ExportWizard = (() => {
             size: file.size,
           });
         }
-        // 重置 input 以允许重复选择同一文件
+        // Reset the input so re-selecting the same file still fires change
         e.target.value = '';
         rerender();
       });
     }
 
-    // Step 1: 文件夹输入
+    // Step 1: folder input
     const folderInput = body.querySelector('#ew-folder-input');
     if (folderInput) {
       folderInput.addEventListener('change', async (e) => {
         const files = Array.from(e.target.files);
         for (const file of files) {
-          // webkitRelativePath 包含文件夹名
+          // webkitRelativePath includes the top folder name
           const relPath = file.webkitRelativePath || file.name;
           const b64 = await readFileAsBase64(file);
           extraFiles.push({
@@ -289,7 +289,7 @@ const ExportWizard = (() => {
       });
     }
 
-    // Step 1: 移除文件 / 清空
+    // Step 1: remove one file / clear all
     body.querySelectorAll('[data-action="remove-file"]').forEach(btn => {
       btn.addEventListener('click', () => {
         const idx = parseInt(btn.dataset.idx, 10);
@@ -305,7 +305,7 @@ const ExportWizard = (() => {
       });
     }
 
-    // Footer 按钮
+    // Footer buttons
     footer.querySelectorAll('button[data-action]').forEach(btn => {
       btn.addEventListener('click', () => onAction(btn.dataset.action));
     });
@@ -331,13 +331,12 @@ const ExportWizard = (() => {
       statusEl.innerHTML = `<p style="text-align:center;padding:24px;">${T('export.exporting', '正在导出... 请稍候。')}</p>`;
     }
     try {
-      // 构建请求体
       const extraFilesPayload = extraFiles.map(f => ({
         path: f.path,
         content: f.content,
         binary: f.binary,
       }));
-      // 按 folder 分组
+      // Split into directories (first path segment) and standalone files
       const extraDirs = [];
       const standaloneFiles = [];
       for (const f of extraFiles) {
@@ -368,9 +367,7 @@ const ExportWizard = (() => {
         throw new Error(result ? result.error : T('export.failed-plain', '导出失败'));
       }
 
-      // 生成下载文件名
       const fileName = `${vmName}.ocvm`;
-      // 将 JSON 转为 Blob 并下载
       const jsonStr = JSON.stringify(result, null, 2);
       const blob = new Blob([jsonStr], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
@@ -395,7 +392,6 @@ const ExportWizard = (() => {
         `;
       }
 
-      // 更新 footer
       document.getElementById('modal-footer').innerHTML =
         `<button class="btn btn-primary" data-action="finish">${T('export.finish', '完成')}</button>`;
       document.getElementById('modal-footer').querySelector('[data-action="finish"]')
@@ -407,7 +403,7 @@ const ExportWizard = (() => {
       if (statusEl) {
         statusEl.innerHTML = `<p style="text-align:center;padding:16px;color:var(--err);">${T('export.failed', '✗ 导出失败: ')}${escapeHTML(e.message)}</p>`;
       }
-      // 更新 footer 允许重试
+      // Footer switches to a retry button
       document.getElementById('modal-footer').innerHTML =
         `<button class="btn" data-action="prev">${T('wizard.prev', '← 上一步')}</button>` +
         `<button class="btn btn-primary" data-action="do-export">${T('export.retry', '重试导出')}</button>`;
@@ -417,7 +413,7 @@ const ExportWizard = (() => {
     }
   }
 
-  // ---------- 导出: 入口 ----------
+  // ---------- Export: entry point ----------
   function openExport(name) {
     mode = 'export';
     vmName = name;
@@ -434,7 +430,7 @@ const ExportWizard = (() => {
   }
 
   // ============================================================
-  // 导入模式
+  // Import mode
   // ============================================================
 
   function importSelectHTML() {
@@ -476,7 +472,6 @@ const ExportWizard = (() => {
           if (!importData.manifest || importData.manifest.format !== 'oc-vm-export') {
             throw new Error(T('import.invalid-format', '无效的导出文件格式'));
           }
-          // 显示摘要
           const summaryEl = body.querySelector('#iw-summary');
           const m = importData.manifest;
           const fileCount = importData.files ? importData.files.length : 0;
@@ -499,7 +494,6 @@ const ExportWizard = (() => {
               </span></div>
             </div>
           `;
-          // 启用导入按钮
           const importBtn = footer.querySelector('#iw-import-btn');
           if (importBtn) importBtn.disabled = false;
         } catch (err) {
@@ -560,7 +554,7 @@ const ExportWizard = (() => {
     }
   }
 
-  // ---------- 导入: 入口 ----------
+  // ---------- Import: entry point ----------
   function openImport() {
     mode = 'import';
     importData = null;

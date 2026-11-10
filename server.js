@@ -1,6 +1,6 @@
 // ============================================================
-// OC Emulator - Web 控制面板服务器
-// HTTP + WebSocket, VMware Workstation 风格
+// OC Emulator - web control panel server
+// HTTP + WebSocket, VMware Workstation style
 // ============================================================
 const http = require('http');
 const fs = require('fs');
@@ -22,10 +22,10 @@ const sysInfo = require('./lib/sysInfo');
 const updateSource = require('./lib/updateSource');
 const modTransfer = require('./lib/modTransfer');
 
-// 部分网络的 IPv6 不可用, 优先解析 IPv4, 避免虚拟机的 HTTP 请求连接失败
-try { require('dns').setDefaultResultOrder('ipv4first'); } catch (_) { /* 旧版 Node 无此 API */ }
+// Some networks have no working IPv6; prefer IPv4 so guest HTTP requests do not fail
+try { require('dns').setDefaultResultOrder('ipv4first'); } catch (_) { /* API missing in older Node */ }
 
-// 软盘模板兼容性别名（旧名称 → 新名称）
+// Floppy template aliases (legacy name -> current name)
 const floppyAliases = {
   'DataCard': 'Data',
   'data_card': 'Data',
@@ -35,7 +35,7 @@ const floppyAliases = {
   'openirc': 'OpenIRC',
 };
 
-// ---------- 路径 ----------
+// ---------- Paths ----------
 const PROJECT_DIR = __dirname;
 const VMS_DIR = path.join(PROJECT_DIR, 'vms');
 const MODS_DIR = path.join(PROJECT_DIR, 'Mods');
@@ -44,25 +44,25 @@ const WEB_DIR = path.join(PROJECT_DIR, 'web');
 const CACHE_DIR = path.join(PROJECT_DIR, 'cache');
 const EMU_SCRIPT = path.join(PROJECT_DIR, 'oc-emulator.lua');
 
-// 确保目录存在
+// Ensure directories exist
 for (const d of [VMS_DIR, MODS_DIR, DISKS_DIR, CACHE_DIR]) {
   if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
 }
 
-// ---------- 设置 ----------
+// ---------- Settings ----------
 function loadSettings() {
   const settingsPath = path.join(PROJECT_DIR, 'settings.json');
-  // sysInfoPolling: 是否查询系统电量 / 本工具内存占用, 并提供给 VM 内的系统使用。
-  //   默认开启。所有查询都是异步的 (tasklist / PowerShell), 且带长缓存, 不会阻塞事件循环。
+  // sysInfoPolling: report host battery / this tool's memory usage to the guest OS.
+  //   On by default. Queries are async (tasklist / PowerShell) and cached, so they never block the event loop.
   let settings = {
     luaExe: 'lua',
     port: 8080,
     host: '127.0.0.1',
     logLevel: 'error',
     sysInfoPolling: true,
-    showConsole: true,   // 是否显示服务器所在的命令行窗口 (可在前端设置里随时切换)
-    autoUpdate: true,    // 启动脚本是否自动从远端仓库拉取更新 (可在前端设置里随时切换)
-    skipIntegrityCheck: false, // 启动时跳过依赖文件完整性检查 (可在前端设置里随时切换)
+    showConsole: true,   // show the console window hosting the server (toggleable in the UI)
+    autoUpdate: true,    // launcher pulls updates from the remote repo (toggleable in the UI)
+    skipIntegrityCheck: false, // skip the dependency integrity check at startup (toggleable in the UI)
   };
   if (fs.existsSync(settingsPath)) {
     try {
@@ -71,9 +71,8 @@ function loadSettings() {
       console.error('[settings] cannot load settings.json:', e.message);
     }
   }
-  // 跨平台: settings.json 里可能残留另一个平台的可执行文件路径
-  // (例如从 Windows 拷贝过来的 C:\...\lua.exe), 在 Linux/macOS 上不可用。
-  // 这种情况直接忽略, 退回 "lua" 交由自动探测, 避免跨平台时开箱即坏。
+  // settings.json may hold a path from another OS (e.g. C:\...\lua.exe on Linux/macOS);
+  // ignore it and fall back to "lua" auto-detection instead of breaking on startup.
   if (settings.luaExe && !isPlausibleLuaPath(settings.luaExe)) {
     console.log(`[settings] luaExe 路径不适用于当前平台, 改为自动探测: ${settings.luaExe}`);
     settings.luaExe = 'lua';
@@ -81,40 +80,40 @@ function loadSettings() {
   return settings;
 }
 
-// 判断 luaExe 是否有可能在当前平台上运行
+// Check whether luaExe can plausibly run on this platform
 function isPlausibleLuaPath(p) {
   if (!p || p === 'lua') return true;
-  if (process.platform === 'win32') return true;   // Windows 下不做额外限制
-  // 非 Windows: 带盘符或以 .exe 结尾的路径必然不可用
+  if (process.platform === 'win32') return true;   // no extra checks on Windows
+  // Non-Windows: drive-letter or .exe paths are never usable
   const looksWindows = /^[A-Za-z]:[\\/]/.test(p) || /\.exe$/i.test(p);
   return !looksWindows;
 }
 
-// ---------- 服务控制退出码 (供前台守护脚本 run.bat / run.sh 识别) ----------
-const EXIT_STOP = 4;      // 用户从前端请求"停止服务": 守护脚本不再拉起
-const EXIT_RESTART = 5;   // 用户从前端请求"重启服务": 守护脚本立即重启且不计入重试次数
+// ---------- Service control exit codes (read by the run.bat / run.sh watchdog) ----------
+const EXIT_STOP = 4;      // UI requested "stop service": watchdog must not restart
+const EXIT_RESTART = 5;   // UI requested "restart service": restart at once, not counted as a retry
 
-// 结束服务器进程, 交由守护脚本按退出码决定是否重启。
-// 先把运行中的 VM 停掉, 避免宿主退出后留下孤儿进程。
+// Exit the server; the watchdog decides on a restart from the exit code.
+// Stop running VMs first so no orphan processes are left behind.
 function shutDownForGuardian(code) {
   try {
     for (const vm of vmManager.list()) {
       if (vm.state === 'running' || vm.state === 'paused' || vm.state === 'starting') {
-        try { vmManager.stop(vm.name); } catch (e) { /* 忽略单个 VM 的停止失败 */ }
+        try { vmManager.stop(vm.name); } catch (e) { /* ignore a single VM stop failure */ }
       }
     }
     for (const mod of modsManager.listMods()) {
       if (mod.state === 'running' || mod.state === 'paused' || mod.state === 'starting') {
-        try { modsManager.stop(mod.name); } catch (e) { /* 忽略单个 Mod 的停止失败 */ }
+        try { modsManager.stop(mod.name); } catch (e) { /* ignore a single Mod stop failure */ }
       }
     }
-  } catch (e) { /* 忽略 */ }
-  // 给 VM 一点时间优雅退出, 再结束进程
+  } catch (e) { /* ignore */ }
+  // Give the VMs a moment to exit gracefully before quitting
   setTimeout(() => process.exit(code), 1200);
 }
 
-// ---------- 检查更新 (git) ----------
-// 运行一次 git 命令; 不抛异常, 统一返回 { ok, stdout, stderr, err }
+// ---------- Update checks (git) ----------
+// Run a git command once; never throws, always returns { ok, stdout, stderr, err }
 function gitRun(args, timeout = 90000) {
   return new Promise((resolve) => {
     execFile('git', args, { cwd: PROJECT_DIR, timeout, windowsHide: true, maxBuffer: 4 * 1024 * 1024 },
@@ -127,7 +126,7 @@ function gitRun(args, timeout = 90000) {
   });
 }
 
-// 解析 git log 输出 (格式: %H \x1f %h \x1f %s \x1f %ad)
+// Parse git log output (format: %H \x1f %h \x1f %s \x1f %ad)
 const LOG_SEP = '\x1f';
 async function gitLogLines(args) {
   const r = await gitRun(args, 30000);
@@ -146,7 +145,7 @@ async function gitLogLines(args) {
     });
 }
 
-// 当前分支的上游 ref (如 origin/main); 没有上游时回退到常见远端分支
+// Upstream ref of the current branch (e.g. origin/main); falls back to common remote branches
 async function resolveUpstreamRef() {
   const up = await gitRun(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}'], 15000);
   const name = up.ok ? up.stdout.trim() : '';
@@ -158,19 +157,19 @@ async function resolveUpstreamRef() {
   return null;
 }
 
-// 当前分支名 (detached HEAD 时回退到 main)
+// Current branch name (falls back to main on detached HEAD)
 async function currentBranchName() {
   const r = await gitRun(['rev-parse', '--abbrev-ref', 'HEAD'], 10000);
   const name = r.ok ? r.stdout.trim() : '';
   return name && name !== 'HEAD' ? name : 'main';
 }
 
-// 更新源候选列表, 顺序即尝试顺序:
-//   1. cache/update-source.json 里上次测速选出的更快的源
+// Update source candidates, tried in this order:
+//   1. the faster source picked last time in cache/update-source.json
 //   2. Gitee
 //   3. GitHub
-// 仓库里配置了对应远端就用远端名; 没有配置时直接用官方镜像 URL
-// (更新器只读访问, 不需要改动用户的 git 配置)。
+// Use the configured remote name when present, otherwise the official mirror URL
+// (the updater is read-only and must not touch the user's git config).
 function listUpdateTargets() {
   const remotes = updateSource.detectRemotes();
   const cache = updateSource.readCache();
@@ -192,24 +191,24 @@ function listUpdateTargets() {
   return { targets, remotes };
 }
 
-// 更新源名称 (用于前端展示); 自定义远端直接显示远端名
+// Update source label for the UI; custom remotes just show their remote name
 function sourceLabel(target) {
   if (!target) return '';
   return target.label || target.remote || '';
 }
 
-// 检查是否存在可用更新
+// Check whether an update is available
 async function checkForUpdate() {
   const out = { ok: false, available: false, behind: 0, current: null, latest: null, subject: '', error: null, detail: '', source: null, ref: null };
   if (!fs.existsSync(path.join(PROJECT_DIR, '.git'))) { out.error = 'not-a-repo'; return out; }
 
-  // 逐个更新源 fetch, 第一个成功的作为比较基准 (Gitee / GitHub 都尝试)
+  // Fetch each source in turn; the first success becomes the comparison base
   const branch = await currentBranchName();
   const { targets } = listUpdateTargets();
   let ref = null;
   let detail = '';
   for (const target of targets) {
-    // 按 URL 访问时必须显式给出分支, 结果落在 FETCH_HEAD
+    // URL fetches need an explicit branch; the result lands in FETCH_HEAD
     const fetchArgs = target.isUrl
       ? ['fetch', '--quiet', target.remote, branch]
       : ['fetch', '--quiet', target.remote];
@@ -230,7 +229,7 @@ async function checkForUpdate() {
     break;
   }
 
-  // 没识别出 GitHub / Gitee 远端 (自定义镜像等) 时, 退回默认上游逻辑
+  // No GitHub / Gitee remote detected (custom mirror etc.): fall back to the default upstream
   if (!ref) {
     const upstream = await resolveUpstreamRef();
     if (upstream) {
@@ -265,7 +264,7 @@ async function checkForUpdate() {
 
   out.available = out.behind > 0;
 
-  // 更新日志: 有更新时列出待拉取的提交; 已是最新时列出当前版本最近的提交
+  // Changelog: incoming commits when behind, latest commits of the current version when up to date
   const LOG_FMT = ['--pretty=%H%x1f%h%x1f%s%x1f%ad', '--date=short'];
   if (out.available) {
     out.logMode = 'new';
@@ -279,8 +278,8 @@ async function checkForUpdate() {
   return out;
 }
 
-// 依次尝试各更新源执行 git pull --ff-only, 全部失败再退回默认上游。
-// onLine 用于流式进度 (传 null 表示普通调用)。
+// Try `git pull --ff-only` from each source in turn, then from the default upstream.
+// onLine receives streamed progress lines (null for a plain call).
 async function pullFromUpdateSources(onLine) {
   const branch = await currentBranchName();
   const { targets } = listUpdateTargets();
@@ -297,14 +296,14 @@ async function pullFromUpdateSources(onLine) {
     note(`${target.label} 拉取失败, 尝试下一个源`);
   }
 
-  // 没有匹配的 GitHub / Gitee 远端, 或全部失败: 退回默认上游
+  // No matching GitHub / Gitee remote, or all failed: pull from the default upstream
   logger.log('[update] 使用默认上游拉取');
   note('git pull --ff-only');
   const r = await runPull(['pull', '--ff-only', '--progress']);
   return { ok: r.ok, source: r.ok ? 'upstream' : null, remote: null, result: r };
 }
 
-// 执行更新 (git pull --ff-only); 仅拉取, 不重启, 由前端决定是否重启
+// Apply the update (git pull --ff-only); pull only, the UI decides whether to restart
 async function applyUpdate() {
   const out = { ok: false, changed: false, before: null, after: null, output: '', error: null, source: null };
   if (!fs.existsSync(path.join(PROJECT_DIR, '.git'))) { out.error = 'not-a-repo'; return out; }
@@ -325,9 +324,9 @@ async function applyUpdate() {
   return out;
 }
 
-// ---------- 流式更新: 逐行解析 git 输出, 推送真实进度 ----------
-// git 在非 TTY 环境下默认不输出进度; 加 --progress 后可以拿到
-// "Receiving objects: 42% (…)" 这类行, 据此换算真实百分比。
+// ---------- Streaming update: parse git output line by line for real progress ----------
+// git prints no progress off a TTY; --progress emits lines like
+// "Receiving objects: 42% (…)", which we use to compute a real percentage.
 function runGitStreaming(args, onLine) {
   return new Promise((resolve) => {
     let stdout = '';
@@ -339,11 +338,11 @@ function runGitStreaming(args, onLine) {
       resolve({ ok: false, stdout: '', stderr: '', err: String(e.message || e) });
       return;
     }
-    const killTimer = setTimeout(() => { try { child.kill(); } catch (e) { /* 忽略 */ } }, 300000);
+    const killTimer = setTimeout(() => { try { child.kill(); } catch (e) { /* ignore */ } }, 300000);
     const feed = (chunk, isErr) => {
       const text = chunk.toString();
       if (isErr) stderr += text; else stdout += text;
-      // 进度行用 \r 原地刷新, 因此按 \r 与 \n 一起切分
+      // Progress lines redraw in place with \r, so split on both \r and \n
       for (const raw of text.split(/[\r\n]+/)) {
         const line = raw.trim();
         if (line && onLine) onLine(line);
@@ -362,7 +361,7 @@ function runGitStreaming(args, onLine) {
   });
 }
 
-// 从 git 进度行里取出百分比 (例如 "Receiving objects:  37% (…)")
+// Extract the percentage from a git progress line (e.g. "Receiving objects:  37% (…)")
 function parseGitPercent(line) {
   const m = /(\d{1,3})%/.exec(line || '');
   if (!m) return null;
@@ -370,8 +369,8 @@ function parseGitPercent(line) {
   return Number.isFinite(n) ? Math.max(0, Math.min(100, n)) : null;
 }
 
-// 以 NDJSON 流的形式执行更新: 每行一个 JSON 事件
-// { stage, percent, line } … 最后一行 { done: true, result }
+// Run the update as an NDJSON stream: one JSON event per line
+// { stage, percent, line } … final line { done: true, result }
 async function applyUpdateStreaming(res) {
   const out = { ok: false, changed: false, before: null, after: null, output: '', error: null, source: null };
   const startedAt = Date.now();
@@ -386,9 +385,9 @@ async function applyUpdateStreaming(res) {
 
   const emit = (evt) => {
     if (res.writableEnded) return;
-    try { res.write(JSON.stringify(evt) + '\n'); } catch (e) { /* 客户端已断开 */ }
+    try { res.write(JSON.stringify(evt) + '\n'); } catch (e) { /* client disconnected */ }
   };
-  // 进度只增不减, 避免 git 多次输出导致进度条回退
+  // Monotonic progress: git may repeat output, the bar must never go backwards
   const progress = (stage, nextPercent, line) => {
     percent = Math.max(percent, Math.min(100, Math.round(nextPercent)));
     emit({ stage, percent, line: line || '' });
@@ -407,7 +406,7 @@ async function applyUpdateStreaming(res) {
   out.before = before.ok ? before.stdout.trim().slice(0, 7) : null;
   progress('prepare', 12, out.before ? `HEAD ${out.before}` : '');
 
-  // 拉取阶段: 把 git 的百分比映射到 12% - 82%
+  // Fetch stage: map git's percentage onto 12% - 82%
   const onLine = (line) => {
     const p = parseGitPercent(line);
     if (p !== null) progress('fetch', 12 + p * 0.7, line);
@@ -415,7 +414,7 @@ async function applyUpdateStreaming(res) {
   };
 
   progress('fetch', 18);
-  // 按 Gitee / GitHub 候选顺序拉取, 任一成功即完成
+  // Try the Gitee / GitHub candidates in order; the first success wins
   const pulled = await pullFromUpdateSources(onLine);
   const pull = pulled.result;
   out.source = pulled.source;
@@ -439,7 +438,7 @@ async function applyUpdateStreaming(res) {
   finish();
 }
 
-// 列出最近的历史版本 (供设置里的"版本回退"选择)
+// List recent versions for the "rollback" picker in settings
 async function listVersions() {
   const out = { ok: false, error: null, current: null, versions: [] };
   if (!fs.existsSync(path.join(PROJECT_DIR, '.git'))) { out.error = 'not-a-repo'; return out; }
@@ -450,7 +449,7 @@ async function listVersions() {
   return out;
 }
 
-// 回退到指定提交 (git reset --hard); 仅切换版本, 不重启, 由前端决定是否重启
+// Roll back to a commit (git reset --hard); switch only, the UI decides whether to restart
 async function rollbackTo(ref) {
   const out = { ok: false, changed: false, before: null, after: null, output: '', error: null };
   if (!fs.existsSync(path.join(PROJECT_DIR, '.git'))) { out.error = 'not-a-repo'; return out; }
@@ -473,11 +472,12 @@ async function rollbackTo(ref) {
   return out;
 }
 
-// ---------- 控制台窗口显示 / 隐藏 ----------
-// 三个平台各有一套机制, 都做不到时会安全跳过并回报原因, 绝不误隐藏别的窗口。
-//   Windows : PowerShell 调 Win32 ShowWindow
-//   macOS   : osascript 控制承载服务器的终端 App 的可见性
-//   Linux   : 仅 X11 + 已安装 xdotool 时可用 (Wayland 没有通用方案)
+// ---------- Console window show / hide ----------
+// Each platform has its own mechanism; if unavailable we skip safely and report why,
+// and never hide an unrelated window.
+//   Windows : PowerShell calling Win32 ShowWindow
+//   macOS   : osascript toggling the terminal app hosting the server
+//   Linux   : X11 only, requires xdotool (Wayland has no generic solution)
 function runCmd(cmd, args) {
   return new Promise((resolve) => {
     execFile(cmd, args, { encoding: 'utf8', timeout: 8000 },
@@ -491,7 +491,7 @@ function setConsoleVisible(visible) {
   return setConsoleVisibleLinux(visible);
 }
 
-// 沿父进程链向上找承载本进程的终端 App (macOS)
+// Walk up the parent chain to find the terminal app hosting this process (macOS)
 async function detectTerminalApp() {
   const KNOWN = ['Terminal', 'iTerm2', 'iTerm', 'WezTerm', 'Alacritty', 'kitty', 'Hyper', 'Warp', 'Ghostty'];
   let pid = process.ppid;
@@ -503,7 +503,7 @@ async function detectTerminalApp() {
     if (sp < 0) break;
     const ppid = parseInt(line.slice(0, sp), 10);
     const comm = line.slice(sp + 1).trim();
-    // 形如 /Applications/XXX.app/Contents/MacOS/XXX 时取 XXX.app 的名字
+    // For /Applications/XXX.app/Contents/MacOS/XXX take the XXX.app name
     const appMatch = comm.match(/\/([^/]+)\.app\//);
     const candidate = appMatch ? appMatch[1] : path.basename(comm);
     const hit = KNOWN.find(k => k.toLowerCase() === candidate.toLowerCase());
@@ -517,7 +517,7 @@ async function detectTerminalApp() {
 async function setConsoleVisibleMac(visible) {
   const app = await detectTerminalApp();
   if (!app) return { ok: false, supported: true, reason: 'cannot-detect-terminal' };
-  // 用 System Events 切换整个终端 App 的可见性。首次可能需要授予"辅助功能"权限。
+  // Toggle the whole terminal app via System Events; the first run may need Accessibility permission.
   const script = visible
     ? `tell application "System Events" to set visible of process "${app}" to true\ntell application "${app}" to activate`
     : `tell application "System Events" to set visible of process "${app}" to false`;
@@ -531,7 +531,7 @@ async function setConsoleVisibleLinux(visible) {
   const has = await runCmd('sh', ['-c', 'command -v xdotool >/dev/null 2>&1 && echo 1 || echo 0']);
   if (!has.ok || has.out.indexOf('1') < 0) return { ok: false, supported: false, reason: 'missing-xdotool' };
 
-  // 找到属于本进程某个祖先的 X11 窗口
+  // Find the X11 window owned by one of this process's ancestors
   let winId = null;
   let pid = process.ppid;
   for (let i = 0; i < 8 && pid && pid > 1; i++) {
@@ -562,9 +562,9 @@ function setConsoleVisibleWindows(visible) {
   ].join('; ');
 
   return new Promise((resolve) => {
-    // 这里不能用 windowsHide: true。它会以 CREATE_NO_WINDOW 启动子进程,
-    // 使 PowerShell 拿不到控制台窗口句柄 (GetConsoleWindow() 返回 0)。
-    // 不加该选项时子进程会直接继承服务器所在的控制台, 不会额外弹窗。
+    // Do NOT pass windowsHide: true here. It spawns the child with CREATE_NO_WINDOW,
+    // so PowerShell gets no console handle (GetConsoleWindow() returns 0).
+    // Without it the child inherits the server's console and opens no extra window.
     execFile(psExe, ['-NoProfile', '-NonInteractive', '-Command', script],
       { encoding: 'utf8', timeout: 10000 },
       (err, stdout) => {
@@ -577,11 +577,11 @@ function setConsoleVisibleWindows(visible) {
 }
 
 let settings = loadSettings();
-// 应用系统信息查询开关
+// Apply the sysinfo polling switch
 sysInfo.setEnabled(settings.sysInfoPolling === true);
 
-// ---------- 进程级兜底: 单个异常不应让整个服务器退出 ----------
-// run.bat 的看门狗会在健康检查超时后强杀服务器, 因此这里尽量保活并记录。
+// ---------- Process-level safety net: a single error must not take down the server ----------
+// The run.bat watchdog force-kills the server when its health check times out, so log and stay alive.
 process.on('uncaughtException', (e) => {
   console.error('[server] uncaughtException (ignored):', e && e.stack ? e.stack : e);
 });
@@ -594,11 +594,11 @@ function saveSettings(newSettings) {
   settings = { ...settings, ...newSettings };
   const settingsPath = path.join(PROJECT_DIR, 'settings.json');
   fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), 'utf8');
-  // 系统信息查询开关
+  // Sysinfo polling switch
   if (prev.sysInfoPolling !== settings.sysInfoPolling) {
     sysInfo.setEnabled(settings.sysInfoPolling === true);
   }
-  // 更新使用 luaExe 的模块实例
+  // Propagate luaExe to the modules that spawn Lua
   if (newSettings.luaExe) {
     diskIO.luaExe = newSettings.luaExe;
     luaCheck.luaExe = newSettings.luaExe;
@@ -607,7 +607,7 @@ function saveSettings(newSettings) {
   }
 }
 
-// ---------- 模块实例 ----------
+// ---------- Module instances ----------
 const logger = {
   log: (...args) => console.log(...args),
   error: (...args) => console.error(...args),
@@ -617,7 +617,7 @@ const modemHub = new ModemHub();
 const internetProxy = new InternetProxy({ timeout: 60000 });
 const diskIO = new DiskIO({ projectDir: PROJECT_DIR, luaExe: settings.luaExe });
 const luaCheck = new LuaCheck({ projectDir: PROJECT_DIR, luaExe: settings.luaExe });
-// 设备总线: 把核电站这类非计算机设备作为组件暴露给所有虚拟机
+// Device bus: expose non-computer devices (reactors etc.) as components to every VM
 const deviceBus = new DeviceBus({ logger });
 const vmManager = new VMManager({
   projectDir: PROJECT_DIR,
@@ -631,7 +631,7 @@ const vmManager = new VMManager({
   logLevel: settings.logLevel,
 });
 
-// Mods 设备管理器: 与 VM 共用 modemHub / diskIO, 但使用独立的 Mods/ 目录
+// Mods device manager: shares modemHub / diskIO with VMs but uses its own Mods/ dir
 const modsManager = new ModsManager({
   projectDir: PROJECT_DIR,
   modsDir: MODS_DIR,
@@ -647,7 +647,7 @@ const modsManager = new ModsManager({
 deviceBus.attach(vmManager);
 deviceBus.attach(modsManager);
 
-// ---------- 静态文件服务 ----------
+// ---------- Static file serving ----------
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'application/javascript; charset=utf-8',
@@ -665,7 +665,7 @@ const MIME_TYPES = {
 
 function serveStatic(req, res) {
   let filePath = path.join(WEB_DIR, req.pathname === '/' ? 'index.html' : req.pathname);
-  // 防目录遍历
+  // Prevent path traversal
   if (!filePath.startsWith(WEB_DIR)) {
     res.writeHead(403);
     res.end('Forbidden');
@@ -678,10 +678,10 @@ function serveStatic(req, res) {
   }
   const ext = path.extname(filePath);
   const stat = fs.statSync(filePath);
-  // 静态资源一律"每次校验"(no-cache)而不是强缓存。
-  // 面板的 JS/CSS 改动很频繁, 而 index.html 里的 ?v=N 需要人工递增 —— 一旦忘记
-  // 递增, 浏览器就会一直复用旧文件, 表现出来就是"改了没用/功能还是坏的"。
-  // 带上 ETag/Last-Modified 后浏览器仍会走 304, 开销极小。
+  // Always revalidate static assets (no-cache) instead of hard caching.
+  // The panel's JS/CSS change often while ?v=N in index.html must be bumped by hand,
+  // so a stale cache looks like "my change did nothing". With ETag/Last-Modified
+  // browsers still get cheap 304 responses.
   const etag = `W/"${stat.size.toString(16)}-${Math.floor(stat.mtimeMs).toString(16)}"`;
   const lastModified = stat.mtime.toUTCString();
   const headers = {
@@ -701,8 +701,8 @@ function serveStatic(req, res) {
   fs.createReadStream(filePath).pipe(res);
 }
 
-// 列出宿主机目录 (设置里选择 Lua 解释器路径用)。
-// 只做目录列举, 不读取文件内容; path 为空时给出默认起始目录。
+// List a host directory (used to pick the Lua interpreter in settings).
+// Directory listing only, never file contents; an empty path yields the default start dir.
 function listHostDirectory(rawPath) {
   const isWin = process.platform === 'win32';
   const limit = 3000;
@@ -717,11 +717,11 @@ function listHostDirectory(rawPath) {
           if (fs.existsSync(drive)) {
             entries.push({ name: drive.slice(0, 2), path: drive, isDir: true, isExec: false });
           }
-        } catch (e) { /* 不可访问的盘符跳过 */ }
+        } catch (e) { /* skip inaccessible drives */ }
       }
       return { ok: true, path: '', parent: null, entries };
     }
-    // Termux 的 Lua 在 $PREFIX/bin, 桌面 Linux 通常在 /usr/bin
+    // Termux keeps Lua in $PREFIX/bin, desktop Linux usually in /usr/bin
     const candidates = [
       process.env.PREFIX && path.join(process.env.PREFIX, 'bin'),
       '/usr/local/bin',
@@ -760,7 +760,7 @@ function listHostDirectory(rawPath) {
     let isDir = dirent.isDirectory();
     let isExec = false;
     try {
-      const st = fs.statSync(full); // 跟随符号链接
+      const st = fs.statSync(full); // follow symlinks
       isDir = st.isDirectory();
       if (!isDir) {
         if (isWin) {
@@ -769,11 +769,11 @@ function listHostDirectory(rawPath) {
           try {
             fs.accessSync(full, fs.constants.X_OK);
             isExec = true;
-          } catch (e) { /* 不可执行 */ }
+          } catch (e) { /* not executable */ }
         }
       }
     } catch (e) {
-      continue; // 断链或无权访问
+      continue; // broken link or no permission
     }
     entries.push({ name: dirent.name, path: full, isDir, isExec });
   }
@@ -794,12 +794,12 @@ async function handleApi(req, res, body) {
       return json(res, { version: '2.0.0', name: 'OC Emulator' });
     }
 
-    // /api/fs/list: 列出宿主机目录 (设置里选择 Lua 解释器路径用)
+    // /api/fs/list: list host directories (for picking the Lua interpreter in settings)
     if (parts[1] === 'fs' && parts[2] === 'list' && method === 'GET') {
       return json(res, listHostDirectory((req.query && req.query.path) || ''));
     }
 
-    // /api/server/restart 与 /api/server/stop: 前端控制面板里的服务级按钮
+    // /api/server/restart and /api/server/stop: service-level buttons in the UI
     if (parts[1] === 'server' && method === 'POST') {
       if (parts[2] === 'restart') {
         logger.log('[server] 前端请求重启服务');
@@ -815,15 +815,15 @@ async function handleApi(req, res, body) {
       }
     }
 
-    // /api/update/* : 前端"检查更新"与"版本回退"
+    // /api/update/*: UI "check update" and "rollback"
     if (parts[1] === 'update') {
       if (parts[2] === 'check') {
         return json(res, await checkForUpdate());
       }
       if (parts[2] === 'apply' && method === 'POST') {
         logger.log('[server] 前端请求拉取更新');
-        // 前端带 Accept: application/x-ndjson 时走流式响应, 推送实时进度;
-        // 其余情况返回整包 JSON。
+        // Stream NDJSON progress when the client sends Accept: application/x-ndjson;
+        // otherwise return a single JSON body.
         const wantsStream = String(req.headers.accept || '').indexOf('application/x-ndjson') >= 0
           || (req.query && req.query.stream === '1');
         if (wantsStream) return applyUpdateStreaming(res);
@@ -834,7 +834,7 @@ async function handleApi(req, res, body) {
       }
       if (parts[2] === 'rollback' && method === 'POST') {
         let ref = '';
-        try { ref = (JSON.parse(body || '{}') || {}).ref || ''; } catch (e) { /* 忽略非法 body */ }
+        try { ref = (JSON.parse(body || '{}') || {}).ref || ''; } catch (e) { /* ignore malformed body */ }
         logger.log('[server] 前端请求回退版本: ' + ref);
         return json(res, await rollbackTo(ref));
       }
@@ -865,12 +865,12 @@ async function handleApi(req, res, body) {
       if (method === 'PUT') {
         const patch = JSON.parse(body || '{}');
         saveSettings(patch);
-        // 应用新的 logLevel 到 vmManager (影响后续启动的 VM)
+        // Apply the new logLevel to vmManager (affects VMs started later)
         if (patch.logLevel) {
           vmManager.logLevel = patch.logLevel;
           modsManager.logLevel = patch.logLevel;
         }
-        // 命令行窗口显示开关: 立即生效
+        // Console visibility toggle: applies immediately
         let consoleResult = null;
         if (patch.showConsole !== undefined) {
           consoleResult = await setConsoleVisible(settings.showConsole !== false);
@@ -887,7 +887,7 @@ async function handleApi(req, res, body) {
       }
     }
 
-    // /api/mods - Mods 设备 (机器人 / 无人机)
+    // /api/mods - Mods devices (robots / drones)
     if (parts[1] === 'mods') {
       const validModName = (n) => typeof n === 'string' && /^[A-Za-z0-9_-]{1,32}$/.test(n);
 
@@ -900,8 +900,8 @@ async function handleApi(req, res, body) {
         return json(res, { error: 'Method not allowed' }, 405);
       }
 
-      // /api/mods/import 与 /api/mods/download 是固定路由,
-      // 要在 modName 解析之前拦截 ("import" / "download" 不是合法设备名, 但先拦更稳妥)
+      // /api/mods/import and /api/mods/download are fixed routes and must be handled
+      // before modName parsing ("import" / "download" are not valid device names, but catch them early)
       if (parts.length === 3 && parts[2] === 'import' && method === 'POST') {
         try {
           const payload = JSON.parse(body || '{}');
@@ -952,7 +952,7 @@ async function handleApi(req, res, body) {
       if (parts.length === 4) {
         const action = parts[3];
 
-        // 导出为 zip 下载; 运行中的设备磁盘可能正被子进程写入, 先停止再导出
+        // Export as a zip download; a running device writes its disk from a child process, so stop it first
         if (action === 'export' && method === 'GET') {
           const dir = modsManager.modDir(modName);
           if (!fs.existsSync(dir)) return json(res, { error: 'Mod not found' }, 404);
@@ -978,19 +978,19 @@ async function handleApi(req, res, body) {
           return json(res, modsManager.start(modName));
         }
         if (action === 'stop' && method === 'POST') {
-          try { modsManager.stop(modName); } catch (e) { /* 已停止 */ }
+          try { modsManager.stop(modName); } catch (e) { /* already stopped */ }
           return json(res, { ok: true });
         }
         if (action === 'restart' && method === 'POST') {
-          try { modsManager.restart(modName); } catch (e) { /* 忽略 */ }
+          try { modsManager.restart(modName); } catch (e) { /* ignore */ }
           return json(res, { ok: true });
         }
         if (action === 'pause' && method === 'POST') {
-          try { modsManager.pause(modName); } catch (e) { /* 忽略 */ }
+          try { modsManager.pause(modName); } catch (e) { /* ignore */ }
           return json(res, { ok: true });
         }
         if (action === 'resume' && method === 'POST') {
-          try { modsManager.resume(modName); } catch (e) { /* 忽略 */ }
+          try { modsManager.resume(modName); } catch (e) { /* ignore */ }
           return json(res, { ok: true });
         }
         if (action === 'state' && method === 'GET') {
@@ -1041,7 +1041,7 @@ async function handleApi(req, res, body) {
               const patch = JSON.parse(body || '{}');
               return json(res, modsManager.saveReactor(modName, patch));
             }
-            // POST = 复位堆芯 (更换冷却单元, 清空堆芯热量)
+            // POST = reset the core (replace coolant cells, clear core heat)
             if (method === 'POST') return json(res, modsManager.resetReactor(modName));
           } catch (e) {
             return json(res, { error: e.message }, 400);
@@ -1067,7 +1067,7 @@ async function handleApi(req, res, body) {
           }
         }
 
-        // 燃料箱 / 废料箱: 传动器可访问的虚拟库存
+        // Fuel / waste tanks: virtual inventory reachable through the transposer
         if (action === 'reactor-inventory') {
           try {
             if (method === 'GET') return json(res, modsManager.getReactorInventory(modName));
@@ -1160,17 +1160,17 @@ async function handleApi(req, res, body) {
         if (method === 'GET') return json(res, vmManager.list());
         if (method === 'POST') {
           const spec = JSON.parse(body || '{}');
-          // 如果指定了 disk1/disk2 为 "new", 创建新磁盘
+          // disk1/disk2 set to "new": create a fresh disk image
           if (spec.hardware && spec.hardware.disk1 === 'new') {
             const diskName = 'disk1.ocd';
             const diskPath = path.join(VMS_DIR, spec.name, diskName);
             const tier = spec.hardware.disk1Tier || 3;
             const size = spec.hardware.disk1Size || (tier === 1 ? 1048576 : tier === 2 ? 2097152 : 4194304);
             const label = spec.hardware.disk1Label || `${spec.name}-disk1`;
-            // 先创建 VM 目录
+            // Create the VM directory first
             fs.mkdirSync(path.join(VMS_DIR, spec.name), { recursive: true });
 
-            // 如果有导入文件, 用文件创建磁盘; 否则创建空磁盘
+            // Create the disk from imported files when present, otherwise an empty disk
             if (spec.hardware.disk1ImportFiles && spec.hardware.disk1ImportFiles.length > 0) {
               const files = {};
               const dirSet = new Set(['/']);
@@ -1183,12 +1183,12 @@ async function handleApi(req, res, body) {
               }
               for (const dir of dirSet) { if (!files[dir]) files[dir] = { type: 'directory', modified: Date.now() / 1000 }; }
               diskIO.save(diskPath, { label, files, size, tier, locked: false });
-              // 清理, 不持久化到 config
+              // Drop it so it is not persisted to config
               delete spec.hardware.disk1ImportFiles;
             } else {
               diskIO.create({ path: diskPath, label, size, tier });
             }
-            // 镜像模式: 创建镜像文件夹并写入初始文件
+            // Mirror mode: create the mirror folder and write the initial files
             if (spec.hardware.disk1Mirror) {
               const mirrorPath = path.isAbsolute(spec.hardware.disk1Mirror)
                 ? spec.hardware.disk1Mirror
@@ -1229,7 +1229,7 @@ async function handleApi(req, res, body) {
             } else {
               diskIO.create({ path: diskPath, label, size, tier });
             }
-            // 镜像模式: 创建镜像文件夹并写入初始文件
+            // Mirror mode: create the mirror folder and write the initial files
             if (spec.hardware.disk2Mirror) {
               const mirrorPath = path.isAbsolute(spec.hardware.disk2Mirror)
                 ? spec.hardware.disk2Mirror
@@ -1247,7 +1247,7 @@ async function handleApi(req, res, body) {
             }
             spec.hardware.disk2 = diskName;
           }
-          // 如果选了磁盘模板 (如 'openos' 或 'disk_template:xxx.ocd'), 复制模板
+          // Disk template selected ('openos' or 'disk_template:xxx.ocd'): copy it
           if (spec.hardware && (spec.hardware.disk1 === 'openos' || (spec.hardware.disk1 || '').startsWith('disk_template:'))) {
             const tplFile = spec.hardware.disk1.startsWith('disk_template:')
               ? spec.hardware.disk1.substring('disk_template:'.length)
@@ -1267,15 +1267,15 @@ async function handleApi(req, res, body) {
             if (fs.existsSync(srcPath)) fs.copyFileSync(srcPath, diskPath);
             spec.hardware.disk2 = 'disk2.ocd';
           }
-          // 如果选了 floppy, 写入模板内容或创建空软盘 (使用 .ocf 软盘格式)
+          // Floppy selected: write the template contents or create an empty .ocf floppy
           if (spec.hardware && spec.hardware.floppy) {
             let tplName = spec.hardware.floppy;
-            // 兼容旧名称
+            // Map legacy aliases
             if (floppyAliases[tplName]) tplName = floppyAliases[tplName];
             const floppyPath = path.join(VMS_DIR, spec.name, 'floppy.ocf');
             fs.mkdirSync(path.join(VMS_DIR, spec.name), { recursive: true });
             if (tplName === 'empty') {
-              // 空软盘: 按用户选择的大小创建
+              // Empty floppy: use the size chosen by the user
               const size = spec.hardware.floppySize || 524288;
               const files = {
                 '/': { type: 'directory', modified: Date.now() / 1000 },
@@ -1285,12 +1285,12 @@ async function handleApi(req, res, body) {
               delete spec.hardware.floppySize;
             } else if (floppyTemplates[tplName]) {
               const tpl = floppyTemplates[tplName];
-              // 将 files 转换为需要的格式
+              // Convert the template files to the expected format
               const files = {};
               for (const [fpath, content] of Object.entries(tpl.files)) {
                 files[fpath] = { type: 'file', content: content, modified: Date.now() / 1000 };
               }
-              // 添加目录节点
+              // Add directory entries
               files['/'] = { type: 'directory', modified: Date.now() / 1000 };
               for (const fpath of Object.keys(tpl.files)) {
                 const parts = fpath.split('/').filter(Boolean);
@@ -1320,7 +1320,7 @@ async function handleApi(req, res, body) {
         }
         if (method === 'PUT') {
           const patch = JSON.parse(body || '{}');
-          // 处理 disk1 = 磁盘模板: 复制模板到 VM 目录
+          // disk1 as a disk template: copy it into the VM directory
           if (patch.hardware && (patch.hardware.disk1 === 'openos' || (patch.hardware.disk1 || '').startsWith('disk_template:'))) {
             const tplFile = patch.hardware.disk1.startsWith('disk_template:')
               ? patch.hardware.disk1.substring('disk_template:'.length)
@@ -1332,7 +1332,7 @@ async function handleApi(req, res, body) {
               patch.hardware.disk1 = 'disk1.ocd';
             }
           }
-          // 处理 disk2 = 磁盘模板: 复制模板到 VM 目录
+          // disk2 as a disk template: copy it into the VM directory
           if (patch.hardware && (patch.hardware.disk2 === 'openos' || (patch.hardware.disk2 || '').startsWith('disk_template:'))) {
             const tplFile = patch.hardware.disk2.startsWith('disk_template:')
               ? patch.hardware.disk2.substring('disk_template:'.length)
@@ -1344,10 +1344,10 @@ async function handleApi(req, res, body) {
               patch.hardware.disk2 = 'disk2.ocd';
             }
           }
-          // 处理软盘选项: 模板名或 'empty' 需要创建 floppy.ocf 文件 (.ocf 软盘格式)
+          // Floppy option: a template name or 'empty' requires creating floppy.ocf
           if (patch.hardware && patch.hardware.floppy) {
             let tplName = patch.hardware.floppy;
-            // 如果是已存在的软盘文件名(如 floppy.ocf)，保持不变，不重新创建
+            // An existing floppy file name (e.g. floppy.ocf) is kept as is
             if (!tplName.endsWith('.ocf')) {
               if (floppyAliases[tplName]) tplName = floppyAliases[tplName];
               const floppyPath = path.join(VMS_DIR, vmName, 'floppy.ocf');
@@ -1387,7 +1387,7 @@ async function handleApi(req, res, body) {
             }
           }
           const updated = vmManager.updateConfig(vmName, patch);
-          // 如果 VM 在运行且软盘配置变了, 触发软盘实时刷新
+          // Floppy changed on a running VM: trigger a hot reload
           if (patch.hardware && patch.hardware.floppy && vmManager.isRunning && vmManager.isRunning(vmName)) {
             const floppyFile = updated.hardware?.floppy;
             if (floppyFile) {
@@ -1399,8 +1399,8 @@ async function handleApi(req, res, body) {
         }
         if (method === 'DELETE') {
           vmManager.delete(vmName);
-          // 断开指向这台虚拟机的设备接线, 避免悬空连接
-          try { modsManager.clearVmConnections(vmName); } catch { /* 忽略清理失败 */ }
+          // Drop device wirings pointing at this VM so none dangle
+          try { modsManager.clearVmConnections(vmName); } catch { /* ignore cleanup failure */ }
           return json(res, { ok: true });
         }
       }
@@ -1408,10 +1408,10 @@ async function handleApi(req, res, body) {
       // /api/vms/:name/rename
       if (parts[3] === 'rename' && method === 'POST') {
         let newName = '';
-        try { newName = String((JSON.parse(body || '{}') || {}).name || '').trim(); } catch (e) { /* 忽略非法 body */ }
+        try { newName = String((JSON.parse(body || '{}') || {}).name || '').trim(); } catch (e) { /* ignore malformed body */ }
         try {
           const cfg = vmManager.rename(vmName, newName);
-          try { modsManager.renameVmConnection(vmName, newName); } catch { /* 接线同步失败不影响改名 */ }
+          try { modsManager.renameVmConnection(vmName, newName); } catch { /* wiring sync failure must not block the rename */ }
           return json(res, { ok: true, name: newName, config: cfg });
         } catch (e) {
           return json(res, { ok: false, error: e.message }, 400);
@@ -1472,7 +1472,7 @@ async function handleApi(req, res, body) {
     // /api/disks
     if (parts[1] === 'disks') {
       if (parts[2] === 'templates' && method === 'GET') {
-        // 扫描 disks/ 目录，返回所有 .ocd 磁盘模板
+        // Scan disks/ and return every .ocd disk template
         const templates = [];
         if (fs.existsSync(DISKS_DIR)) {
           for (const fname of fs.readdirSync(DISKS_DIR)) {
@@ -1480,7 +1480,7 @@ async function handleApi(req, res, body) {
             const fullPath = path.join(DISKS_DIR, fname);
             const stat = fs.statSync(fullPath);
             if (!stat.isFile()) continue;
-            // 读取磁盘标签 (bytes 8-23, null-padded)
+            // Read the disk label (bytes 8-23, null-padded)
             let label = null;
             try {
               const buf = fs.readFileSync(fullPath);
@@ -1612,19 +1612,19 @@ async function handleApi(req, res, body) {
       // /api/disks/:file/...
       const diskFile = decodeURIComponent(parts[2] || '');
       if (diskFile) {
-        // diskFile 可能是 vms/xxx/disk1.ocd 格式
+        // diskFile may look like vms/xxx/disk1.ocd
         const diskPath = path.join(PROJECT_DIR, diskFile);
 
-        // 镜像模式检测: 从路径提取 VM 名和磁盘槽位
-        // 例如 vms/myvm/disk1.ocd → vmName=myvm, slot=disk1
-        // 也支持软盘: vms/myvm/floppy.ocf → vmName=myvm, slot=floppy
+        // Mirror mode detection: derive the VM name and disk slot from the path,
+        // e.g. vms/myvm/disk1.ocd -> vmName=myvm, slot=disk1.
+        // Floppies work too: vms/myvm/floppy.ocf -> vmName=myvm, slot=floppy
         const pathMatch = diskFile.match(/^vms\/([^/]+)\/(disk[12]|floppy)\.(ocd|ocf)$/);
         let mirrorFolder = null;
         if (pathMatch) {
           const vmNameMatch = pathMatch[1];
           const slotMatch = pathMatch[2];
           const extMatch = pathMatch[3];
-          // 镜像模式仅适用于磁盘 (disk1/disk2), 软盘不支持镜像模式
+          // Mirror mode only applies to disks (disk1/disk2), not floppies
           if (extMatch === 'ocd' && (slotMatch === 'disk1' || slotMatch === 'disk2')) {
             const vmConfig = vmManager.getConfig(vmNameMatch);
             if (vmConfig && vmConfig.hardware && vmConfig.hardware[slotMatch + 'Mirror']) {
@@ -1650,7 +1650,7 @@ async function handleApi(req, res, body) {
           return json(res, info);
         }
         if (parts[3] === 'tree' && method === 'GET') {
-          // 镜像模式且VM未运行: 从文件夹读取
+          // Mirror mode with the VM stopped: read from the folder
           if (mirrorFolder && !vmRunning && fs.existsSync(mirrorFolder)) {
             const tree = diskIO.listFolderTree(mirrorFolder);
             return json(res, tree);
@@ -1660,7 +1660,7 @@ async function handleApi(req, res, body) {
         }
         if (parts[3] === 'read' && method === 'GET') {
           const innerPath = req.query.path || '/';
-          // 镜像模式且VM未运行: 从文件夹读取
+          // Mirror mode with the VM stopped: read from the folder
           if (mirrorFolder && !vmRunning && fs.existsSync(mirrorFolder)) {
             const result = diskIO.readFromFolder(mirrorFolder, innerPath);
             return json(res, { type: result.type, content: result.content, path: innerPath, ok: result.ok, error: result.error });
@@ -1668,7 +1668,7 @@ async function handleApi(req, res, body) {
           const fileData = diskIO.read(diskPath, innerPath);
           return json(res, { type: fileData.type, content: fileData.content, path: innerPath, ok: fileData.ok, error: fileData.error });
         }
-        // 下载内部文件: 返回原始字节, 前端据此显示下载进度
+        // Download an inner file as raw bytes so the UI can show progress
         if (parts[3] === 'download' && method === 'GET') {
           const innerPath = req.query.path;
           try {
@@ -1698,7 +1698,7 @@ async function handleApi(req, res, body) {
         if (parts[3] === 'write' && method === 'PUT') {
           const innerPath = req.query.path;
           const data = JSON.parse(body || '{}');
-          // 镜像模式且VM未运行: 写入文件夹 (下次启动时会同步到磁盘)
+          // Mirror mode with the VM stopped: write to the folder (synced to the disk on next start)
           if (mirrorFolder && !vmRunning) {
             diskIO.writeToFolder(mirrorFolder, innerPath, data.content || '');
             return json(res, { ok: true });
@@ -1730,7 +1730,7 @@ async function handleApi(req, res, body) {
           diskIO.format(diskPath);
           return json(res, { ok: true });
         }
-        // 镜像模式配置
+        // Mirror mode configuration
         if (parts[3] === 'mirror' && method === 'GET') {
           if (!pathMatch) return json(res, { error: 'Mirror only available for VM disks' }, 400);
           const slot = pathMatch[2];
@@ -1753,10 +1753,10 @@ async function handleApi(req, res, body) {
           const data = JSON.parse(body || '{}');
           const mirrorKey = slot + 'Mirror';
           if (data.enabled && data.path) {
-            // 启用镜像模式
+            // Enable mirror mode
             const newPath = data.path.trim();
             if (!newPath) return json(res, { error: 'Path cannot be empty' }, 400);
-            // 验证路径是否存在(文件夹)
+            // Verify the folder exists
             const absPath = path.isAbsolute(newPath) ? newPath : path.join(PROJECT_DIR, newPath);
             if (!fs.existsSync(absPath) || !fs.statSync(absPath).isDirectory()) {
               return json(res, { error: 'Folder does not exist: ' + newPath }, 400);
@@ -1766,7 +1766,7 @@ async function handleApi(req, res, body) {
             vmManager.updateConfig(vmName, patch);
             return json(res, { ok: true, enabled: true, path: newPath });
           } else {
-            // 禁用镜像模式
+            // Disable mirror mode
             const vmCfg = vmManager.getConfig(vmName);
             if (vmCfg && vmCfg.hardware) {
               delete vmCfg.hardware[mirrorKey];
@@ -2078,9 +2078,9 @@ async function handleApi(req, res, body) {
     return json(res, { error: 'Not found' }, 404);
   } catch (e) {
     logger.error('[api]', e.message);
-    // 流式接口 (如 update/apply) 可能已经发出响应头, 这时只能结束响应
+    // Streaming endpoints (e.g. update/apply) may have sent headers already; just end the response
     if (res.headersSent) {
-      try { res.end(); } catch (err) { /* 忽略 */ }
+      try { res.end(); } catch (err) { /* ignore */ }
       return;
     }
     return json(res, { error: e.message }, 500);
@@ -2095,7 +2095,7 @@ function json(res, data, status = 200) {
   res.end(JSON.stringify(data));
 }
 
-// ---------- HTTP 服务器 ----------
+// ---------- HTTP server ----------
 const server = http.createServer(async (req, res) => {
   const parsed = url.parse(req.url, true);
   req.pathname = parsed.pathname;
@@ -2111,7 +2111,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // 读取 body
+  // Read the request body
   let body = '';
   if (req.method === 'POST' || req.method === 'PUT') {
     for await (const chunk of req) body += chunk;
@@ -2124,7 +2124,7 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-// ---------- WebSocket 服务器 ----------
+// ---------- WebSocket server ----------
 const wss = new WebSocketServer({ server, path: '/ws' });
 
 wss.on('connection', (ws, req) => {
@@ -2192,7 +2192,7 @@ wss.on('connection', (ws, req) => {
           break;
 
         default:
-          // 其他消息忽略
+          // Ignore other messages
       }
     } catch (e) {
       logger.error('[ws] message error:', e.message);
@@ -2206,7 +2206,7 @@ wss.on('connection', (ws, req) => {
   });
 });
 
-// ---------- 动态端口检测 ----------
+// ---------- Dynamic port probing ----------
 function tryListen(host, port, maxRetries = 20) {
   return new Promise((resolve, reject) => {
     function attempt(portNum, retriesLeft) {
@@ -2214,7 +2214,7 @@ function tryListen(host, port, maxRetries = 20) {
       testServer.once('error', (err) => {
         testServer.close();
         if (err.code === 'EADDRINUSE' && retriesLeft > 0) {
-          // 端口被占用, 尝试下一个
+          // Port in use, try the next one
           const nextPort = portNum + 1;
           logger.log(`  Port ${portNum} in use, trying ${nextPort}...`);
           attempt(nextPort, retriesLeft - 1);
@@ -2224,7 +2224,7 @@ function tryListen(host, port, maxRetries = 20) {
       });
       testServer.once('listening', () => {
         testServer.close(() => {
-          // 端口可用, 立即启动真正的服务器
+          // Port is free, start the real server
           resolve(portNum);
         });
       });
@@ -2234,11 +2234,11 @@ function tryListen(host, port, maxRetries = 20) {
   });
 }
 
-// ---------- 启动 ----------
-// 探测指定端口上是否已有本程序实例在运行 (用于单实例保护)
+// ---------- Startup ----------
+// Probe whether another instance of this program already serves the port (single-instance guard)
 function probeExistingInstance(host, port, timeoutMs = 1500) {
   return new Promise((resolve) => {
-    // 0.0.0.0 / :: / 空 都不能作为连接地址, 统一回落到回环地址
+    // 0.0.0.0 / :: / empty are not valid connect addresses; fall back to loopback
     let connectHost = host;
     if (!connectHost || connectHost === '0.0.0.0' || connectHost === '::' || connectHost === '::0') {
       connectHost = '127.0.0.1';
@@ -2269,7 +2269,7 @@ function probeExistingInstance(host, port, timeoutMs = 1500) {
 }
 
 async function main() {
-  // Lua 校验
+  // Lua check
   logger.log('===============================================');
   logger.log('  OC Emulator - Web Control Panel v2.0');
   logger.log('===============================================');
@@ -2277,12 +2277,12 @@ async function main() {
   const HOST = settings.host || '127.0.0.1';
   const CONFIG_PORT = settings.port || 8080;
 
-  // ---- 单实例保护 ----
-  // 端口被占用时不能自动 +1 另起实例, 因为:
-  //   - 同一个 VM 被两个实例各自 spawn 一份 -> 不同端口看到的画面不一致;
-  //   - 两个实例同时读写同一个磁盘镜像 -> 可能损坏数据。
-  // 因此: 只要配置端口上已有本程序实例在服务, 就不再启动第二个, 直接退出。
-  // (退出码 3 = 已有实例在运行, run.bat 据此不会自动重启)
+  // ---- Single-instance guard ----
+  // Never auto-bump the port when it is taken, because:
+  //   - the same VM would be spawned twice -> inconsistent screens per port;
+  //   - two instances writing one disk image -> possible corruption.
+  // So if an instance of this program already serves the configured port, exit instead.
+  // (Exit code 3 = already running; run.bat then skips the restart.)
   if (await probeExistingInstance(HOST, CONFIG_PORT)) {
     logger.log('');
     logger.log('===============================================');
@@ -2302,8 +2302,8 @@ async function main() {
   const luaResult = await luaCheck.ensure();
   if (luaResult.ok) {
     logger.log(`  ✓ Lua OK: ${luaResult.version} ${luaResult.cached ? '(cached)' : '(verified)'}`);
-    // 自动探测/安装得到的真实路径可能和 settings.json 里的命令名不同
-    // (例如 Termux 下检测到 lua5.3), 同步给所有需要启动 Lua 的模块。
+    // The detected/installed path may differ from the command in settings.json
+    // (e.g. lua5.3 under Termux); propagate it to every module that spawns Lua.
     if (luaResult.path && luaResult.path !== settings.luaExe) {
       settings.luaExe = luaResult.path;
       diskIO.luaExe = luaResult.path;
@@ -2318,7 +2318,7 @@ async function main() {
 
   logger.log('\n[2/2] Starting web server...');
 
-  // 动态查找可用端口: 如果配置端口被占用则自动 +1
+  // Find a free port: bump the configured port by one while it is taken
   let actualPort;
   try {
     actualPort = await tryListen(HOST, CONFIG_PORT, 20);
@@ -2336,7 +2336,7 @@ async function main() {
     logger.log(`\n===============================================`);
     logger.log(`  Server ready!`);
 
-    // 获取本机 IP 地址
+    // Collect this machine's IPv4 addresses
     function getLocalIPs() {
       const ifaces = os.networkInterfaces();
       const ips = [];
@@ -2353,7 +2353,7 @@ async function main() {
     const isAnyHost = (HOST === '0.0.0.0' || HOST === '::' || HOST === '');
 
     if (isAnyHost) {
-      // 监听所有地址: 显示 localhost + 内网 IP + 外网提示
+      // Listening on all addresses: show localhost, LAN IPs and a WAN hint
       logger.log(`  Local:   http://127.0.0.1:${actualPort}`);
       const localIPs = getLocalIPs();
       for (const ip of localIPs) {
@@ -2361,28 +2361,28 @@ async function main() {
       }
       logger.log(`  外网:    需要端口映射 + 公网IP/域名访问`);
     } else if (HOST === '127.0.0.1' || HOST === 'localhost') {
-      // 仅本地: 也显示内网 IP 供参考 (但实际不能通过内网访问)
+      // Local only: still show the LAN IP for reference (not actually reachable)
       logger.log(`  Local:   http://${HOST}:${actualPort}`);
       const localIPs = getLocalIPs();
       if (localIPs.length > 0) {
-        // 输出到控制台的一行不要过长, 尤其含中文(双宽字符)时。
-        // Windows 控制台在窗口宽度不足时会把这类行「直接截断」而不是换行,
-        // 表现为中文显示不全。所以这里拆成两行短句。
+        // Keep console lines short, especially with double-width CJK text:
+        // the Windows console truncates lines wider than the window instead of
+        // wrapping them, so split this into two short lines.
         logger.log(`  本机IP:  http://${localIPs[0]}:${actualPort}`);
         logger.log(`  仅本地监听; 改 host 为 0.0.0.0 即可局域网访问`);
       }
     } else {
-      // 指定 IP: 直接显示
+      // Explicit IP: print it directly
       logger.log(`  Open:    http://${HOST}:${actualPort}`);
     }
 
     logger.log(`  Press Ctrl+C to stop.`);
     logger.log(`===============================================\n`);
 
-    // 实际监听端口与进程号写入 cache 下的状态文件, 供 run.bat / run.sh 的看门狗读取。
-    // 配置端口被占用时服务器会自动换端口, 看门狗以文件中的值为准才能监视到正确的进程。
-    // 写入先落到临时文件再改名, 读取方不会读到写了一半的内容; 进程退出后文件保留,
-    // 始终指向最近一次运行的实际值。
+    // Write the actual port and PID to a state file under cache/ for the run.bat / run.sh watchdog.
+    // The server may switch ports, so the watchdog must trust these values to watch the right process.
+    // Writes land in a temp file and are then renamed, so readers never see a partial file;
+    // the file survives process exit and always points at the latest run.
     try {
       const cacheDir = path.join(PROJECT_DIR, 'cache');
       fs.mkdirSync(cacheDir, { recursive: true });
@@ -2394,20 +2394,20 @@ async function main() {
       };
       writeAtomic('.server-port', String(actualPort));
       writeAtomic('.server-pid', String(process.pid));
-    } catch (e) { /* 状态文件写入失败不影响服务运行; 看门狗读不到时会保持不动 */ }
+    } catch (e) { /* a failed state-file write must not stop the server; the watchdog just holds still */ }
 
-    // 应用"命令行窗口显示"设置 (关闭时启动即隐藏; 可在前端设置里重新打开)
+    // Apply the "show console" setting (hidden at startup when off; can be re-enabled in the UI)
     if (settings.showConsole === false) {
       setConsoleVisible(false).catch(() => {});
     }
 
-    // 稳定运行 60 秒后写一个标记文件, 前台守护脚本 (run.bat / run.sh) 据此
-    // 判断"这次运行是健康的"并重置重启计数。路径由守护脚本经环境变量传入;
-    // 直接用 node 启动时该变量不存在, 跳过即可。
+    // After 60s of uptime write a marker file; the run.bat / run.sh watchdog uses it
+    // to treat this run as healthy and reset the restart counter. The path comes from
+    // an env var set by the watchdog; when started directly with node it is absent, so skip.
     const uptimeMarker = process.env.OC_UPTIME_MARKER;
     if (uptimeMarker) {
       setTimeout(() => {
-        try { fs.writeFileSync(uptimeMarker, String(Date.now())); } catch (e) { /* 忽略 */ }
+        try { fs.writeFileSync(uptimeMarker, String(Date.now())); } catch (e) { /* ignore */ }
       }, 60000);
     }
   });

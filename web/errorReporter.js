@@ -1,16 +1,16 @@
 // ============================================================
-// errorReporter.js - 前端全局错误捕获
-// 捕获脚本运行时错误与未处理的 Promise 拒绝, 弹出错误面板:
-//   - 显示错误摘要与调用栈
-//   - 匹配常见错误, 给出可能原因与解决步骤
-//   - 一键复制完整错误信息
-//   - 跳转 GitHub / Gitee 提交 Issue
+// errorReporter.js - global frontend error capture
+// Catches runtime errors and unhandled promise rejections, then shows a panel with:
+//   - the error summary and stack trace
+//   - matches for common errors, with likely causes and fix steps
+//   - one-click copy of the full report
+//   - links to file an issue on GitHub / Gitee
 // ============================================================
 (() => {
   if (window.ErrorReporter) return;
 
-  // ---------- 常见错误说明与解决方法 ----------
-  // 每条规则匹配错误摘要或调用栈, 命中后显示原因和处理步骤
+  // ---------- Common error explanations and fixes ----------
+  // Each rule is matched against the summary or stack; a hit shows cause and fix steps
   const ERROR_GUIDE = [
     {
       test: /luaExe|lua not found|未找到 ?lua|lua 路径|Lua check failed|Lua: failed/i,
@@ -178,14 +178,14 @@
     return out;
   }
 
-  // ---------- 反馈入口 ----------
+  // ---------- Feedback endpoints ----------
   const REPO = {
     github: 'https://github.com/zip132sy/OC-Emulator',
     gitee: 'https://gitee.com/zip132sy/OC-Emulator',
   };
   const VERSION = '2.0.0';
 
-  // ---------- 文案 ----------
+  // ---------- Text ----------
   function isEn() {
     try {
       if (window.I18N && I18N.getLang) return I18N.getLang() === 'en';
@@ -194,12 +194,12 @@
   }
   const tr = (zh, en) => (isEn() ? en : zh);
 
-  // ---------- 去重 ----------
-  const seen = new Set();      // 相同错误只弹一次, 避免死循环刷屏
-  let panel = null;            // 当前面板
-  let currentDetail = '';      // 当前错误的完整文本
+  // ---------- De-duplication ----------
+  const seen = new Set();      // show each distinct error once, so an error loop cannot flood the screen
+  let panel = null;
+  let currentDetail = '';
 
-  // ---------- 详情文本 ----------
+  // ---------- Detail text ----------
   function buildDetail(summary, stack, source) {
     const lines = [
       tr('【OC Emulator 错误报告】', '[OC Emulator Error Report]'),
@@ -214,7 +214,7 @@
     return lines.join('\n');
   }
 
-  // ---------- 剪贴板 ----------
+  // ---------- Clipboard ----------
   async function copyText(text) {
     try {
       if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -240,7 +240,7 @@
     }
   }
 
-  // ---------- 反馈链接 (预填标题/内容) ----------
+  // ---------- Feedback links (title and body pre-filled) ----------
   function issueUrl(kind, summary, detail) {
     const title = '[Bug] ' + String(summary).slice(0, 120);
     let body = detail;
@@ -252,7 +252,7 @@
     return REPO.github + '/issues/new?' + qs('title', title) + '&' + qs('body', body);
   }
 
-  // ---------- 样式 (自包含, 不依赖 styles.css) ----------
+  // ---------- Styles (self-contained, independent of styles.css) ----------
   function injectStyle() {
     if (document.getElementById('err-reporter-style')) return;
     const style = document.createElement('style');
@@ -314,7 +314,7 @@
     document.head.appendChild(style);
   }
 
-  // ---------- 面板 ----------
+  // ---------- Panel ----------
 
   function guideItem(rule) {
     const item = document.createElement('div');
@@ -390,7 +390,7 @@
       if (matched.length > 0) body.appendChild(guideBlock(matched));
       body.appendChild(pre);
 
-      // 全部常见错误, 点按钮展开
+      // Full guide, expanded by the footer button
       const allGuide = document.createElement('div');
       allGuide.className = 'er-all-guide';
       for (const rule of ERROR_GUIDE) allGuide.appendChild(guideItem(rule));
@@ -450,11 +450,11 @@
       panel.appendChild(body);
       panel.appendChild(foot);
     } catch (_) {
-      // 报告器自身出错时不能再抛, 回落为控制台输出
+      // The reporter must never throw from its own catch; fall back to console output
     }
   }
 
-  // ---------- 对外接口 ----------
+  // ---------- Public API ----------
   function report(err) {
     let summary = tr('未知错误', 'Unknown error');
     let stack = '';
@@ -475,7 +475,7 @@
   }
 
   window.addEventListener('error', (e) => {
-    // 资源加载失败 (img/script) 也会触发 error 事件, 且无 error 对象
+    // Resource load failures (img/script) also fire error events without an error object
     if (e && e.message) {
       const src = e.filename ? (e.filename + ':' + e.lineno + ':' + e.colno) : '';
       report({ __ocReport: true, summary: e.message, stack: (e.error && e.error.stack) || '', source: src });

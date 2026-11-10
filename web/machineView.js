@@ -1,10 +1,10 @@
 // ============================================================
-// machineView.js - 自定义脚本机器的通用控制面板
+// machineView.js - generic control panel for custom script machines
 //
-// 数据来自 GET /api/mods/:name 的 machine 字段:
+// Data comes from the machine field of GET /api/mods/:name:
 //   { running, error, script, connectedVm,
 //     components: [{ type, label, props, actions, address, state, methods }] }
-// 属性编辑写入 /machine-state, 动作调用写入 /machine-action。
+// Property writes go to /machine-state; action calls go to /machine-action.
 // ============================================================
 
 const MachineView = (() => {
@@ -33,7 +33,7 @@ const MachineView = (() => {
     return String(value == null ? '' : value);
   }
 
-  // 组件定义变化时整块重建, 其余情况只刷新数值
+  // Rebuild the whole panel when component definitions change; otherwise only refresh values
   function signatureOf(data) {
     const components = (data && data.components) || [];
     return JSON.stringify({

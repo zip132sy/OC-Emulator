@@ -1,27 +1,27 @@
 -- ============================================================
--- mods.lua - Mods 统一组件 (Robot / Drone / Microcontroller)
+-- mods.lua - unified Mods component (robot / drone / microcontroller)
 --
--- 把 OpenComputers 原版的以下三个组件合并到同一个组件里:
---   * robot          机器人
---   * drone          无人机
---   * microcontroller 单片机
+-- Merges these three OpenComputers components into one:
+--   * robot
+--   * drone
+--   * microcontroller
 --
--- 设计要点:
---   1. 三者共享同一份设备状态 (位置 / 朝向 / 物品栏 / 工具 / 储罐 / 灯光)。
---   2. 同名同义的 API 直接共用一份实现, 不需要按设备区分。
---   3. robot.move(direction) 与 drone.move(dx,dy,dz) 通过参数个数重载共存。
---   4. 额外提供 mods.robot / mods.drone / mods.mcu 三个命名空间,
---      以及 robot_* / drone_* / mcu_* 扁平别名, 便于按原组件习惯调用。
---   5. 模拟器没有真实的 Minecraft 世界, 因此内置一个可由脚本编辑的
---      虚拟世界 (mods.world), 让 detect/swing/place/drop/suck/流体
---      等接口都有真实可观察的行为。
+-- Design notes:
+--   1. All three share one device state (position, facing, inventory, tools, tanks, light).
+--   2. APIs with identical names and semantics share one implementation.
+--   3. robot.move(direction) and drone.move(dx,dy,dz) coexist, overloaded by argument count.
+--   4. Also exposes mods.robot / mods.drone / mods.mcu namespaces
+--      plus robot_* / drone_* / mcu_* flat aliases matching the real component call style.
+--   5. There is no real Minecraft world, so a built-in, script-editable
+--      virtual world (mods.world) gives detect/swing/place/drop/suck and fluid
+--      calls observable behaviour.
 --
--- 该文件是纯 Lua 模块, 不依赖 oc-emulator.lua 的内部变量, 可单独测试。
+-- Pure Lua module with no dependency on oc-emulator.lua internals; testable standalone.
 -- ============================================================
 
 local mods = {}
 
--- 设备状态 (在下面 resetState 中填充)
+-- Device state (populated in resetState below)
 local state
 
 local VERSION = "1.0.0"
@@ -30,10 +30,10 @@ mods.tier = 3
 mods.version = VERSION
 
 -- ============================================================
--- 基础工具
+-- Helpers
 -- ============================================================
--- 时间源: 普通 VM 使用 os.clock; Mods 设备由模拟器注入服务端墙钟,
--- 保证空闲等待时无人机仍能按真实时间推进。
+-- Time source: plain VMs use os.clock; the emulator injects server wall-clock time for Mods devices
+-- so idle drones still advance in real time.
 local clock = function()
   return os.clock()
 end
@@ -66,7 +66,7 @@ local function toNumber(v)
   return tonumber(v)
 end
 
--- OC / Minecraft 的 side 编号
+-- OpenComputers / Minecraft side numbers
 --   0 = bottom(down)  1 = top(up)  2 = back   3 = front   4 = right   5 = left
 local SIDE_NAMES = { [0] = "bottom", [1] = "top", [2] = "back", [3] = "front", [4] = "right", [5] = "left" }
 local SIDE_ALIASES = {
@@ -88,7 +88,7 @@ local function normalizeSide(side)
   return n
 end
 
--- 朝向: 1=south(+z, front) 2=west(-x, right) 3=north(-z, back) 4=east(+x, left)
+-- Facing: 1=south(+z, front) 2=west(-x, right) 3=north(-z, back) 4=east(+x, left)
 local FACING = {
   [1] = { name = "south", dx = 0, dz = 1 },
   [2] = { name = "west", dx = -1, dz = 0 },
@@ -118,7 +118,7 @@ local function sideVector(side)
 end
 
 -- ============================================================
--- 虚拟世界
+-- Virtual world
 -- ============================================================
 local world = {
   blocks = {},    -- ["x,y,z"] = block
@@ -181,7 +181,7 @@ local function makeBlock(name, meta, opts)
 end
 
 -- ============================================================
--- 设备状态
+-- Device state
 -- ============================================================
 local function resetState()
   state = {
@@ -215,7 +215,7 @@ local function resetState()
     energy = 100,
     maxEnergy = 100,
 
-    -- 控制面板里双击设备面板是否进入全屏
+    -- Whether double-clicking the device panel in the control panel goes fullscreen
     doubleClickFullscreen = true,
   }
 end
@@ -230,7 +230,7 @@ local function ensureRunning()
 end
 
 -- ============================================================
--- 物品栏
+-- Inventory
 -- ============================================================
 local function stackMax(name)
   if type(name) ~= "string" then return 64 end
@@ -263,7 +263,7 @@ local function invAdd(name, count, meta, preferSlot)
     if i ~= preferSlot then order[#order + 1] = i end
   end
 
-  -- 先堆叠到已有的同类物品
+  -- Top up existing stacks first
   for _, i in ipairs(order) do
     local st = state.inv[i]
     if st and st.name == name and (st.meta or 0) == meta and st.count < max then
@@ -274,7 +274,7 @@ local function invAdd(name, count, meta, preferSlot)
     end
   end
 
-  -- 再放进空格
+  -- Then use empty slots
   for _, i in ipairs(order) do
     if not state.inv[i] then
       local put = math.min(max, count - added)
@@ -340,7 +340,7 @@ local function chestTake(chest, count)
 end
 
 -- ============================================================
--- 无人机运动
+-- Drone motion
 -- ============================================================
 local function distanceToTarget()
   local dx = state.target.x - state.pos.x
@@ -387,7 +387,7 @@ local function tick()
 end
 
 -- ============================================================
--- 机器人 / 无人机共用动作
+-- Shared robot / drone actions
 -- ============================================================
 local function robotMove(side)
   local dx, dy, dz = sideVector(side)
@@ -441,7 +441,7 @@ local function damageTool()
 end
 
 -- ============================================================
--- 基础状态 API
+-- Basic state API
 -- ============================================================
 function mods.getVersion()
   return VERSION
@@ -564,7 +564,7 @@ function mods.setAcceleration(value)
 end
 
 -- ============================================================
--- 单片机 (microcontroller)
+-- Microcontroller
 -- ============================================================
 function mods.start()
   if state.running then return false end
@@ -606,19 +606,19 @@ function mods.reportError(message)
 end
 
 -- ============================================================
--- 移动 / 转向
+-- Movement / turning
 -- ============================================================
 function mods.move(a, b, c)
   tick()
   local ok, err = ensureRunning()
   if not ok then return nil, err end
 
-  -- 无人机形态: move(dx, dy, dz)
+  -- Drone form: move(dx, dy, dz)
   if b ~= nil or c ~= nil then
     return droneMove(a, b, c)
   end
 
-  -- 机器人形态: move(direction)
+  -- Robot form: move(direction)
   local side = normalizeSide(a)
   if side == nil then return nil, "move expects (direction) or (dx, dy, dz)" end
   return robotMove(side)
@@ -638,9 +638,9 @@ function mods.turn(clockwise)
 end
 
 -- ============================================================
--- 工具
+-- Tools
 -- ============================================================
--- 控制面板里主手 / 副手工具使用 id, 这里给出对应的默认耐久
+-- The control panel stores main/offhand tools by id; this table lists their default durability
 local TOOL_DURABILITY = {
   diamond_drill = 2400,
   diamond_pickaxe = 1561,
@@ -653,7 +653,7 @@ local TOOL_DURABILITY = {
   flint_and_steel = 64,
 }
 
--- 由工具 id 生成装备数据; 空 id 表示空手
+-- Build equipment data from a tool id; an empty id means empty-handed
 local function toolFromId(id)
   if type(id) ~= "string" or id == "" then return nil end
   local maxDur = TOOL_DURABILITY[id]
@@ -693,7 +693,7 @@ function mods.durability()
   return t.durability / t.maxDurability, t.durability, t.maxDurability
 end
 
--- ---------- 副手 ----------
+-- ---------- Offhand ----------
 function mods.equipOffhand(name, maxDurability)
   if name == nil then
     state.offhand = nil
@@ -721,10 +721,10 @@ function mods.getOffhand()
 end
 
 -- ============================================================
--- 设备专属配置
+-- Device profile
 -- ============================================================
--- 由控制面板写入 config.json 的 hardware.robot / hardware.drone,
--- 启动时通过本函数套用到组件状态 (字段缺省时保持原值)。
+-- Written by the control panel to hardware.robot / hardware.drone in config.json,
+-- applied to the component state at startup (missing fields keep their value).
 function mods.setProfile(profile)
   if type(profile) ~= "table" then return nil, "table expected" end
 
@@ -771,10 +771,10 @@ function mods.getProfile()
 end
 
 -- ============================================================
--- 界面行为
+-- UI behaviour
 -- ============================================================
--- 是否允许在控制面板里双击设备面板进入全屏。
--- 关闭后双击可用于程序自己的交互, 不会再切换到全屏。
+-- Whether double-clicking the device panel goes fullscreen.
+-- When disabled, double-click is free for programs and never toggles fullscreen.
 function mods.setDoubleClickFullscreen(enabled)
   state.doubleClickFullscreen = enabled ~= false
   return state.doubleClickFullscreen
@@ -785,7 +785,7 @@ function mods.getDoubleClickFullscreen()
 end
 
 -- ============================================================
--- 物品栏 API
+-- Inventory API
 -- ============================================================
 function mods.inventorySize()
   return state.inventorySize
@@ -850,7 +850,7 @@ function mods.transferTo(toSlot, amount)
     return true
   end
 
-  -- 目标格已有其它物品: 只有整堆移动时才交换
+  -- Target slot holds other items: swap only when moving the whole stack
   if n >= from.count then
     state.inv[slot] = from
     state.inv[state.selected] = to
@@ -862,7 +862,7 @@ end
 
 function mods.getInventory(side)
   local s = normalizeSide(side)
-  -- 没有工具腰带: 左侧不暴露任何格子, 右侧(工具腰带)为空
+  -- No tool belt: left side exposes no slots, right side (tool belt) is empty
   if side ~= nil and (s == 4 or s == 5) then return {} end
   local out = {}
   for i = 1, state.inventorySize do
@@ -912,7 +912,7 @@ function mods.clearInventory()
 end
 
 -- ============================================================
--- 储罐 API
+-- Tank API
 -- ============================================================
 local function tankGet(tank)
   local t = toInt(tank) or state.selectedTank
@@ -1001,7 +1001,7 @@ function mods.transferFluidTo(tank, count)
 end
 
 -- ============================================================
--- 世界交互
+-- World interaction
 -- ============================================================
 function mods.detect(side)
   tick()
@@ -1108,7 +1108,7 @@ function mods.drop(side, count)
   local ok, err = ensureRunning()
   if not ok then return nil, err end
 
-  -- 兼容高层写法 drop(count): 只有一个参数且大于 side 范围时视为数量
+  -- Also accept drop(count): a single numeric argument above the side range is a count
   if count == nil and type(side) == "number" and side > 5 then
     count, side = side, nil
   end
@@ -1272,7 +1272,7 @@ function mods.fill(side, amount)
 end
 
 -- ============================================================
--- 状态快照
+-- State snapshot
 -- ============================================================
 function mods.getState()
   tick()
@@ -1312,7 +1312,7 @@ function mods.getInfo()
 end
 
 function mods.reset(keepWorld)
-  -- 专属配置来自控制面板, 重置状态后重新套用
+  -- Re-apply the control-panel profile after resetting state
   local profile = state.profile
   resetState()
   if profile then mods.setProfile(profile) end
@@ -1326,7 +1326,7 @@ function mods.reset(keepWorld)
 end
 
 -- ============================================================
--- 虚拟世界 API
+-- Virtual world API
 -- ============================================================
 mods.world = {}
 
@@ -1503,7 +1503,7 @@ function mods.world.dump()
   }
 end
 
--- 顶层快捷方式 (与 mods.world 等价)
+-- Top-level shortcuts (same as mods.world)
 function mods.setBlock(x, y, z, name, meta)
   return mods.world.setBlock(x, y, z, name, meta)
 end
@@ -1521,14 +1521,14 @@ function mods.clearWorld()
 end
 
 -- ============================================================
--- 命名空间: 按原组件习惯调用
+-- Namespaces matching the real component call style
 -- ============================================================
 mods.robot = setmetatable({}, { __index = mods })
 mods.drone = setmetatable({}, { __index = mods })
 mods.microcontroller = setmetatable({}, { __index = mods })
 mods.mcu = mods.microcontroller
 
--- ---- Robot 高层 API (require("robot") 风格) ----
+-- ---- Robot high-level API (require("robot") style) ----
 function mods.robot.forward() return mods.move(3) end
 function mods.robot.back() return mods.move(2) end
 function mods.robot.up() return mods.move(1) end
@@ -1604,7 +1604,7 @@ function mods.microcontroller.lastError() return mods.lastError() end
 function mods.microcontroller.reportError(message) return mods.reportError(message) end
 
 -- ============================================================
--- 扁平别名: robot_* / drone_* / mcu_* / microcontroller_*
+-- Flat aliases: robot_* / drone_* / mcu_* / microcontroller_*
 -- ============================================================
 local ROBOT_FLAT = {
   "durability", "move", "turn", "name", "swing", "use", "place", "placeInInventory",
@@ -1654,13 +1654,13 @@ for _, name in ipairs(MCU_FLAT) do
   end
 end
 
--- 高层机器人方法的扁平别名 (mods.forward 等)
+-- Flat aliases for high-level robot methods (mods.forward etc.)
 for _, name in ipairs(ROBOT_HIGH) do
   if mods.robot[name] then mods[name] = mods.robot[name] end
 end
 
 -- ============================================================
--- OC 原版 API -> Mods 映射表
+-- Original OC API -> Mods mapping table
 -- ============================================================
 local API_ROWS = {}
 
@@ -1678,7 +1678,7 @@ local function addRows(kind, rows, targetPrefix, flatPrefix, notes)
   end
 end
 
--- 机器人组件 (component robot)
+-- Robot component (component robot)
 addRows("robot", {
   { "robot.durability()", "", "返回工具耐久度比例、剩余耐久、最大耐久；无工具时返回 nil 与原因。" },
   { "robot.move(direction)", "direction:number", "按 side 编号移动；0=下 1=上 2=后 3=前 4=右 5=左。与无人机 move 通过参数个数重载共存。" },
@@ -1711,7 +1711,7 @@ addRows("robot", {
   { "robot.suck(side[,count])", "side:number", "从指定方向吸取掉落物或容器物品。" },
 }, "mods", "mods.robot_", nil)
 
--- 无人机组件 (component drone)
+-- Drone component (component drone)
 addRows("drone", {
   { "drone.getStatusText()", "", "读取无人机状态文本。" },
   { "drone.setStatusText(value)", "value:string", "设置无人机状态文本。" },
@@ -1750,7 +1750,7 @@ addRows("drone", {
   { "drone.suck(side[,count])", "side:number", "与机器人 suck 共用实现。" },
 }, "mods", "mods.drone_", nil)
 
--- 单片机组件 (component microcontroller)
+-- Microcontroller component (component microcontroller)
 addRows("microcontroller", {
   { "microcontroller.setSideOpen(side,open)", "side:number, open:boolean", "设置指定方向是否开放（状态记录）。" },
   { "microcontroller.start()", "", "启动设备；状态改变时返回 true。" },
@@ -1760,7 +1760,7 @@ addRows("microcontroller", {
   { "microcontroller.stop()", "", "停止设备；停止后动作类 API 返回 microcontroller is stopped。" },
 }, "mods", "mods.mcu_", nil)
 
--- 机器人高层 API (OpenOS require("robot") 风格)
+-- Robot high-level API (OpenOS require("robot") style)
 addRows("robot_api", {
   { "robot.forward()", "", "向前移动一格。" },
   { "robot.back()", "", "向后移动一格。" },
@@ -1796,7 +1796,7 @@ addRows("robot_api", {
   { "robot.getOffhand()", "", "返回副手工具名称与耐久（扩展）。" },
 }, "mods.robot", "mods.", nil)
 
--- 扩展 API (原版没有, Mods 额外提供)
+-- Extension API (not in the original; provided by Mods)
 local EXTENSION_ROWS = {
   { "mods.getVersion()", "", "组件版本号。" },
   { "mods.getType()", "", "组件类型，固定返回 mods。" },

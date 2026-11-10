@@ -1,16 +1,16 @@
 -- ============================================================
--- OpenComputers 模拟器 (OC Emulator) v2.0
--- 模拟 OC 模组电脑环境 (Web 控制面板版)
+-- OpenComputers emulator (OC Emulator) v2.0
+-- Emulates OC mod computers (web control-panel edition)
 --
--- 用法: lua oc-emulator.lua --vm <vm_dir> --json-io
--- I/O: stdin/stdout JSON lines (与 server.js 通信)
+-- Usage: lua oc-emulator.lua --vm <vm_dir> --json-io
+-- I/O: JSON lines on stdin/stdout (talks to server.js)
 -- ============================================================
 
 -- ============================================================
--- 项目署名
---   源码提供: DeepSeek , Trea
---   校验与测试: zip132sy , DeepSeek
---   本项目免费且开源!
+-- Credits
+--   Source: DeepSeek, Trea
+--   Verification and testing: zip132sy, DeepSeek
+--   Free and open source!
 -- ============================================================
 
 local verifyProjectInfo
@@ -57,30 +57,30 @@ end
 
 verifyProjectInfo("startup")
 
--- 调试日志 (写到 stderr, 不干扰 stdout JSON)
--- 保存原始 io 引用: OpenOS 加载 /lib/io.lua 后会覆盖 _G.io
+-- Debug logging goes to stderr so it never pollutes the JSON on stdout
+-- Keep the original io references: OpenOS overwrites _G.io when it loads /lib/io.lua
 local _stderr = io.stderr
 local _stdout = io.stdout
 local _stdin = io.stdin
-local _io_read = io.read       -- 保存原始 io.read
-local _io_open = io.open       -- 保存原始 io.open
-local _io_popen = io.popen     -- 保存原始 io.popen
-local _io_lines = io.lines      -- 保存原始 io.lines
-local _io_tmpfile = io.tmpfile  -- 保存原始 io.tmpfile
--- 保存原始 os 函数: OpenOS 加载后会覆盖 _G.os
+local _io_read = io.read
+local _io_open = io.open
+local _io_popen = io.popen
+local _io_lines = io.lines
+local _io_tmpfile = io.tmpfile
+-- Keep the original os functions: OpenOS overwrites _G.os
 local _os_tmpname = os.tmpname
 local _os_remove = os.remove
 local _os_execute_raw = os.execute
-local _os_clock = os.clock       -- 保存原始 os.clock (渲染帧率控制用)
-local _os_exit = os.exit        -- 保存原始 os.exit: 系统可能覆盖 _G.os.exit, 宿主退出必须用它
+local _os_clock = os.clock       -- Original os.clock, used for frame pacing
+local _os_exit = os.exit        -- Original os.exit: the guest may replace _G.os.exit, so host exits must use this
 _stderr:setvbuf("no")
 
--- Lua 5.1 兼容: string.format("%s", table) 不会自动 tostring
--- OpenOS (Lua 5.2+) 依赖此行为, 这里 patch 一下
+-- Lua 5.1 compatibility: string.format("%s", table) does not call tostring
+-- OpenOS (Lua 5.2+) relies on that behaviour, so patch it
 local _orig_string_format = string.format
 string.format = function(fmt, ...)
   local args = { ... }
-  -- 对 %s 对应的参数, 如果不是字符串, 用 tostring 转换
+  -- Convert non-string arguments for %s to strings
   local i = 0
   local n = select("#", ...)
   fmt = fmt:gsub("%%[0-9%.]*[a-zA-Z]", function(spec)
@@ -93,50 +93,49 @@ string.format = function(fmt, ...)
   return _orig_string_format(fmt, (table.unpack or unpack)(args, 1, n))
 end
 
--- Lua 5.2+ 兼容: table.pack / table.unpack
+-- Lua 5.2+ compatibility: table.pack / table.unpack
 if not table.pack then
   table.pack = function(...) return { n = select("#", ...), ... } end
 end
 if not table.unpack then
-  table.unpack = unpack  -- Lua 5.1 的全局 unpack
+  table.unpack = unpack
 end
-local dbg = nil  -- 调试日志当前关闭
+local dbg = nil
 
--- 日志级别: "error" = 仅错误 (默认), "full" = 常规信息, "off" = 全部关闭
--- 注意: 高频调试日志 (component.invoke / filesystem / pullSignal) 由 verboseLog
---   单独控制, 默认关闭。这些日志处在最热路径上 (每次绘图 / 每次文件访问 /
---   每次空闲轮询都会触发), 开启后每秒会产生上百行 stderr 输出, 而 server 会
---   同步转发到控制台和浏览器。这会占满 Node 单线程事件循环, 使 VM 协议往返
---   (pull_signal <-> tick) 被拖慢, 表现为系统启动十几秒后开始严重卡顿。
---   需要排查问题时再用 --log-level verbose 或 --verbose 临时开启。
+-- Log level: "error" = errors only (default), "full" = normal info, "off" = silent
+-- High-frequency debug logs (component.invoke / filesystem / pullSignal) are gated by
+-- verboseLog and are off by default. They sit on the hottest paths (every draw, file access
+-- and idle poll); enabling them emits hundreds of stderr lines per second, which the server
+-- forwards synchronously to the console and browser, saturating Node's event loop and slowing
+-- the pull_signal <-> tick round trips until the VM stalls badly after ~10 s.
+-- Enable temporarily with --log-level verbose or --verbose when debugging.
 local logLevel = "error"
 
--- 高频调试日志开关 (仅 verbose 模式下为 true)
+-- High-frequency debug logging (only true in verbose mode)
 local verboseLog = false
 
--- 保存原始目录分隔符 (在 _G.package 被沙箱替换前)
+-- Original directory separator, captured before the sandbox replaces _G.package
 local DIR_SEP = package.config:sub(1, 1)
 local function dlog(...)
-  -- 高频调试日志: 默认关闭
   if not verboseLog then return end
   local parts = {}
   for i = 1, select("#", ...) do parts[i] = tostring(select(i, ...)) end
   _stderr:write("[dlog] " .. table.concat(parts, "\t") .. "\n")
 end
 
--- 输出错误日志到 stderr (仅 error 和 full 级别输出)
+-- Error log to stderr (error and full levels only)
 local function elog(msg)
   if logLevel == "off" then return end
   _stderr:write("[emulator] " .. msg .. "\n")
 end
 
--- 常规信息日志 (仅 full 级别输出): 渲染帧、输入事件等排查用信息
+-- Info log (full level only): render frames, input events, diagnostics
 local function ilog(msg)
   if logLevel ~= "full" then return end
   _stderr:write("[emulator] " .. msg .. "\n")
 end
 
--- Lua 5.5 移除了 bit32
+-- Lua 5.5 removed bit32
 if not _G.bit32 then
   bit32 = {}
   bit32.band = function(a, b)
@@ -186,7 +185,7 @@ if not _G.bit32 then
   end
 end
 
--- Lua 5.1 兼容: table.pack / table.unpack
+-- Lua 5.1 compatibility: table.pack / table.unpack
 if not table.pack then
   table.pack = function(...)
     return { n = select("#", ...), ... }
@@ -194,21 +193,21 @@ if not table.pack then
 end
 if not table.unpack then table.unpack = unpack end
 
--- Lua 5.1 兼容: load() 接受字符串
--- 在 Lua 5.3+ 中 load() 可直接接受字符串, 但 5.1 中只接受函数
--- 这里做一层 polyfill: 如果传入字符串, 使用 loadstring (Lua 5.1)
+-- Lua 5.1 compatibility: load() accepting a string
+-- Lua 5.3+ load() accepts strings; 5.1 only accepts a function
+-- Polyfill: use loadstring when given a string on Lua 5.1
 if loadstring then
   local _orig_load = load
   load = function(chunk, chunkname, mode, env)
     local t = type(chunk)
     if t == "string" or t == "number" then
-      -- Lua 5.1: loadstring(s, name) (无 mode/env 参数)
+      -- Lua 5.1: loadstring(s, name) has no mode/env arguments
       local fn, err = loadstring(chunk, chunkname)
       return fn
     elseif t == "function" then
-      -- 函数 loader: 调用原生 load (5.1 中是有的)
+      -- Function chunk: delegate to the native load
       if _orig_load then return _orig_load(chunk, chunkname) end
-      -- 完全没有 load (5.1 标准库本身有,但实现不同)
+      -- No native load: collect the lines and use loadstring
       local collected = {}
       local line = chunk()
       while line do collected[#collected + 1] = line; line = chunk() end
@@ -223,11 +222,11 @@ if not socket_ok then socket = nil end
 
 -- ============================================================
 -- ============================================================
--- JSON 库 (内嵌版, UTF-8 完整支持, 可重入)
+-- Embedded JSON library (full UTF-8 support, reentrant)
 -- ============================================================
 local json = {}
 
--- null 占位符 (解码时用, encode 中 nil 和 json.null 都输出 null)
+-- Null sentinel: decoded null; encode emits null for both nil and json.null
 local jsonNull = {}
 json.null = jsonNull
 
@@ -249,12 +248,12 @@ local function encodeString(s)
     elseif b < 128 then
       result[#result+1] = s:sub(i, i); i = i + 1
     else
-      -- 多字节 UTF-8 字符: 只有当后续字节都是合法续接字节 (0x80-0xBF) 时才原样保留,
-      -- 否则按 Latin-1 单字节转义为 \u00XX。
-      -- 原因: Node 端用 data.toString('utf8') 读取 stdout, 非法 UTF-8 字节会被替换成
-      -- U+FFFD, 从而损坏二进制数据 (例如通过网络挂载读取 .pic 图片时数据被破坏,
-      -- 客户机的图片解析器就会卡死/报错)。转义后的 \u00XX 在接收端会还原成同一个
-      -- 字节, 因此二进制内容可以逐字节无损地穿过 Lua -> Node -> Lua。
+      -- Multi-byte UTF-8: keep the sequence verbatim only if every continuation byte is 0x80-0xBF,
+      -- otherwise escape the byte as Latin-1 \u00XX.
+      -- Node reads stdout with data.toString('utf8'), which turns invalid UTF-8 into
+      -- U+FFFD and corrupts binary data (e.g. .pic images read over a network mount),
+      -- hanging the guest's image parser. Escaped \u00XX decodes back to the same
+      -- byte, so binary content crosses Lua -> Node -> Lua losslessly, byte for byte.
       local charLen = 1
       if b >= 0xF0 then charLen = 4
       elseif b >= 0xE0 then charLen = 3
@@ -290,15 +289,15 @@ local function isArray(t)
       return false
     end
   end
-  if count == 0 then return false end  -- 空表 → 对象
-  -- 允许空洞: 例如 modem 响应 (nil, "invalid handle") 会让 payload 表在第 4 位出现 nil。
-  -- 判据取「键都是正整数即按数组编码」, 空洞位置补 null; 稀疏上限防止极端稀疏表生成巨大数组。
-  -- 若改用 max == count 判定, 这类表会被当成对象编码成 {"1":..,"5":..}; Node 端展开对象
-  -- 会失败 → 消息无法路由 → 客户端 request 死循环 → 虚拟机卡住。
+  if count == 0 then return false end  -- empty table → object
+  -- Holes are allowed: a modem reply such as (nil, "invalid handle") leaves nil at index 4.
+  -- Positive integer keys alone mean array encoding, holes become null; the sparse cap stops huge arrays.
+  -- With a max == count test such tables would encode as objects {"1":..,"5":..}; Node's
+  -- object expansion fails, messages cannot be routed and the client request loop hangs.
   return max <= count + 64
 end
 
-local jsonEncodeVal  -- 前向声明
+local jsonEncodeVal
 
 local function encodeTable(t)
   if isArray(t) then
@@ -308,7 +307,7 @@ local function encodeTable(t)
     end
     if max == 0 then return "[]" end
     local parts = {}
-    for i = 1, max do parts[i] = jsonEncodeVal(t[i]) end  -- 空洞 → "null"
+    for i = 1, max do parts[i] = jsonEncodeVal(t[i]) end  -- holes become "null"
     return "[" .. table.concat(parts, ",") .. "]"
   else
     local parts = {}
@@ -338,9 +337,9 @@ jsonEncodeVal = function(v)
 end
 
 json.encode = jsonEncodeVal
-local jsonEncode = jsonEncodeVal  -- 向后兼容别名
+local jsonEncode = jsonEncodeVal
 
--- ---------- 解码 ----------
+-- ---------- Decoding ----------
 
 local function utf8Encode(code)
   if code < 0x80 then
@@ -403,7 +402,7 @@ local function decodeString(s, p, len)
         if not hex:match("^%x%x%x%x$") then error("invalid \\u escape: " .. hex) end
         p = p + 4
         local code = tonumber(hex, 16)
-        -- 高代理 → 期待低代理
+        -- high surrogate: expect a low surrogate
         if code >= 0xD800 and code <= 0xDBFF then
           if p + 5 <= len and s:byte(p) == 92 and s:byte(p + 1) == 117 then
             p = p + 2
@@ -426,8 +425,8 @@ local function decodeString(s, p, len)
         elseif code >= 0xDC00 and code <= 0xDFFF then
           error("unexpected low surrogate")
         else
-          -- Latin-1 范围 (0-255): 使用 string.char 保持单字节, 避免二进制数据损坏
-          -- 服务器将 byte 128-255 编码为 \u00XX, 这里需要还原为单字节
+          -- Latin-1 range (0-255): emit a raw byte with string.char so binary data survives
+          -- the server escapes bytes 128-255 as \u00XX; restore them to single bytes
           if code <= 255 then
             result[#result+1] = string.char(code)
           else
@@ -486,10 +485,10 @@ local function decodeNumber(s, p, len)
   return num, p
 end
 
-local decodeValue  -- 前向声明
+local decodeValue
 
 local function decodeObject(s, p, len)
-  p = p + 1  -- 跳过 {
+  p = p + 1
   p = skipWs(s, p, len)
   local obj = {}
   if p <= len and s:byte(p) == 125 then p = p + 1; return obj, p end
@@ -512,7 +511,7 @@ local function decodeObject(s, p, len)
 end
 
 local function decodeArray(s, p, len)
-  p = p + 1  -- 跳过 [
+  p = p + 1
   p = skipWs(s, p, len)
   local arr = {}
   if p <= len and s:byte(p) == 93 then p = p + 1; return arr, p end
@@ -560,7 +559,7 @@ local function jsonDecode(s)
   local len = #s
   local ok, val, p = pcall(decodeValue, s, 1, len)
   if not ok then return nil, val end
-  -- 检查尾部内容
+  -- Reject trailing content
   p = skipWs(s, p, len)
   if p <= len then return nil, "trailing content at " .. p end
   return val
@@ -568,28 +567,28 @@ end
 json.decode = jsonDecode
 
 -- ============================================================
--- stdin/stdout JSON Lines 通信层
+-- stdin/stdout JSON Lines transport
 -- ============================================================
--- stdout 无缓冲: 每条消息立即 flush
+-- stdout is unbuffered: flush after every message
 _stdout:setvbuf("no")
--- 发送消息到 server (写到 stdout)
+-- Send a message to the server (write to stdout)
 local function sendToServer(msg)
   verifyProjectInfo("sendToServer")
   _stdout:write(jsonEncode(msg) .. "\n")
 end
 
--- 异步网络请求: 回调表 + 自增 ID
+-- Async network requests: callback table plus incrementing ids
 local pendingNetCallbacks = {}
 local pendingNetId = 0
 
--- 读取 stdin 一行 (阻塞, 不带超时)
+-- Read one line from stdin (blocking, no timeout)
 local function readStdinLine()
   local line = _io_read("*l")
   return line
 end
 
 -- ============================================================
--- 命令行参数解析: --vm <dir> --json-io
+-- Command-line parsing: --vm <dir> --json-io
 -- ============================================================
 local EMU_DIR = arg[0]:match("^(.*[/\\])") or "./"
 local vmDir = nil
@@ -631,14 +630,14 @@ if not vmDir then
   os.exit(1)
 end
 
--- 将 EMU_DIR 加入 package.path
+-- Add EMU_DIR to package.path
 package.path = EMU_DIR .. "?.lua;" .. package.path
 
--- 加载模块
+-- Load modules
 local disk = require("disk")
--- Mods: 机器人 / 无人机 / 单片机 统一组件
+-- Mods: unified robot / drone / microcontroller component
 local mods = require("mods")
--- 使用服务端墙钟作为 Mods 的时间源 (收到 tick 时更新)
+-- Use server wall-clock time for Mods (updated on every tick)
 mods.setClock(function()
   local ms = tonumber(mods._wallMs) or 0
   if ms > 0 then return ms / 1000 end
@@ -646,7 +645,7 @@ mods.setClock(function()
 end)
 
 -- ============================================================
--- 从 VM 目录加载 config.json
+-- Load config.json from the VM directory
 -- ============================================================
 local function loadVMConfig(vmDir)
   local cfgPath = vmDir .. "/config.json"
@@ -655,7 +654,7 @@ local function loadVMConfig(vmDir)
   local content = f:read("*a")
   f:close()
 
-  -- 极简 JSON 解码
+  -- Minimal JSON decoder
   local function decode(str, pos)
     pos = pos or 1
     local function skip()
@@ -763,7 +762,7 @@ if not vmConfig then
   os.exit(1)
 end
 
--- 从 vmConfig 构建 config 表
+-- Build the config table from vmConfig
 local function memTierToSize(tier)
   local sizes = { [1]=192*1024, [1.5]=256*1024, [2]=384*1024, [2.5]=512*1024, [3]=768*1024, [3.5]=1024*1024 }
   return sizes[tier] or 768*1024
@@ -782,7 +781,7 @@ local apuTier = (hw.apu or {}).tier or 2
 local screenTier = (vmConfig.screen or {}).tier or 3
 
 local config = {
-  -- 内存: hardware.memoryMB 有值时按 MB 直接换算 (0 表示空槽), 否则按等级换算
+  -- Memory: hardware.memoryMB wins when set (0 = empty slot), otherwise derive from the tier
   ramSize = (function()
     local mbList = hw.memoryMB
     if type(mbList) ~= "table" then
@@ -800,22 +799,22 @@ local config = {
   gpuTier = apuTierToGpuTier(apuTier),
   screenTier = screenTier,
   hddSize = 4096 * 1024,
-  -- 磁盘路径 (相对于 vmDir)
+  -- Disk paths (relative to vmDir)
   disk1File = hw.disk1 and hw.disk1 ~= "empty" and (vmDir .. "/" .. hw.disk1) or nil,
   disk2File = hw.disk2 and hw.disk2 ~= "empty" and (vmDir .. "/" .. hw.disk2) or nil,
   floppyFile = hw.floppy and hw.floppy ~= "empty" and (vmDir .. "/" .. hw.floppy) or nil,
   eepromFile = (hw.eeprom and hw.eeprom ~= "built-in") and (vmDir .. "/" .. hw.eeprom) or nil,
-  -- 启动顺序
+  -- Boot order
   bootOrder = hw.bootOrder,
-  -- 扩展卡
+  -- Expansion cards
   expansion = hw.expansion or {nil, nil, nil},
-  -- Mods 统一组件 (机器人 / 无人机 / 单片机), 默认启用
+  -- Unified Mods component (robot / drone / microcontroller), enabled by default
   modsEnabled = hw.mods ~= false,
-  -- Mods 设备模式: 由控制面板创建, 使用内置 EFI 启动并上报状态
+  -- Mods device mode: created by the control panel, boots the built-in EFI and reports state
   modsDevice = vmConfig.modsDevice == true,
   modsName = hw.modsName,
   modsType = hw.modsType,
-  -- Mods 设备专属配置 (机器人: 主手 / 副手工具等, 无人机: 速度等)
+  -- Mods device profile (robot: main/offhand tools; drone: speed, etc.)
   robotProfile = hw.robot,
   droneProfile = hw.drone,
   -- APU
@@ -823,10 +822,10 @@ local config = {
   useAPU = true,
 }
 
--- 磁盘文件路径 (disk1 为 empty 时不加载磁盘，允许纯软盘启动)
-config.diskFile = config.disk1File  -- 可能为 nil (当 disk1="empty" 时)
-config.disk2File = config.disk2File  -- 可能为 nil
-config.floppyFile = config.floppyFile  -- 可能为 nil
+-- Disk file paths (disk1="empty" loads no disk, allowing floppy-only boot)
+config.diskFile = config.disk1File  -- may be nil when disk1="empty"
+config.disk2File = config.disk2File
+config.floppyFile = config.floppyFile
 
 _stderr:write("[emulator] VM: " .. (vmConfig.name or "unnamed") .. "\n")
 _stderr:write("[emulator] APU tier: " .. tostring(apuTier) .. "\n")
@@ -837,15 +836,15 @@ _stderr:write("[emulator] Disk2: " .. (config.disk2File or "none") .. "\n")
 _stderr:write("[emulator] Floppy: " .. (config.floppyFile or "none") .. "\n")
 _stderr:write("[emulator] EEPROM: " .. (config.eepromFile or "built-in") .. "\n")
 
--- 应用 Mods 设备元数据
+-- Apply Mods device metadata
 if config.modsName then mods.setName(config.modsName) end
 if config.modsType then mods.setDeviceType(config.modsType) end
 
--- 应用设备专属配置 (机器人主手 / 副手工具、无人机速度等)
+-- Apply the device profile (robot tools, drone speed, ...)
 if config.robotProfile then mods.setProfile(config.robotProfile) end
 if config.droneProfile then mods.setProfile(config.droneProfile) end
 
--- Mods 设备的 EFI 通过这两个全局向服务端上报状态 / 读取墙钟
+-- The Mods EFI uses these globals to report state and read wall-clock time
 if config.modsDevice then
   _G.modWallTime = function()
     local ms = tonumber(mods._wallMs) or 0
@@ -860,11 +859,11 @@ if config.modsDevice then
   end
 end
 
--- 发送状态: running
+-- Report running state
 sendToServer({ type = "state", state = "running" })
 
 -- ============================================================
--- 工具
+-- Helpers
 -- ============================================================
 local function genAddr()
   local hex = "0123456789abcdef"
@@ -873,9 +872,9 @@ local function genAddr()
     if i == 9 or i == 14 or i == 19 or i == 24 then
       t[i] = "-"
     else
-      -- 取"单个"十六进制字符: 必须 sub(p, p)。
-      -- 若起止下标各自随机 (如 hex:sub(math.random(1,16), math.random(1,16))),
-      -- 经常一次取出好几个字符, 地址长度飘忽不定、格式不像 UUID。
+      -- Take a single hex character: must be sub(p, p).
+      -- With independent random bounds (hex:sub(math.random(1,16), math.random(1,16)))
+      -- several characters come out at once, so addresses vary in length and do not look like UUIDs.
       local p = math.random(1, 16)
       t[i] = hex:sub(p, p)
     end
@@ -883,12 +882,12 @@ local function genAddr()
   return table.concat(t)
 end
 
--- 随机数种子。
--- 不播种时, 每个 Lua 进程都从同一个默认种子开始, 于是每台虚拟机生成的组件地址
--- 完全一样 (实测两次启动的 modem 地址逐字节相同)。地址撞车会让 server 端的
--- "地址 -> 虚拟机" 表被覆盖, 另一台虚拟机永远收不到消息 —— 网络互通必然失败。
--- 混合三种熵: 时间 + CPU 时钟 + 一个堆对象地址; 另外 server 会通过环境变量
--- OC_VM_SEED 传入每台 VM 唯一的种子, 保证同时启动的多台虚拟机地址也必然不同。
+-- Random seed.
+-- Unseeded, every Lua process starts from the same default seed, so each VM generates
+-- identical component addresses (two runs produced byte-identical modem addresses). Collisions overwrite
+-- the server's address -> VM table and the other VM never receives messages, breaking networking.
+-- Mix three entropy sources: time, CPU clock and a heap object address; the server also passes
+-- a per-VM seed via OC_VM_SEED so VMs started together still differ.
 do
   local entropy = os.time()
   if os.clock then entropy = entropy + math.floor(os.clock() * 1000000) end
@@ -903,22 +902,22 @@ do
     entropy = entropy + h
   end
   math.randomseed(entropy % 2147483647)
-  -- 丢弃几个数, 避免相邻种子产生高度相似的序列
+  -- Discard a few values so nearby seeds do not produce similar sequences
   for _ = 1, 5 do math.random() end
 end
 
--- 尝试加载 LuaFileSystem。lfs 是独立 C 模块, 标准 Lua 安装通常不带,
--- 因此必须提供不依赖 lfs 的 shell 回退; 否则 Linux/macOS 会退化成
--- Windows 的 dir / if exist 命令而直接失效 (目录无法识别、列表为空)。
+-- Try LuaFileSystem. lfs is a separate C module that stock Lua lacks,
+-- so an lfs-free shell fallback is required; otherwise Linux/macOS would fall back to
+-- Windows dir / if exist commands and break (unknown directories, empty listings).
 local lfs = nil
 pcall(function() lfs = require("lfs") end)
 
--- 平台判断: package.config 的第一个字符是目录分隔符 ('\' = Windows, '/' = POSIX)
+-- Platform check: package.config starts with the directory separator ('\\' = Windows, '/' = POSIX)
 local PLATFORM_IS_WINDOWS = (DIR_SEP == "\\")
--- 屏蔽输出的写法 (Windows 用 nul, POSIX 用 /dev/null)
+-- Output redirection (nul on Windows, /dev/null on POSIX)
 local SHELL_SILENCE = PLATFORM_IS_WINDOWS and " 2>nul" or " 2>/dev/null"
 
--- 目录列表回退 (lfs 不可用时)
+-- Directory listing fallback (without lfs)
 local function shellListDir(path)
   local result = {}
   local cmd = PLATFORM_IS_WINDOWS
@@ -934,7 +933,7 @@ local function shellListDir(path)
   return result
 end
 
--- 目录判断回退 (lfs 不可用时)
+-- Directory check fallback (without lfs)
 local function shellIsDir(path)
   if not PLATFORM_IS_WINDOWS then
     local pf = _io_popen('test -d "' .. path .. '" && echo 1 || echo 0')
@@ -945,7 +944,7 @@ local function shellIsDir(path)
     end
     return false
   end
-  -- Windows: 不能以文件方式打开 → 可能是目录
+  -- Windows: a failed file open may mean a directory
   local f = _io_open(path, "r")
   if f then f:close(); return false end
   local pf = _io_popen('if exist "' .. path .. '\\*" (echo 1) else (echo 0)')
@@ -957,7 +956,7 @@ local function shellIsDir(path)
   return true
 end
 
--- 统一的目录列表接口
+-- Unified directory listing API
 local function fsListDir(path)
   if lfs then
     local result = {}
@@ -969,7 +968,7 @@ local function fsListDir(path)
   return shellListDir(path)
 end
 
--- 统一的目录判断接口
+-- Unified directory check API
 local function fsIsDir(path)
   if lfs then
     local attr = lfs.attributes(path)
@@ -978,7 +977,7 @@ local function fsIsDir(path)
   return shellIsDir(path)
 end
 
--- 创建目录 (lfs 不可用时)。POSIX 用 mkdir -p 以便顺带创建父目录。
+-- Create a directory without lfs. POSIX uses mkdir -p to create parents too.
 local function fsMkdir(path)
   if lfs then
     pcall(function() lfs.mkdir(path) end)
@@ -998,21 +997,21 @@ local function normalizePath(path)
 end
 
 -- ============================================================
--- 虚拟磁盘镜像 (使用 disk.lua 模块的 .ocd 格式)
+-- Virtual disk images (disk.lua .ocd format)
 -- ============================================================
 local vdisk = { files = {}, label = "OpenOS", modified = 0, size = 4 * 1024 * 1024, tier = 3 }
 
--- 保存磁盘到文件 (使用 .ocd 格式)
+-- Save a disk to file (.ocd format)
 local function saveDisk(path)
-  if projectPath then return true end  -- 项目模式不保存磁盘
+  if projectPath then return true end  -- project mode does not persist disks
   local size = vdisk.size or config.hddSize or (4 * 1024 * 1024)
   local tier = vdisk.tier or 3
-  -- 用磁盘自身记录的 size/tier 写回。若固定用 config.hddSize, 会把小容量磁盘
-  -- 撑成 4MB, 且 tier 恒为 3, 与磁盘实际声明不符。
+  -- Write back the disk's own size/tier; using config.hddSize would inflate small disks
+  -- to 4MB and force tier 3, contradicting what the disk declares.
   local ok, err = disk.save(path, vdisk.label, vdisk.files, size, tier, false)
   if not ok then
-    -- 兜底: 若磁盘声明的 tier 小于其实际容量 (手工制作的镜像可能出现),
-    -- 抬高 tier 再试一次, 保证安装/写入不会因为容量校验被静默丢弃。
+    -- Fallback: if the declared tier is too small for the actual capacity (possible with hand-made images),
+    -- raise the tier and retry so installs are not silently dropped by the capacity check.
     local limits = disk.TIER_LIMITS or { [1] = 1048576, [2] = 2097152, [3] = 4194304 }
     local needTier = 3
     if size <= (limits[1] or 1048576) then needTier = 1
@@ -1027,24 +1026,24 @@ local function saveDisk(path)
   return ok, err
 end
 
--- 前向声明: fs2/floppy/eeprom 的标签和文件表, 后面才真正赋值
--- (saveAllDisks 在前面定义, 需要引用这些变量)
+-- Forward declarations: label and file tables for fs2/floppy/eeprom, assigned later
+-- (saveAllDisks is defined above and references them)
 local fs2Files, fs2Label, fs2Size, fs2Tier, floppyFiles, floppyLabel, floppyLocked
 local eepromData, eepromLabel, eepromCode
 
--- 保存所有磁盘 + EEPROM (在 shutdown / 异常退出时调用)
+-- Save all disks and the EEPROM (called on shutdown or abnormal exit)
 local function saveAllDisks()
   if config.diskFile then
     saveDisk(config.diskFile)
   end
-  -- disk2: 如果挂载了, 把 fs2 代理的标签/文件写回
+  -- disk2: if mounted, write back the fs2 proxy's label and files
   if config.disk2File and fs2Files and fs2Label then
     local ok, err = pcall(function()
       local size2 = fs2Size or (4 * 1024 * 1024)
       local tier2 = fs2Tier or 3
       local ok2, err2 = disk.save(config.disk2File, fs2Label, fs2Files, size2, tier2, false)
       if not ok2 then
-        -- 同 disk1: tier 与容量不符时抬高 tier 再试, 避免写入被静默丢弃
+        -- As with disk1: raise the tier on mismatch instead of dropping the write
         local limits = disk.TIER_LIMITS or { [1] = 1048576, [2] = 2097152, [3] = 4194304 }
         local needTier = 3
         if size2 <= (limits[1] or 1048576) then needTier = 1
@@ -1057,38 +1056,38 @@ local function saveAllDisks()
     end)
     if not ok then _stderr:write("[emulator] WARNING: save disk2 failed: " .. tostring(err) .. "\n") end
   end
-  -- floppy: 同样写回 (使用 .ocf 软盘格式)
+  -- floppy: same, using the .ocf floppy format
   if config.floppyFile and floppyFiles and floppyLabel then
     local ok, err = pcall(function()
-      disk.saveFloppy(config.floppyFile, floppyLabel, floppyFiles, 512 * 1024, floppyLocked)
+      disk.saveFloppy(config.floppyFile, floppyLabel, floppyFiles, config.floppySize or (512 * 1024), floppyLocked)
     end)
     if not ok then _stderr:write("[emulator] WARNING: save floppy failed: " .. tostring(err) .. "\n") end
   end
-  -- EEPROM 不参与关机写回: eeprom.set() 会立即持久化, 关机时再写回内存副本
-  -- 会覆盖控制面板刚保存的 EFI。
+  -- No EEPROM write-back: eeprom.set() persists immediately, and writing the in-memory copy
+  -- would overwrite the EFI the control panel just saved.
 end
 
 -- ============================================================
--- 磁盘自动落盘 (write-through)
--- 任何磁盘写入都打脏标记, 之后周期性(默认 1 秒)把磁盘写回文件,
--- 并在收到 shutdown / flush 命令时立即落盘。
--- 若只在"正常关机"(computer.shutdown / 进程跑到结尾)时才写回文件, VM 在安装过程中
--- 被强制结束(用户在界面上点停止 -> 3 秒超时 SIGTERM, 或服务被关闭)就会丢掉内存里的
--- 安装结果, 下次启动又从头装一遍。
+-- Disk write-through
+-- Mark the disk dirty on any write, then flush the file periodically (1 s by default)
+-- and immediately on a shutdown / flush command.
+-- Writing back only on a clean shutdown (computer.shutdown or end of process) loses
+-- the in-memory install when the VM is killed mid-install (user presses stop -> SIGTERM after
+-- 3 s, or the service shuts down) and the next boot starts over.
 -- ============================================================
 local diskPersist = { dirty = false, lastFlush = 0, interval = 1, job = nil, slice = 0.12 }
 
--- 后台落盘任务 (协程)
+-- Background flush task (coroutine)
 --
--- 整盘 save 要做 "序列化 + LZW 压缩 + 加密", 3MB 级磁盘合计 2~4 秒 CPU。若在
--- tick 处理里同步执行, 客户机在这段时间无法拉事件、无法重绘, 界面会明显停顿。
--- 这里把 saveAllDisks 放进协程, 每个 tick 只跑一小片 (默认 120ms), 客户机在
--- 落盘期间照常响应; 分片跑完后才原子替换磁盘文件, 数据完整性不变。
+-- A full save does serialize + LZW + encrypt, 2-4 s of CPU for a 3 MB disk. Doing it inline
+-- in tick handling blocks event pulls and redraws, visibly freezing the UI.
+-- So saveAllDisks runs in a coroutine, one slice per tick (120 ms by default); the guest
+-- stays responsive and the disk file is replaced atomically once the slices finish.
 --
--- 任务与调参挂在 diskPersist 表上, 避免增加顶层局部变量。
+-- Task state and tuning live on diskPersist to avoid more top-level locals.
 
--- 推进后台落盘任务; budget 为本次最多消耗的 CPU 秒数。
--- 返回 true: 任务已完成 (或本来就没有任务), false: 还没跑完或有错误。
+-- Advance the background flush; budget is the maximum CPU seconds to spend.
+-- true when the task finished (or there was none), false when it is unfinished or failed.
 function diskPersist.stepJob(budget)
   local job = diskPersist.job
   if not job then return true end
@@ -1118,16 +1117,16 @@ function diskPersist.mark()
   diskPersist.dirty = true
 end
 
--- 同步立即落盘 (关机/改名/退出等必须马上生效的场合)。
--- 若后台分片任务还在跑, 必须先让它跑完: 它持有的是旧快照, 否则它会在文件
--- 替换之后把旧数据写回, 覆盖掉这次的新结果。
+-- Flush synchronously (shutdown, rename, exit: cases that must take effect immediately).
+-- If a background slice task is still running, let it finish first: it holds an old snapshot
+-- and would write stale data over the new result after the file swap.
 function diskPersist.saveNow()
   if diskPersist.job then diskPersist.stepJob(math.huge) end
   saveAllDisks()
 end
 
 function diskPersist.flush(force)
-  -- 已有后台任务: 非强制时只推进一小片; 强制时先把它跑完 (它持有的是旧快照)
+  -- Background task exists: advance one slice, or when forced, finish it (it holds an old snapshot)
   if diskPersist.job then
     diskPersist.stepJob(force and math.huge or diskPersist.slice)
     if diskPersist.job then return end
@@ -1140,14 +1139,14 @@ function diskPersist.flush(force)
   diskPersist.job = coroutine.create(saveAllDisks)
   local done = diskPersist.stepJob(force and math.huge or diskPersist.slice)
   if not done and not diskPersist.job then
-    -- 落盘失败时保留脏标记, 下一轮再试 (避免静默丢数据)
+    -- Keep the dirty flag on failure and retry next round instead of losing data silently
     diskPersist.dirty = true
   end
 end
 
--- 从文件加载磁盘 (支持 .ocd 和旧 .img 格式)
+-- Load a disk from file (.ocd and legacy .img)
 local function loadDisk(path)
-  -- 先尝试 .ocd 格式
+  -- Try .ocd first
   local loaded = disk.load(path)
   if loaded then
     vdisk.label = loaded.label or "Untitled"
@@ -1156,7 +1155,7 @@ local function loadDisk(path)
     vdisk.tier = loaded.tier or 3
     return true
   end
-  -- 回退到旧格式 (Lua table)
+  -- Fall back to the legacy Lua-table format
   local f = _io_open(path, "rb")
   if not f then return false end
   local data = f:read("*a")
@@ -1175,10 +1174,10 @@ local function loadDisk(path)
   return false
 end
 
--- 虚拟文件系统操作
+-- Virtual filesystem operations
 local function vfsNormalize(p)
   p = normalizePath(p)
-  -- 解析 .. 和 .
+  -- Resolve .. and .
   local parts = {}
   for part in p:gmatch("[^/]+") do
     if part == ".." then
@@ -1200,9 +1199,9 @@ local function vfsExists(path)
     return fsIsDir(realPath)
   end
   if path == "/" then return true end
-  -- 显式条目
+  -- explicit entry
   if vdisk.files[path] ~= nil then return true end
-  -- 隐式目录: 存在以 path/ 开头的子条目
+  -- Implicit directory: a child entry starts with path/
   local prefix = path .. "/"
   for p in pairs(vdisk.files) do
     if p:sub(1, #prefix) == prefix then return true end
@@ -1218,14 +1217,14 @@ local function vfsIsDirectory(path)
     return fsIsDir(realPath)
   end
   if path == "/" then return true end
-  -- 隐式目录: 如果存在以 path/ 开头的子条目, 则视为目录
+  -- Implicit directory: treat as a directory when a child entry starts with path/
   local prefix = path .. "/"
   for p in pairs(vdisk.files) do
     if p:sub(1, #prefix) == prefix then
       return true
     end
   end
-  -- 显式目录条目
+  -- explicit directory entry
   local info = vdisk.files[path]
   return info and (info.type == "directory" or info.type == "dir")
 end
@@ -1237,7 +1236,7 @@ local function vfsList(path)
     return fsListDir(realPath)
   end
   local prefix = path == "/" and "/" or path .. "/"
-  -- 收集直接子条目名称
+  -- Collect direct child names
   local childNames = {}
   for p in pairs(vdisk.files) do
     if p:sub(1, #prefix) == prefix then
@@ -1249,7 +1248,7 @@ local function vfsList(path)
       end
     end
   end
-  -- 判断每个子条目是文件还是目录
+  -- Classify each child as file or directory
   local result = {}
   for name in pairs(childNames) do
     local childPath = path == "/" and "/" .. name or path .. "/" .. name
@@ -1270,7 +1269,7 @@ local function vfsMkdir(path)
     return true
   end
   if vdisk.files[path] then return false end
-  -- 创建父目录
+  -- Create the parent directory
   local parent = vfsNormalize(path:match("^(.*/)[^/]+$") or "/")
   if parent ~= "/" and not vdisk.files[parent] then
     vfsMkdir(parent)
@@ -1284,7 +1283,7 @@ local function vfsWrite(path, content)
   path = vfsNormalize(path)
   if projectPath then
     local realPath = projectPath .. path:gsub("/", DIR_SEP)
-    -- 确保父目录存在
+    -- Ensure the parent directory exists
     local parentDir = realPath:match("^(.+)[/\\][^/\\]+$")
     if parentDir then
       fsMkdir(parentDir)
@@ -1293,7 +1292,7 @@ local function vfsWrite(path, content)
     if f then f:write(content or ""); f:close(); return true end
     return false
   end
-  -- 创建父目录
+  -- Create the parent directory
   local parent = vfsNormalize(path:match("^(.*/)[^/]+$") or "/")
   if parent ~= "/" and not vdisk.files[parent] then
     vfsMkdir(parent)
@@ -1326,7 +1325,7 @@ local function vfsRemove(path)
       _os_execute_raw('rmdir /s /q "' .. realPath .. '"' .. SHELL_SILENCE)
       _os_execute_raw('del /q "' .. realPath .. '"' .. SHELL_SILENCE)
     else
-      -- POSIX: 一条 rm -rf 同时覆盖文件与目录
+      -- POSIX: one rm -rf covers files and directories
       _os_execute_raw('rm -rf "' .. realPath .. '"' .. SHELL_SILENCE)
     end
     return true
@@ -1384,21 +1383,20 @@ local function vfsRename(from, to)
   return true
 end
 
--- 打开的文件句柄（基于 vfs 的句柄）
+-- Open file handles (vfs-backed)
 local openHandles = {}
 local handleCount = 0
 
 -- ============================================================
--- 信号队列
+-- Signal queue
 -- ============================================================
 local signalQueue = {}
-local lastPollTime = 0  -- pullSignal(0) 节流, 避免疯狂轮询
--- 组件地址前向声明: 在 dispatchServerMessage/pushSignal 中使用,
--- 但实际定义在后面 (gpu/screen/keyboard 等组件注册处)
+local lastPollTime = 0  -- throttle for pullSignal(0) to avoid a polling storm
+-- Component addresses used by dispatchServerMessage/pushSignal but defined later
 local gpuAddr = nil
 local screenAddr = nil
 local keyboardAddr = nil
-local screen  -- 前向声明: screen 组件在后面定义, dispatchServerMessage/sendScreenUpdate 需要引用
+local screen  -- Forward declaration: screen is defined later, referenced by dispatchServerMessage/sendScreenUpdate
 local fsAddr = nil
 local eepromAddr = nil
 local modemAddr = nil
@@ -1409,15 +1407,15 @@ local function pushSignal(name, ...)
   end
 end
 
--- 读取 stdin 一行 JSON 输入并解析 (用于 pullSignal 在 JSON 模式下)
--- 返回: 解析后的表, 或 nil (EOF/错误)
+-- Read and parse one JSON line from stdin (used by pullSignal in JSON mode)
+-- Returns the decoded table, or nil on EOF/error
 local function readJSONInput(timeout)
   verifyProjectInfo("readJSONInput")
-  -- io.read("*l") 是阻塞的, 无超时控制
-  -- server 端会在 timeout 到期后发 tick, 所以这里直接阻塞读
+  -- io.read("*l") blocks and has no timeout
+  -- the server sends a tick when the timeout expires, so a blocking read is fine
   local line = _io_read("*l")
   if not line or line == "" then return nil end
-  -- 用内嵌 JSON 解码
+  -- use the embedded JSON decoder
   local ok, msg = pcall(jsonDecode, line)
   if not ok then
     dlog("readJSONInput: parse error:", msg, "line:", line:sub(1, 80))
@@ -1426,26 +1424,26 @@ local function readJSONInput(timeout)
   return msg
 end
 
--- 暂停标志 (必须在 dispatchServerMessage 之前声明)
+-- Pause flag (must be declared before dispatchServerMessage)
 local vmPaused = false
--- 前向声明: componentRegistry, floppyAddr, computer 在后面才定义, 但 dispatchServerMessage 需要引用
+-- Forward declarations: componentRegistry, floppyAddr and computer are defined later but used here
 local componentRegistry
 local floppyAddr
 local computer
--- 外部 RAM 统计 (由 server 推送的进程实际内存占用)
+-- External RAM usage pushed by the server (actual process memory)
 local _externalRamUsed = 0
 local _externalRamTotal = 0
 
--- 把 server 的 JSON 消息转换为 OC 信号并加入队列
+-- Turn server JSON messages into OC signals and enqueue them
 local function dispatchServerMessage(msg)
   verifyProjectInfo("dispatchServerMessage")
   if type(msg) ~= "table" then return end
-  -- 服务端每 50ms~10s 会发 tick; 携带真实墙钟, 供 Mods 无人机运动与状态上报使用
+  -- The server sends a tick every 50 ms to 10 s, carrying wall-clock time for Mods drones and state
   if msg.wall then
     mods._wallMs = tonumber(msg.wall) or mods._wallMs
   end
   local t = msg.type
-  -- 外部设备: 列表与状态快照
+  -- External devices: list and state snapshot
   if t == "ext_devices" then
     if extComponents then extComponents.apply(msg.devices) end
     return
@@ -1454,13 +1452,13 @@ local function dispatchServerMessage(msg)
     if extComponents then extComponents.update(msg.devices) end
     return
   end
-  -- 把前端传来的 "OC 像素坐标" 换算成 OC 信号真正使用的坐标。
+  -- Convert frontend "OC pixel coordinates" into the coordinates OC signals actually use.
   --
-  -- 关键点: OC 在精确模式 (setPrecise) 下返回的并不是像素值, 而是"0 基分数字符
-  -- 坐标", 即像素除以 6 / 9。MineOS 的 GUI 就是用 math.ceil(e3) 把它换算回字符
-  -- 格的 (见 Libraries/GUI.lua 的 isScreenEvent 分支)。若直接把像素值当坐标发过
-  -- 去, 取整后仍然远大于屏幕格数, 命中判定必然失败 —— 表现就是点击与滚轮都没有
-  -- 反应。非精确模式才是 1 基整数字符坐标。
+  -- In precise mode (setPrecise) OC does not return pixels but 0-based fractional
+  -- character coordinates (pixels / 6 or 9). MineOS GUI converts them back with math.ceil(e3)
+  -- (Libraries/GUI.lua, isScreenEvent branch). Sending raw pixels means the
+  -- rounded value still exceeds the grid size, hit tests always fail and clicks/scroll do nothing.
+  -- Non-precise mode uses 1-based integer character coordinates.
   local function screenInputCoords(m)
     local px = tonumber(m.px)
     local py = tonumber(m.py)
@@ -1471,12 +1469,12 @@ local function dispatchServerMessage(msg)
   end
 
   if t == "input" then
-    -- 输入事件: { type:"input", event:"key_down", char:97, code:30 }
+    -- Input event: { type:"input", event:"key_down", char:97, code:30 }
     local ev = msg.event
     dlog("dispatchServerMessage: input event:", tostring(ev), "char:", tostring(msg.char), "code:", tostring(msg.code))
     if ev == "key_down" or ev == "key_up" then
       local code = msg.code or 0
-      -- 更新修饰键状态
+      -- Update modifier state
       if code == 0x2A or code == 0x36 then  -- lshift, rshift
         keyboard._shift = (ev == "key_down")
       elseif code == 0x1D or code == 0x9D then  -- lcontrol, rcontrol
@@ -1484,26 +1482,26 @@ local function dispatchServerMessage(msg)
       elseif code == 0x38 or code == 0xB8 then  -- lalt, ralt
         keyboard._alt = (ev == "key_down")
       end
-      -- OC key_down/up 信号格式: (address, char, code, player)
-      -- 第4个参数 player 必须是字符串, 传数字会导致 OpenOS keyboard.lua 处理失败
+      -- OC key_down/up signal: (address, char, code, player)
+      -- the 4th argument, player, must be a string; a number breaks OpenOS keyboard.lua
       pushSignal(ev, keyboardAddr, msg.char or 0, code, "player")
     elseif ev == "touch" or ev == "drag" or ev == "drop" then
-      -- OC 标准信号格式: touch/drag/drop(address, x, y, button, playerName)
-      -- OC 中鼠标松开叫 "drop" (不是 "up")
-      if not screen then return end  -- screen 组件尚未初始化时忽略
+      -- OC signal: touch/drag/drop(address, x, y, button, playerName)
+      -- in OC a mouse release is called "drop", not "up"
+      if not screen then return end  -- ignore events until the screen component exists
       local mx, my = screenInputCoords(msg)
       pushSignal(ev, screenAddr, mx, my, msg.btn or 0, "player")
     elseif ev == "scroll" then
-      -- OC scroll 信号: scroll(address, x, y, direction, playerName)
+      -- OC scroll signal: scroll(address, x, y, direction, playerName)
       if not screen then
         ilog("INPUT: scroll ignored (screen not ready)")
         return
       end
       local sx, sy = tonumber(msg.x) or 1, tonumber(msg.y) or 1
-      -- 滚轮只需要"光标落在哪个字符格", 不需要亚格精度; 而且不论精确模式是否
-      -- 开启, 传整数格坐标都能被正确命中 (MineOS 用 math.ceil 换算回格)。
-      -- 因此这里有意不走 screenInputCoords, 避免精确模式下的坐标空间差异
-      -- 使命中判定失败。
+      -- Scrolling only needs the character cell under the cursor, not sub-cell precision, and
+      -- integer cell coordinates hit correctly in both modes (MineOS rounds with math.ceil).
+      -- So skip screenInputCoords here to avoid the precise-mode coordinate space
+      -- breaking hit tests.
       ilog("INPUT: scroll x=" .. tostring(sx) .. " y=" .. tostring(sy)
         .. " delta=" .. tostring(msg.delta or 1) .. " precise=" .. tostring(screen._precise))
       pushSignal("scroll", screenAddr, sx, sy, msg.delta or 1, "player")
@@ -1511,12 +1509,12 @@ local function dispatchServerMessage(msg)
       pushSignal("clipboard", keyboardAddr, msg.text or "")
     end
   elseif t == "tick" then
-    -- 心跳, 不入队 (用于唤醒 pullSignal)
-    -- 顺便做一次磁盘自动落盘检查 (脏则写回, 带 1 秒节流)
+    -- Heartbeat: not queued, just wakes pullSignal
+    -- Also check for dirty disks (write back, throttled to 1 s)
     diskPersist.flush()
   elseif t == "ram_update" then
-    -- RAM 使用同步: 更新外部观察到的进程内存占用
-    -- computer.freeMemory() 会使用这个值来计算剩余内存
+    -- RAM sync: update the externally visible process memory
+    -- computer.freeMemory() uses it to compute free memory
     if msg.used ~= nil then
       _externalRamUsed = tonumber(msg.used) or _externalRamUsed
     end
@@ -1524,7 +1522,7 @@ local function dispatchServerMessage(msg)
       _externalRamTotal = tonumber(msg.total) or _externalRamTotal
     end
   elseif t == "battery" then
-    -- 电量同步: 更新 computer.energy 和 computer.maxEnergy
+    -- Power sync: update computer.energy and computer.maxEnergy
     if computer and computer._energy ~= nil then
       if msg.energy ~= nil then
         computer._energy = tonumber(msg.energy) or computer._energy
@@ -1535,24 +1533,24 @@ local function dispatchServerMessage(msg)
     end
   elseif t == "command" then
     if msg.cmd == "shutdown" then
-      -- 软关机前先把磁盘写回: 即使 guest 迟迟不响应 shutdown 而被服务端
-      -- 在 3 秒后强杀, 这次安装/写入也不会丢。
+      -- Flush disks before a soft shutdown: if the guest ignores shutdown and the server
+      -- kills it after 3 s, this write is not lost.
       diskPersist.flush(true)
-      -- 软关机信号
+      -- Soft shutdown signal
       pushSignal("shutdown")
     elseif msg.cmd == "flush" then
-      -- 显式落盘请求 (服务端在停止 VM 前会先发这条, 作为双保险)
+      -- Explicit flush request (sent before stopping a VM as a safety net)
       diskPersist.flush(true)
     elseif msg.cmd == "pause" then
       vmPaused = true
     elseif msg.cmd == "resume" then
       vmPaused = false
     elseif msg.cmd == "mod_command" then
-      -- 控制面板 → Mods 设备 EFI 的本地命令
+      -- Local command from the control panel to the Mods device EFI
       pushSignal("mod_command", msg.data)
     elseif msg.cmd == "floppy_reload" then
-      -- 重新加载软盘镜像 (热插拔)
-      -- msg.data 可包含新的文件路径 (可选)
+      -- Reload the floppy image (hot swap)
+      -- msg.data may carry a new file path (optional)
       local floppyPath = config.floppyFile
       if msg.data and msg.data.path then
         floppyPath = msg.data.path
@@ -1561,23 +1559,23 @@ local function dispatchServerMessage(msg)
       if floppyPath then
         local loadedF = disk.loadFloppy(floppyPath)
         if loadedF then
-          -- 清空现有文件表
+          -- Drop existing files
           for k in pairs(floppyFiles) do floppyFiles[k] = nil end
-          -- 复制新内容
+          -- Copy the new content
           for k, v in pairs(loadedF.files or {}) do floppyFiles[k] = v end
-          -- 标记脏 + 立即落盘 (热插拔软盘后即便进程被强杀也不丢)
+          -- Mark dirty and flush now so a hot-swapped floppy survives a hard kill
           diskPersist.mark()
           diskPersist.flush(true)
-          -- 更新标签
+          -- Update the label
           if loadedF.label then
             pcall(function() floppy.setLabel(loadedF.label) end)
           end
-          -- 软盘组件尚未注册时, 在此注册
+          -- Register the floppy component lazily if it is not registered yet
           if not componentRegistry[floppyAddr] then
             componentRegistry[floppyAddr] = { type = "filesystem", proxy = floppy }
             pushSignal("component_added", floppyAddr, "filesystem")
           else
-            -- 发送组件变更信号
+            -- Emit component_changed
             pushSignal("component_removed", floppyAddr, "filesystem")
             pushSignal("component_added", floppyAddr, "filesystem")
           end
@@ -1590,18 +1588,18 @@ local function dispatchServerMessage(msg)
       end
     end
   elseif t == "modem_message" then
-    -- 收到其他虚拟机的 modem 消息
-    -- OC 官方信号签名: modem_message(receiverAddress, senderAddress, port, distance, ...payload)
-    -- 必须按此顺序组装: 若把 data 表当成 distance 传、payload 又写死成 1,1,
-    -- 客户机收到的消息体完全错位, 表现为"能收到信号但内容不对/收不到"。
+    -- modem message from another VM
+    -- OC signature: modem_message(receiverAddress, senderAddress, port, distance, ...payload)
+    -- Order matters: passing the data table as distance with a hardcoded 1,1 payload
+    -- misaligns the message body: the signal arrives but the content is wrong or missing.
     local unpackFn = table.unpack or unpack
     local payload = msg.data
     if type(payload) ~= "table" then payload = { payload } end
     local n = msg.n
     if not n then
-      -- 用最大整数键作为长度: JSON 数组中的 null 在 Lua 表里会形成空洞, #payload 不可靠,
-      -- 会把空洞之后的返回值截掉 (例如 ("network","response","read",null,"invalid handle")
-      -- 里的 "invalid handle" 会被丢掉, 客户机拿到错误的返回值)。
+      -- Use the largest integer key as the length: JSON nulls become Lua holes, so #payload
+      -- truncates values after a hole (e.g. ("network","response","read",null,"invalid handle")
+      -- would drop "invalid handle", giving the guest a wrong result).
       n = 0
       for k in pairs(payload) do
         if type(k) == "number" and k == math.floor(k) and k > n then n = k end
@@ -1610,7 +1608,7 @@ local function dispatchServerMessage(msg)
     pushSignal("modem_message", modemAddr, msg.from or "", msg.port or 0, msg.distance or 0, unpackFn(payload, 1, n))
   elseif t == "net_response" or t == "net_tcp_connected"
     or t == "net_tcp_read_result" or t == "net_tcp_write_result" then
-    -- 网络请求 / 套接字操作的结果, 交给发起方注册的回调
+    -- Result of a network request or socket op, handed to the registered callback
     local cb = pendingNetCallbacks[msg.reqId]
     if cb then
       pendingNetCallbacks[msg.reqId] = nil
@@ -1619,13 +1617,13 @@ local function dispatchServerMessage(msg)
   end
 end
 
--- flushRender 前向声明 (实现在屏幕渲染部分)
+-- Forward declaration of flushRender (implemented in the screen section)
 local flushRender
 
 local function pullSignal(timeout)
   verifyProjectInfo("pullSignal")
   dlog("pullSignal called, timeout:", tostring(timeout), "queue:", #signalQueue)
-  -- 先检查信号队列
+  -- Check the signal queue first
   if #signalQueue > 0 then
     flushRender()
     local sig = table.remove(signalQueue, 1)
@@ -1636,31 +1634,31 @@ local function pullSignal(timeout)
     return table.unpack(sig)
   end
 
-  -- timeout=0 表示非阻塞 (立即返回)
-  -- 注意: JSON 模式下, 输入消息来自 stdin, 不读就收不到
-  -- 所以即使 timeout=0 也需要尝试读一次 (通过 server 立即回 tick 实现"非阻塞")
+  -- timeout=0 means non-blocking (return immediately)
+  -- In JSON mode input arrives on stdin; not reading means no input
+  -- so even timeout=0 must read once (the server answers instantly with a tick)
   if type(timeout) ~= "number" then timeout = nil end
   if timeout and timeout <= 0 then
     if not jsonIO then
       flushRender()
       return nil
     end
-    -- 节流: pullSignal(0) 轮询频率限制为 50Hz (20ms)
-    -- 避免 MineOS 桌面空转时每秒上千次 stdin 往返, 消耗大量 CPU
+    -- Throttle pullSignal(0) polling to 50 Hz (20 ms)
+    -- to avoid thousands of stdin round trips per second while MineOS idles
     local now = os.clock()
     if now - lastPollTime < 0.02 then  -- 20ms = 50Hz
       return nil
     end
     lastPollTime = now
-    -- JSON 模式: 发 pull_signal(0), server 会立即回 tick 或先回输入消息再 tick
-    -- 这样既能读到新消息, 又不会长时间阻塞
-    timeout = 0  -- 传 0ms, server 收到后立即回 tick
+    -- JSON mode: send pull_signal(0); the server replies with a tick or input plus a tick
+    -- so new messages are read without blocking for long
+    timeout = 0  -- 0 ms; the server answers with an immediate tick
   end
 
   if jsonIO then
-    -- JSON 模式: 通知 server 正在等待, 然后从 stdin 读
-    -- timeout 单位: Lua 是秒, server 是毫秒 → * 1000
-    -- nil / 极大值 / math.huge → 用 5000ms 作为心跳间隔
+    -- JSON mode: tell the server we are waiting, then read stdin
+    -- timeout is in seconds in Lua and milliseconds on the server, hence * 1000
+    -- nil / huge values use a 5000 ms heartbeat
     local timeoutMs
     if not timeout or timeout == math.huge or timeout > 3600 then
       timeoutMs = 5000
@@ -1668,9 +1666,9 @@ local function pullSignal(timeout)
       timeoutMs = math.floor(timeout * 1000)
     end
     sendToServer({ type = "pull_signal", timeout = timeoutMs })
-    -- 阻塞读 stdin 直到有信号或 EOF
+    -- Block on stdin until a signal arrives or EOF
     while true do
-      -- 暂停模式: 阻塞直到收到 resume
+      -- Paused: block until resume arrives
       while vmPaused do
         local msg = readJSONInput(0)
         if not msg then
@@ -1679,17 +1677,17 @@ local function pullSignal(timeout)
         end
         dispatchServerMessage(msg)
       end
-      -- 在等待期间也可能有 server 主动推的消息, 需要先处理
-      -- 阻塞前先刷新屏幕, 确保最新画面已经发送出去 (否则 GUI 渲染完后调用 pullSignal 等待时画面会卡住)
-      flushRender(true) -- 强制刷新, 因为接下来要进入阻塞读
+      -- The server may push messages while waiting, so handle them first
+      -- Flush the screen before blocking so the latest frame is sent (otherwise GUI waits freeze the display)
+      flushRender(true) -- force a flush before the blocking read
       local msg = readJSONInput(timeout)
       if not msg then
-        -- stdin EOF, 退出
+        -- stdin EOF: exit
         flushRender()
         return nil
       end
       dispatchServerMessage(msg)
-      -- 派发后可能有新信号
+      -- dispatching may enqueue new signals
       if #signalQueue > 0 then
         flushRender()
         local sig = table.remove(signalQueue, 1)
@@ -1698,9 +1696,9 @@ local function pullSignal(timeout)
         end
         return table.unpack(sig)
       end
-      -- 否则继续读 (server 会在 timeout 到期后发 tick, 触发返回 nil)
-      -- tick = 心跳/超时, 无论 timeout 值都应返回 nil
-      -- (timeout=nil 表示无限等待, 但 server 仍会周期性发 tick)
+      -- otherwise keep reading (the server's tick after the timeout returns nil)
+      -- tick = heartbeat/timeout: always return nil
+      -- (timeout=nil waits forever, but the server still sends periodic ticks)
       if msg.type == "tick" then
         flushRender()
         return nil
@@ -1708,7 +1706,7 @@ local function pullSignal(timeout)
     end
   end
 
-  -- 文件模式 (legacy): 仅在未启用 --json-io 时使用, 保留以兼容旧调用方式
+  -- Legacy file mode: only without --json-io, kept for old callers
   if not config.inputFile then return nil end
   local startTime = os.clock()
   local maxWait = timeout or math.huge
@@ -1739,7 +1737,7 @@ local function pullSignal(timeout)
                 local charStr = val:sub(1, lastColon - 1)
                 local codeStr = val:sub(lastColon + 1)
                 local code = tonumber(codeStr) or 0
-                -- OC key_down 信号 char 应为 Unicode code point (数字)
+                -- OC key_down char must be a Unicode code point (number)
                 local char = tonumber(charStr) or (charStr:byte() or 0)
                 pushSignal("key_down", keyboardAddr, char, code, "player")
               elseif typ == "key_up" then
@@ -1787,19 +1785,18 @@ local computer = {
   _address = genAddr(),
   _tmpAddr = nil,
   _bootAddr = nil,
-  _energy = 100000,       -- 默认满电 (与 server 端 maxEnergy 一致, 100000 = 二级电池容量)
-  _maxEnergy = 100000,   -- 默认 100000 EU (二级电池), 获取不到电量时保持 100%
+  _energy = 100000,       -- full charge by default (matches server maxEnergy; 100000 = tier-2 battery)
+  _maxEnergy = 100000,   -- default 100000 EU (tier-2 battery); stay at 100% when no reading is available
   _totalMemory = config.ramSize,
   _runlevel = "S",
 }
 computer._startWall = socket and socket.gettime() or os.clock()
-local showScreenMessage  -- 前向声明: 在后面定义, 供 computer.shutdown 等使用
+local showScreenMessage  -- Forward declaration used by computer.shutdown and others
 function computer.address() return computer._address end
 function computer.tmpAddress() return computer._tmpAddr end
 function computer.freeMemory()
-  -- 优先使用外部推送的进程实际内存占用 (更准确)
-  -- 如果外部数据可用且有效, 则使用外部值
-  -- 否则回退到 Lua GC 估算
+  -- Prefer the externally pushed process memory (more accurate) when valid,
+  -- otherwise fall back to the Lua GC estimate
   local used
   if _externalRamTotal and _externalRamTotal > 0 and _externalRamUsed and _externalRamUsed > 0 then
     used = _externalRamUsed
@@ -1817,7 +1814,7 @@ function computer.uptime()
   return os.clock() - computer._startWall
 end
 function computer.shutdown(reboot)
-  -- 保存所有磁盘 + EEPROM
+  -- Save all disks and the EEPROM
   diskPersist.saveNow()
   _stderr:write("[emulator] computer " .. (reboot and "reboot" or "shutdown") .. "\n")
   if reboot then
@@ -1825,15 +1822,15 @@ function computer.shutdown(reboot)
   else
     showScreenMessage("System shut down.\nPress any key to restart.")
   end
-  -- 用宿主 os.exit: 系统的 os.exit 可能已被改写 (如 Fuchas 的 os.exit 依赖当前进程)
+  -- Use the host os.exit: the guest may replace os.exit (Fuchas ties it to the current process)
   _os_exit(reboot and 2 or 0)
 end
 function computer.getBootAddress() return computer._bootAddr end
 function computer.setBootAddress(addr) dlog("setBootAddress:", tostring(addr):sub(1,8)); computer._bootAddr = addr end
 function computer.runlevel() return computer._runlevel end
--- CPU 架构: 模拟器只提供 Lua 5.3 一种。
--- MineOS 的"设置 → 系统"用 getArchitectures() 列出可选架构、用 getArchitecture()
--- 高亮当前架构, 缺失时该模块会以 "attempt to call a nil value" 报错。
+-- Architectures: the emulator reports only Lua 5.3.
+-- MineOS Settings -> System lists architectures via getArchitectures() and highlights
+-- the current one via getArchitecture(); a missing API raises "attempt to call a nil value".
 local ARCHITECTURE_NAME = "Lua 5.3"
 function computer.getArchitectures() return { ARCHITECTURE_NAME } end
 function computer.getArchitecture() return ARCHITECTURE_NAME end
@@ -1842,11 +1839,11 @@ function computer.users() return "admin" end
 function computer.addUser() return true end
 function computer.removeUser() return true end
 function computer.pushSignal(name, ...) pushSignal(name, ...) end
--- 信号转发辅助: 必须原样转发全部返回值。
--- computer.pullSignal 若固定只取 8 个返回值 (e1..e8), 而 modem_message 信号是
---   name, 接收方地址, 发送方地址, 端口, 距离, payload[1], payload[2], payload[3], payload[4]...
--- 第 9 个及之后的值会被截断。MineOS 的网络层正是发 ("network","response",方法,数据),
--- 于是数据永远落在第 9 位被丢掉, 客户端拿到 nil 后调用 text.deserialize(nil) 崩溃
+-- Signal forwarding must pass through every return value unchanged.
+-- Taking only 8 return values (e1..e8) breaks modem_message, whose signature is
+--   name, receiver, sender, port, distance, payload[1], payload[2], payload[3], ...
+-- Values from the 9th on are truncated. MineOS networking sends ("network","response",method,data),
+-- so the data always lands 9th and is dropped, leaving text.deserialize(nil) to crash.
 -- ("Text.lua:98: bad argument #1 (string expected, got nil)")。
 local _packArgs = table.pack or function(...) return { n = select("#", ...), ... } end
 local _unpackArgs = table.unpack or unpack
@@ -1862,16 +1859,16 @@ end
 function computer.beep(freq, dur) end
 function computer.getProgramLocations() return {} end
 
--- 网卡单包最大字节数 (真实 OC 的 modem.maxPacketSize() / DeviceInfo.capacity 默认值)。
--- MineOS 的网络层 (Libraries/Network.lua) 用它给大消息分片:
---   可通过 modem.maxPacketSize() 或 computer.getDeviceInfo()[addr].capacity 获取。
--- 两者都缺失时分片长度会算成 nil, 于是 FTP 目录列表之类的大响应发不回去,
--- 客户端最终报 "Text.lua:98: bad argument #1 (string expected, got nil)"。
+-- Maximum modem packet size (real OC's modem.maxPacketSize() / DeviceInfo.capacity default).
+-- MineOS networking (Libraries/Network.lua) uses it to fragment large messages:
+--   available via modem.maxPacketSize() or computer.getDeviceInfo()[addr].capacity.
+-- If both are missing the fragment size becomes nil, large replies (FTP listings) cannot be sent
+-- and the client ends up with "Text.lua:98: bad argument #1 (string expected, got nil)".
 local MODEM_MAX_PACKET_SIZE = 8192
 
 function computer.getDeviceInfo()
   local result = { [computer._address] = { description = "OC Emulator", product = "Emulator" } }
-  -- 真实 OC 还会为每个组件返回一条信息 (含 modem 的 capacity)
+  -- Real OC also returns info per component (including modem capacity)
   for addr, reg in pairs(componentRegistry or {}) do
     result[addr] = {
       type = reg.type,
@@ -1902,17 +1899,17 @@ for y = 1, Screen.height do
   end
 end
 
--- JSON 模式: 跟踪脏单元格, 发送增量/全屏更新
-local dirtyMap = {}     -- 键: y*1000 + x, 值: true  (去重用)
+-- JSON mode: track dirty cells and send incremental or full updates
+local dirtyMap = {}     -- key = y*1000 + x, value = true (dedupe)
 local dirtyCount = 0
 local screenInitialized = false
-local renderScheduled = false  -- 是否有待发送的脏区
-local _lastFlushTime = 0       -- 上次刷新时间 (os.clock 秒)
-local _minFrameInterval = 1/20 -- 最小帧间隔 (秒), 约 20fps (终端界面足够流畅)
+local renderScheduled = false  -- dirty regions pending?
+local _lastFlushTime = 0       -- last flush time (os.clock seconds)
+local _minFrameInterval = 1/20 -- minimum frame interval: ~20 fps is smooth enough for a terminal
 
 local function sendScreenUpdate()
   if not jsonIO then
-    -- 文件模式 (legacy): 写 screen.dat
+    -- legacy file mode: write screen.dat
     local f = _io_open(config.screenFile, "wb")
     if not f then return end
     f:write(string.format("%d %d\n", Screen.width, Screen.height))
@@ -1926,9 +1923,9 @@ local function sendScreenUpdate()
     return
   end
 
-  -- JSON 模式
+  -- JSON mode
   if not screenInitialized then
-    -- 发送全屏
+    -- Send the full screen
     local cells = {}
     for y = 1, Screen.height do
       for x = 1, Screen.width do
@@ -1953,7 +1950,7 @@ local function sendScreenUpdate()
     renderScheduled = false
     ilog("render: full " .. Screen.width .. "x" .. Screen.height)
   elseif dirtyCount > 0 then
-    -- 收集所有脏单元格
+    -- Collect dirty cells
     local dirty = {}
     local idx = 1
     for key, _ in pairs(dirtyMap) do
@@ -1986,7 +1983,7 @@ local function markDirty(x, y)
   end
 end
 
--- 分辨率变化时重置
+-- Reset when the resolution changes
 local function onResolutionChange()
   screenInitialized = false
   dirtyMap = {}
@@ -1996,8 +1993,8 @@ end
 
 local function scheduleRender()
   renderScheduled = true
-  -- 时间阈值: 如果距离上次刷新超过最小帧间隔 (约60fps), 立即刷新
-  -- 防止长时间没有 pullSignal 时画面卡住 (例如启动过程中的大量渲染)
+  -- Flush when the minimum frame interval has elapsed (~60 fps)
+  -- so the display does not freeze if pullSignal is not called for a while
   if jsonIO then
     local now = _os_clock()
     if now - _lastFlushTime >= _minFrameInterval then
@@ -2007,32 +2004,32 @@ local function scheduleRender()
   end
 end
 
--- 刷新屏幕 (在 pullSignal 返回前调用, 确保屏幕更新及时)
--- 遵守最小帧间隔限制, 避免事件频繁时过度刷新导致性能问题
--- force=true 时强制刷新 (用于进入阻塞读之前, 避免脏区留在缓冲区)
+-- Flush the screen before pullSignal returns so updates are timely
+-- Rate-limited by the minimum frame interval to avoid excessive flushes
+-- force=true flushes even before blocking, so no dirty cells stay buffered
 flushRender = function(force)
   if not (renderScheduled or (screenInitialized and dirtyCount > 0)) then return end
   if jsonIO then
     local now = _os_clock()
-    if not force and now - _lastFlushTime < _minFrameInterval then return end -- 还没到下一帧, 跳过
+    if not force and now - _lastFlushTime < _minFrameInterval then return end -- not yet the next frame
     _lastFlushTime = now
   end
   sendScreenUpdate()
 end
 
 -- ============================================================
--- GPU 组件
+-- GPU component
 -- ============================================================
 
--- 宽字符检测辅助函数 (必须在 GPU 函数之前定义)
--- 判断字符是否为宽字符（显示宽度=2）
+-- Wide-character helpers (must be defined before the GPU functions)
+-- Is the character wide (display width 2)?
 local function isWideChar(ch)
   if not ch or ch == "" then return false end
   local b = ch:byte(1)
   if not b then return false end
-  -- ASCII 直接返回 false
+  -- ASCII is never wide
   if b < 0x80 then return false end
-  -- 解析 UTF-8 码点
+  -- Decode the UTF-8 code point
   local cp
   if b < 0xE0 then
     cp = ((b % 0x20) * 0x40) + (ch:byte(2) % 0x40)
@@ -2041,7 +2038,7 @@ local function isWideChar(ch)
   else
     cp = ((b % 0x08) * 0x40000) + ((ch:byte(2) % 0x40) * 0x1000) + ((ch:byte(3) % 0x40) * 0x40) + (ch:byte(4) % 0x40)
   end
-  -- 宽字符范围: CJK 统一表意文字、全角形式、韩文等
+  -- Wide ranges: CJK ideographs, fullwidth forms, Hangul, ...
   if (cp >= 0x1100 and cp <= 0x115F) or
      (cp >= 0x2E80 and cp <= 0xA4CF) or
      (cp >= 0xAC00 and cp <= 0xD7A3) or
@@ -2055,7 +2052,7 @@ local function isWideChar(ch)
   return false
 end
 
--- isWideChar 缓存 (热点路径优化) - 必须在 isWideChar 之后定义
+-- isWideChar cache (hot-path optimisation), defined after isWideChar
 local wideCharCache = {}
 local function isWideCharCached(ch)
   if not ch or ch == "" then return false end
@@ -2063,7 +2060,7 @@ local function isWideCharCached(ch)
   if cached ~= nil then return cached end
   local result = isWideChar(ch)
   wideCharCache[ch] = result
-  -- 限制缓存大小 (防止内存膨胀)
+  -- Cap the cache size
   if not wideCharCache._count then wideCharCache._count = 0 end
   wideCharCache._count = wideCharCache._count + 1
   if wideCharCache._count > 2000 then
@@ -2077,15 +2074,15 @@ local gpuBound = nil
 local gpu = {
   _resolution = { Screen.width, Screen.height },
   _bg = 0x000000, _fg = 0xFFFFFF,
-  -- 调色板索引: 颜色来自 setBackground(color, true) 时记录, RGB 颜色为 nil
+  -- Palette index, recorded only for setBackground(color, true); nil for RGB colours
   _bgIndex = nil, _fgIndex = nil,
   _depth = config.gpuTier == 1 and 1 or config.gpuTier == 2 and 4 or 8,
   _palette = {},
-  -- 暴露 tier 给程序: 程序通过 component.proxy(addr).tier 读取
+  -- Expose tier; programs read it via component.proxy(addr).tier
   tier = config.gpuTier,
 }
 
--- 默认 16 色调色板 (MC 标准)
+-- Default 16-colour palette (Minecraft standard)
 local defaultPalette = {
   [0] = 0x000000, [1] = 0x0000AA, [2] = 0x00AA00, [3] = 0x00AAAA,
   [4] = 0xAA0000, [5] = 0xAA00AA, [6] = 0xFFAA00, [7] = 0xAAAAAA,
@@ -2094,14 +2091,14 @@ local defaultPalette = {
 }
 for i = 0, 15 do gpu._palette[i] = defaultPalette[i] end
 
--- 根据 depth 计算调色板大小的辅助函数
+-- Palette size for a colour depth
 local function paletteSize(depth)
   if depth == 1 then return 2
   elseif depth == 4 then return 16
   elseif depth == 8 then return 256
   else return 16 end  -- T1 GPU
 end
--- GPU 最大分辨率 (基于 GPU tier): T1=50x16, T2=80x25, T3/Creative=160x50
+-- GPU max resolution by tier: T1=50x16, T2=80x25, T3/Creative=160x50
 local gpuMaxW = config.gpuTier == 1 and 50 or config.gpuTier == 2 and 80 or 160
 local gpuMaxH = config.gpuTier == 1 and 16 or config.gpuTier == 2 and 25 or 50
 
@@ -2110,7 +2107,7 @@ gpu.getScreen = function() return gpuBound end
 gpu.getResolution = function() return gpu._resolution[1], gpu._resolution[2] end
 gpu.setResolution = function(w, h)
   w, h = tonumber(w), tonumber(h)
-  -- 与 OpenComputers 一致: 超出最大分辨率或非法值直接报错
+  -- As in OpenComputers: out-of-range or invalid values raise an error
   if not w or not h or w < 1 or h < 1 or w > gpuMaxW or h > gpuMaxH
     or w ~= math.floor(w) or h ~= math.floor(h) then
     error("unsupported resolution", 2)
@@ -2131,13 +2128,13 @@ gpu.setResolution = function(w, h)
   scheduleRender()
   return true
 end
--- maxResolution 返回 GPU 的最大分辨率 (基于 GPU tier), 与真实 OC 一致
+-- maxResolution reports the tier's maximum, matching real OC
 gpu.maxResolution = function() return gpuMaxW, gpuMaxH end
 gpu.maxDepth = function()
   return config.gpuTier == 1 and 1 or config.gpuTier == 2 and 4 or 8
 end
--- Viewport (OpenOS tty 依赖)
-gpu._viewport = nil  -- nil 表示使用全屏
+-- Viewport (required by the OpenOS tty)
+gpu._viewport = nil  -- nil means fullscreen
 gpu.getViewport = function()
   if gpu._viewport then
     return gpu._viewport[1], gpu._viewport[2]
@@ -2153,20 +2150,20 @@ gpu.setDepth = function(d)
   local previous = gpu._depth
   local value = tonumber(d)
   local maxDepth = config.gpuTier == 1 and 1 or config.gpuTier == 2 and 4 or 8
-  -- 与 OpenComputers 一致: 只接受 1 / 4 / 8, 超出支持的深度直接报错
+  -- As in OpenComputers: only 1 / 4 / 8 are accepted; other depths raise an error
   if not value or (value ~= 1 and value ~= 4 and value ~= 8) or value > maxDepth then
     error("unsupported color depth", 2)
   end
   gpu._depth = value
-  -- 重置调色板到默认
+  -- Reset the palette to defaults
   gpu._palette = {}
   for i = 0, math.min(paletteSize(value) - 1, 15) do
     gpu._palette[i] = defaultPalette[i]
   end
-  -- 与 OpenComputers 一致: 返回切换前的深度名称
+  -- As in OpenComputers: return the previous depth's name
   return ({ [1] = "OneBit", [4] = "FourBit", [8] = "EightBit" })[previous]
 end
--- 离屏缓冲: 每个缓冲保存自己的字符与配色, 激活后绘制写入缓冲, 由 bitblt 搬回屏幕
+-- Off-screen buffers: each keeps its own chars and colours; drawing goes to the active buffer until bitblt
 gpu._buffers = {}
 gpu._nextBuffer = 1
 gpu._activeBuffer = 0
@@ -2218,8 +2215,8 @@ gpu.getBufferSize = function(id)
   return buffer.width, buffer.height
 end
 
--- VRAM 容量: 与真机一致 = 最大分辨率格数 × tier 系数 (T1=1, T2=2, T3=3)
--- 屏幕本身不计入 (真机 totalMemory/freeMemory 只统计离屏缓冲)
+-- VRAM = max resolution cells x tier factor (T1=1, T2=2, T3=3), as on real hardware
+-- The screen itself is excluded; real totalMemory/freeMemory count only off-screen buffers
 local vramFactor = config.gpuTier == 1 and 1 or config.gpuTier == 2 and 2 or 3
 gpu.totalMemory = function()
   return gpuMaxW * gpuMaxH * vramFactor
@@ -2233,7 +2230,7 @@ gpu.freeMemory = function()
   return gpu.totalMemory() - used
 end
 
--- 按编号取绘制面板: 0 是屏幕, 其余是离屏缓冲
+-- Select a draw surface by index: 0 is the screen, the rest are off-screen buffers
 local function drawSurface(id)
   local n = tonumber(id) or 0
   if n == 0 then return Screen end
@@ -2246,11 +2243,11 @@ gpu.get = function(x, y)
   local s = drawSurface(gpu._activeBuffer) or Screen
   if x < 1 or x > s.width or y < 1 or y > s.height then return nil, nil end
   local ch = s.char[y][x]
-  -- 如果当前格是宽字符续接格(空字符串), 返回前一格的字符
+  -- If the cell is a wide-char continuation (empty string), return the previous cell's char
   if ch == "" and x > 1 then
     ch = s.char[y][x - 1]
   end
-  -- 第 4、5 个返回值: 颜色来自调色板时给出索引, RGB 颜色为 nil
+  -- Return values 4 and 5: palette index for palette colours, nil for RGB
   return ch, s.fg[y][x], s.bg[y][x], s.fgi[y][x], s.bgi[y][x]
 end
 gpu.set = function(x, y, text, vertical)
@@ -2263,7 +2260,7 @@ gpu.set = function(x, y, text, vertical)
   if vertical then
     local row = y
     while i <= len do
-      -- 解析一个 UTF-8 字符
+      -- Decode one UTF-8 character
       local b = text:byte(i)
       local charLen = 1
       if b >= 0xF0 then charLen = 4
@@ -2290,7 +2287,7 @@ gpu.set = function(x, y, text, vertical)
       elseif b >= 0xE0 then charLen = 3
       elseif b >= 0xC0 then charLen = 2 end
       local ch = text:sub(i, i + charLen - 1)
-      -- 计算字符显示宽度: 宽字符占2列 (使用缓存优化)
+      -- Display width: wide chars take 2 columns (cached)
       local cw = isWideCharCached(ch) and 2 or 1
       if col >= 1 and col + cw - 1 <= W and y >= 1 and y <= H then
         s.char[y][col] = ch
@@ -2299,7 +2296,7 @@ gpu.set = function(x, y, text, vertical)
         s.bgi[y][col] = gpu._bgIndex
         s.fgi[y][col] = gpu._fgIndex
         if onScreen then markDirty(col, y) end
-        -- 宽字符: 第二格也标记 (存储为特殊的"续接"标记, 用空字符串表示被宽字符覆盖)
+        -- Wide char: mark the second cell as a continuation, stored as an empty string
         if cw == 2 and col + 1 <= W then
           s.char[y][col + 1] = ""
           s.bg[y][col + 1] = gpu._bg
@@ -2312,8 +2309,8 @@ gpu.set = function(x, y, text, vertical)
       i = i + charLen
       col = col + cw
     end
-    -- 追踪 tty 文本输出位置, 用于浏览器光标渲染
-    -- OpenOS 不调用硬件光标, 但浏览器需要知道光标在哪
+    -- Track tty text position for the browser cursor
+    -- OpenOS never uses the hardware cursor, but the browser still needs its position
     if onScreen and screen then
       screen._cursorX = math.min(col, W + 1)
       screen._cursorY = y
@@ -2326,7 +2323,7 @@ gpu.copy = function(x, y, w, h, dx, dy)
   local s = drawSurface(gpu._activeBuffer) or Screen
   local onScreen = (s == Screen)
   local W, H = s.width, s.height
-  -- 保存源区域
+  -- Snapshot the source region
   local src = {}
   for ry = 0, h - 1 do
     src[ry] = {}
@@ -2342,7 +2339,7 @@ gpu.copy = function(x, y, w, h, dx, dy)
       end
     end
   end
-  -- 写入目标区域
+  -- Write the destination region
   for ry = 0, h - 1 do
     for rx = 0, w - 1 do
       local tx, ty = x + rx + dx, y + ry + dy
@@ -2360,7 +2357,7 @@ gpu.copy = function(x, y, w, h, dx, dy)
   return true
 end
 gpu.fill = function(x, y, w, h, ch)
-  -- 正确解析第一个 UTF-8 字符 (而非第一个字节)
+  -- Decode the first UTF-8 character, not the first byte
   ch = tostring(ch)
   local b = ch:byte(1) or 32
   local charLen = 1
@@ -2379,7 +2376,7 @@ gpu.fill = function(x, y, w, h, ch)
       while filled < w do
         local remaining = w - filled
         if cw == 2 and remaining < 2 then
-          -- 剩余空间不足放一个宽字符, 填空格
+          -- Not enough room for a wide char: pad with spaces
           if rx >= 1 and rx <= W then
             s.char[ry][rx] = " "
             s.bg[ry][rx] = gpu._bg
@@ -2470,8 +2467,8 @@ gpu.setBufferPalette = function(p)
 end
 gpu.setBufferSize = function(w, h) gpu.setResolution(w, h); return true end
 
--- 在缓冲与屏幕之间搬运矩形; 缓冲 0 表示屏幕本身
--- 参数: 目标缓冲, 目标列, 目标行, 宽, 高, 源缓冲, 源列, 源行
+-- Copy a rectangle between buffers; buffer 0 is the screen
+-- Args: dst buffer, dst col, dst row, width, height, src buffer, src col, src row
 gpu.bitblt = function(dst, dc, dx, w, h, src, sc, sy)
   local d = drawSurface(dst)
   local s = drawSurface(src)
@@ -2483,7 +2480,7 @@ gpu.bitblt = function(dst, dc, dx, w, h, src, sc, sy)
   local dW, dH = d.width, d.height
   local sW, sH = s.width, s.height
   local onScreen = (d == Screen)
-  -- 源与目标可能是同一块面板, 先取快照避免搬运过程中互相覆盖
+  -- Source and destination may be the same surface; snapshot first to avoid overlap
   local snap = {}
   for ry = 0, h - 1 do
     snap[ry] = {}
@@ -2513,13 +2510,13 @@ gpu.bitblt = function(dst, dc, dx, w, h, src, sc, sy)
 end
 
 -- ============================================================
--- Screen 组件
+-- Screen component
 -- ============================================================
 screenAddr = genAddr()
 screen = {
   _on = true, _precise = false, _touchInverted = false,
   _cursorX = 1, _cursorY = 1, _cursorBlink = false,
-  -- 暴露 tier 给程序: 程序通过 component.proxy(addr).tier 读取
+  -- Expose tier; programs read it via component.proxy(addr).tier
   tier = config.screenTier,
 }
 screen.isOn = function() return screen._on end
@@ -2531,7 +2528,7 @@ screen.setPrecise = function(v) screen._precise = v; return true end
 screen.isPrecise = function() return screen._precise end
 screen.setTouchModeInverted = function(v) screen._touchInverted = v; return true end
 screen.isTouchModeInverted = function() return screen._touchInverted end
--- 光标控制 (OpenOS term 依赖)
+-- Cursor control (required by the OpenOS term)
 screen.setCursor = function(x, y)
   screen._cursorX = tonumber(x) or 1
   screen._cursorY = tonumber(y) or 1
@@ -2547,7 +2544,7 @@ screen.getResolution = function() return gpu._resolution[1], gpu._resolution[2] 
 screen.setResolution = function(w, h) return gpu.setResolution(w, h) end
 
 -- ============================================================
--- Keyboard 组件
+-- Keyboard component
 -- ============================================================
 keyboardAddr = genAddr()
 local keyboard = { _shift = false, _control = false, _alt = false }
@@ -2557,11 +2554,11 @@ keyboard.isAltPressed = function() return keyboard._alt end
 keyboard.isKeyDown = function(code) return false end
 
 -- ============================================================
--- Filesystem 组件（基于虚拟磁盘）
+-- Filesystem component (backed by virtual disks)
 -- ============================================================
 fsAddr = genAddr()
--- 虚拟只读文件: 让系统内的 require("mods") 直接拿到模拟器注入的组件。
--- 不写入磁盘镜像, 仅在文件系统代理层可见。
+-- Virtual read-only files so require("mods") inside the guest returns the injected component.
+-- Never written to disk images; visible only through the filesystem proxy.
 config.virtualFsFiles = {}
 if config.modsEnabled then
   config.virtualFsFiles["/lib/mods.lua"] = "return mods\n"
@@ -2571,12 +2568,13 @@ local filesystem = { _label = vdisk.label, _address = fsAddr }
 filesystem.getLabel = function() local l = vdisk.label or "Untitled"; dlog("fs.getLabel ->", l); return l end
 filesystem.setLabel = function(label)
   vdisk.label = tostring(label or ""):sub(1, 16)
-  -- 立即落盘, 避免 VM 被强制结束时丢掉这次改名
+  -- Flush now so a forced VM stop does not lose the rename
   pcall(diskPersist.saveNow)
   return vdisk.label
 end
 filesystem.spaceUsed = function() return vfsSpaceUsed() end
-filesystem.spaceTotal = function() return config.hddSize end
+-- Report the capacity recorded in the disk header, not the default config value.
+filesystem.spaceTotal = function() return vdisk.size or config.hddSize end
 filesystem.isReadOnly = function() return false end
 filesystem.exists = function(path)
   path = vfsNormalize(path)
@@ -2599,9 +2597,9 @@ filesystem.list = function(path)
     if not found then list[#list + 1] = "mods.lua" end
   end
   local i = 0
-  -- 返回真实的数组 table，附加 __call 元方法用于迭代
-  -- 这样 #list、ipairs、pairs、table.concat、索引访问全部原生支持
-  -- 同时支持 for entry in fs.list(path) do 迭代用法
+  -- Return a real array table with a __call metamethod for iteration
+  -- so #list, ipairs, pairs, table.concat and indexing all work natively
+  -- while for entry in fs.list(path) do still works
   return setmetatable(list, {
     __call = function()
       i = i + 1
@@ -2617,7 +2615,7 @@ end
 filesystem.lastModified = function(path)
   path = vfsNormalize(path)
   if config.virtualFsFiles[path] ~= nil then return os.time() * 1000 end
-  -- OC 标准: lastModified 返回毫秒 (real world timestamp)
+  -- OC standard: lastModified returns milliseconds (real-world timestamp)
   local mod = vdisk.files[path] and vdisk.files[path].modified or os.time()
   return mod * 1000
 end
@@ -2625,7 +2623,7 @@ filesystem.open = function(path, mode)
   dlog("fs.open", path, "mode", mode)
   mode = mode or "r"
   path = vfsNormalize(path)
-  -- 虚拟只读文件 (如 /lib/mods.lua)
+  -- Virtual read-only file (e.g. /lib/mods.lua)
   if config.virtualFsFiles[path] ~= nil then
     if mode:match("w") or mode:match("a") then
       return nil, "read-only"
@@ -2635,12 +2633,12 @@ filesystem.open = function(path, mode)
     openHandles[handle] = { mode = mode, pos = 0, buffer = config.virtualFsFiles[path], path = path }
     return handle
   end
-  -- 目录不能打开
+  -- directories cannot be opened
   if vfsIsDirectory(path) then
     dlog("fs.open: cannot open directory:", path)
     return nil, "is a directory"
   end
-  -- 读模式: 文件不存在则返回 nil
+  -- read mode: nil when the file is missing
   if not mode:match("w") and not mode:match("a") then
     if not vfsExists(path) then
       dlog("fs.open: file not found:", path)
@@ -2649,7 +2647,7 @@ filesystem.open = function(path, mode)
   end
   handleCount = handleCount + 1
   local handle = handleCount
-  -- w 模式清空文件; a 模式从末尾追加, 其余从开头读取
+  -- w truncates, a appends, anything else reads from the start
   local content = mode:match("w") and "" or (vfsRead(path) or "")
   local pos = mode:match("a") and #content or 0
   openHandles[handle] = { mode = mode, pos = pos, buffer = content, path = path }
@@ -2706,28 +2704,28 @@ filesystem.rename = function(from, to)
   return vfsRename(from, to)
 end
 filesystem.format = function()
-  -- 清空所有文件, 保留根目录
+  -- Drop all files, keep the root
   for k in pairs(vdisk.files) do
     if k ~= "/" then vdisk.files[k] = nil end
   end
-  -- 确保根目录存在
+  -- Ensure the root exists
   vdisk.files["/"] = { type = "directory", modified = os.time() }
-  -- 标记磁盘已修改 (立即落盘, 避免格式化后进程被强杀导致旧内容复活)
+  -- Mark dirty and flush now, so a hard kill cannot resurrect the old content
   diskPersist.mark()
   diskPersist.flush(true)
   return true
 end
 
 -- ============================================================
--- EEPROM 组件
+-- EEPROM component
 -- ============================================================
 eepromAddr = genAddr()
 eepromData = ""
 eepromLabel = "OC-Emulator EEPROM"
-eepromCode = nil  -- 从 .oce 文件加载的 EEPROM 代码
+eepromCode = nil  -- EEPROM code loaded from a .oce file
 
--- 内置 OC 模组 BIOS (Lua 版) - 作为默认 EEPROM
--- 依次尝试常见的引导脚本路径
+-- Built-in OC BIOS (Lua) used as the default EEPROM
+-- Try the usual boot-script paths in order
 local BUILTIN_EEPROM = [[local init
 do
   local component_invoke = component.invoke
@@ -2790,7 +2788,7 @@ do
     end
   end
   if not init then
-    -- 在屏幕上显示 "no bootable medium" 并等待
+    -- Show the "no bootable medium" message and wait.
     local gpu = component.list("gpu")()
     if gpu then
       boot_invoke(gpu, "set", 1, 1, "No bootable medium found")
@@ -2798,11 +2796,10 @@ do
       boot_invoke(gpu, "set", 1, 4, "Press Ctrl+Alt+Insert in the web panel to restart")
     end
     computer.beep(200, 0.5)
-    -- 等待用户输入 (保持 VM 运行)
+    -- Idle loop: keep the VM alive until the user presses a key.
     while true do
       local sig = computer.pullSignal(1)
       if sig and sig[1] == "key_down" then
-        -- 重启
         computer.shutdown("reboot")
       end
     end
@@ -2812,15 +2809,15 @@ end
 return init()
 ]]
 
--- 尝试从配置加载 EEPROM 文件
+-- Try loading the EEPROM file from the config
 if config.eepromFile and config.eepromFile ~= "" then
-  -- 支持完整路径或相对文件名
+  -- accept a full path or a relative file name
   local eepromPath = config.eepromFile
   if not eepromPath:match("^[A-Za-z]:") and not eepromPath:match("^[/\\]") then
-    -- 相对路径，加上 VM 目录前缀
+    -- relative path: prefix the VM directory
     eepromPath = config.vmDir .. "/" .. eepromPath
   end
-  -- 支持 .oce 二进制格式和 .lua 纯文本格式
+  -- .oce binary format or plain .lua text
   if eepromPath:match("%.oce$") then
     local eepromInfo = disk.loadEEPROM(eepromPath)
     if eepromInfo then
@@ -2835,7 +2832,7 @@ if config.eepromFile and config.eepromFile ~= "" then
       _stderr:write("[emulator] WARNING: EEPROM file not found: " .. eepromPath .. "\n")
     end
   else
-    -- 纯 Lua 文件 (如从 OC GitHub 下载的 bios.lua)
+    -- Plain Lua file (e.g. bios.lua from the OC GitHub)
     local f = _io_open(eepromPath, "rb")
     if f then
       local content = f:read("*a") or ""
@@ -2854,7 +2851,7 @@ if config.eepromFile and config.eepromFile ~= "" then
   end
 end
 
--- 如果没有自定义 EEPROM 或 EEPROM 为空，使用内置 OC BIOS
+-- Fall back to the built-in OC BIOS when there is no custom EEPROM, or it is empty
 if not eepromCode or #eepromCode == 0 then
   eepromCode = BUILTIN_EEPROM
   eepromLabel = "OpenOS EEPROM"
@@ -2864,21 +2861,21 @@ end
 local eeprom = {}
 eeprom._readonly = false
 eeprom.get = function()
-  -- 始终返回当前 EEPROM 代码 (内置 OC BIOS 或自定义)
+  -- Always return the current EEPROM code (built-in or custom)
   return eepromCode
 end
 eeprom.set = function(data)
   if eeprom._readonly then return false, "read-only" end
-  -- 参数校验: 防止写入空文件
+  -- Validate arguments so empty files are not written
   if not data or #data == 0 then
     _stderr:write("[emulator] WARNING: eeprom.set() called with empty data, skipping write\n")
     return false, "empty data"
   end
 
-  -- 强制 4KB 限制
+  -- Enforce the 4 KB limit
   if #data > 4096 then data = data:sub(1, 4096) end
   eepromCode = data
-  -- 持久化: 优先写回到当前 EEPROM 文件; 若无 (built-in), 则创建 eeprom.lua
+  -- Persist: write back to the current EEPROM file, or create eeprom.lua for the built-in BIOS
   local eepromPath
   if config.eepromFile and config.eepromFile ~= "" then
     eepromPath = config.eepromFile
@@ -2889,7 +2886,7 @@ eeprom.set = function(data)
     eepromPath = vmDir .. "/eeprom.lua"
   end
   if eepromPath:match("%.oce$") then
-    -- .oce 格式: 使用二进制头格式写入
+    -- .oce: write with the binary header format
     local ok, err = pcall(function()
       disk.saveEEPROM(eepromPath, eepromLabel, eepromCode)
     end)
@@ -2899,7 +2896,7 @@ eeprom.set = function(data)
       _stderr:write("[emulator] WARNING: cannot save EEPROM (OCE): " .. tostring(err) .. "\n")
     end
   else
-    -- .lua 格式: 纯文本写入
+    -- .lua: write plain text
     local f, err = _io_open(eepromPath, "wb")
     if f then
       f:write(eepromCode or "")
@@ -2909,7 +2906,7 @@ eeprom.set = function(data)
       _stderr:write("[emulator] WARNING: cannot save EEPROM: " .. tostring(err) .. "\n")
     end
   end
-  -- 更新 config.json, 把 eeprom 从 "built-in" 改为 "eeprom.lua"
+  -- Update config.json: eeprom changes from "built-in" to "eeprom.lua"
   if vmConfig and vmConfig.hardware then
     if vmConfig.hardware.eeprom == "built-in" or not vmConfig.hardware.eeprom then
       vmConfig.hardware.eeprom = "eeprom.lua"
@@ -2937,7 +2934,7 @@ eeprom.setLabel = function(label)
   if eeprom._readonly then return nil, "read-only" end
   if #label > 16 then label = label:sub(1, 16) end
   eepromLabel = label
-  -- 持久化标签到 config.json (对 .lua EEPROM 尤其重要, 因为 .lua 文件没有标签位)
+  -- Persist the label to config.json; .lua EEPROMs have no label field of their own
   if vmConfig and vmConfig.hardware then
     vmConfig.hardware.eepromLabel = eepromLabel
     local cfgPath = vmDir .. "/config.json"
@@ -2968,14 +2965,14 @@ eeprom.makeReadonly = function()
 end
 
 -- ============================================================
--- Internet 组件
+-- Internet component
 -- ============================================================
 local internetAddr = genAddr()
 local internet = {}
 internet.isTcpEnabled = function() return true end
 internet.isHttpEnabled = function() return true end
 
--- 套接字数据以 base64 在 JSON 消息中传输, 避免二进制字节被转义破坏
+-- Socket data travels as base64 inside JSON so binary bytes are not mangled by escaping
 internet.encodeBase64 = function(s)
   local chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
   local out = {}
@@ -3018,12 +3015,12 @@ internet.decodeBase64 = function(t)
 end
 internet.request = function(url, postData, headers)
   if jsonIO then
-    -- 异步模式: 通过 JSON I/O 协议发请求, 等待 net_response
+    -- Async mode: send a request over the JSON I/O protocol and await net_response
     pendingNetId = pendingNetId + 1
     local reqId = "req_" .. pendingNetId
     local method = (postData and postData ~= "") and "POST" or "GET"
 
-    -- 注册回调, 等待 server 返回 net_response
+    -- Register a callback and wait for net_response
     local responseData = nil
     local responseStatus = 0
     local responseStatusText = ""
@@ -3040,14 +3037,14 @@ internet.request = function(url, postData, headers)
         responseStatus = msg.status or 0
         responseStatusText = msg.statusText or "OK"
         responseHeaders = msg.headers or {}
-        -- chunks 是数组, 拼接为完整响应体
+        -- chunks is an array; join it into the full body
         local parts = msg.chunks or {}
         responseData = table.concat(parts)
       end
       gotResponse = true
     end
 
-    -- 发送 net_request 到 server
+    -- Send net_request to the server
     sendToServer({
       type = "net_request",
       url = url,
@@ -3057,9 +3054,9 @@ internet.request = function(url, postData, headers)
       reqId = reqId,
     })
 
-    -- 阻塞等待响应 (最长 90 秒，大文件或网络慢时需要更多时间)
-    -- 只统计真正等待满 1 秒的轮次: 队列里已有的事件 (例如触发下载的那次点击)
-    -- 会让 pullSignal 立即返回, 把它们计入超时会提前放弃请求。
+    -- Block for the reply (up to 90 s; big files or slow links need it)
+    -- Count only rounds that really waited 1 s: queued events (e.g. the click that started the download)
+    -- make pullSignal return immediately and would exhaust the timeout early.
     local maxWait = 90
     local waited = 0
     while not gotResponse and waited < maxWait do
@@ -3067,7 +3064,7 @@ internet.request = function(url, postData, headers)
       if sig == nil then waited = waited + 1 end
     end
 
-    -- 超时清理回调
+    -- Clean up the callback on timeout
     if not gotResponse then
       pendingNetCallbacks[reqId] = nil
       responseError = "request timed out after " .. maxWait .. "s (url: " .. url:sub(1, 80) .. ")"
@@ -3075,8 +3072,8 @@ internet.request = function(url, postData, headers)
 
     local handle = { data = responseData, closed = false }
     handle.read = function(n)
-      -- 数据读完后必须返回 nil (真实 OC 语义), 否则字符串 sub 会一直返回空串,
-      -- 客户机的 while 读循环 (如 Internet.lua 的 download) 会在空串上死循环。
+      -- Return nil once the data is consumed (real OC semantics), otherwise sub keeps returning ""
+      -- and guest read loops (Internet.lua download) spin forever.
       if handle.closed or not handle.data or #handle.data == 0 then return nil end
       if n and n < math.huge and n == math.floor(n) then
         local chunk = handle.data:sub(1, n)
@@ -3098,7 +3095,7 @@ internet.request = function(url, postData, headers)
     handle.close = function() handle.closed = true end
     handle.finishConnect = function() return true end
 
-    -- 请求失败时返回 nil, 与真实 OC 行为一致
+    -- Return nil on failure, matching real OC
     if responseError then
       elog("internet.request failed: " .. tostring(url) .. " (" .. tostring(responseError) .. ")")
       return nil, responseError
@@ -3106,7 +3103,7 @@ internet.request = function(url, postData, headers)
     return handle
   end
 
-  -- 非 JSON 模式回退 (同步 popen, 仅在 legacy 文件模式使用)
+  -- Legacy fallback: synchronous popen, only in file mode
   local cmd = 'powershell -NoProfile -Command "'
   if postData then
     cmd = cmd .. '$headers = @{}; '
@@ -3156,7 +3153,7 @@ internet.connect = function(addr, port)
     if handle._err then return nil, handle._err end
     return true
   end
-  -- 同时支持 sock.read(n) 与 sock:read(n) 两种调用方式
+  -- Support both sock.read(n) and sock:read(n)
   handle.read = function(a, b)
     local count = (type(a) == "table") and b or a
     if handle._err then return nil, handle._err end
@@ -3242,14 +3239,14 @@ internet.connect = function(addr, port)
 end
 
 -- ============================================================
--- 数据卡 (Data Card) - OC 模组标准 API, 分 Tier 实现
+-- Data Card: standard OC API, implemented per tier
 -- T1: encode64/decode64, serialize/deserialize, crc32
 -- T2: + md5, sha256, deflate/inflate, random
 -- T3: + encrypt/decrypt, generateKeyPair, sign/verify, diffieHellman
 -- ============================================================
 local dataAddr = genAddr()
 
--- Base64 编码表 (T1 级, 纯 Lua)
+-- Base64 lookup table (tier 1, pure Lua)
 local b64chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 local b64lookup = {}
 for i = 1, 64 do b64lookup[b64chars:sub(i, i)] = i - 1 end
@@ -3331,8 +3328,8 @@ local function _crc32(s)
   return bit32.band(bit32.bnot(crc), 0xFFFFFFFF)
 end
 
--- crypto-helper.js 桥接: 通过 io.popen 调用 Node.js 执行加密操作
--- 返回 stdout 输出 (字符串), 出错返回 nil, errorMsg
+-- crypto-helper.js bridge: run Node.js via io.popen for crypto operations
+-- Returns stdout as a string, or nil plus an error message
 local cryptoHelperPath = EMU_DIR .. "lib/crypto-helper.js"
 local function _cryptoBridge(op, inputData, ...)
   local tmpIn = _os_tmpname()
@@ -3341,10 +3338,10 @@ local function _cryptoBridge(op, inputData, ...)
   f:write(inputData or "")
   f:close()
   local cmd = 'node "' .. cryptoHelperPath .. '" ' .. op .. ' "' .. tmpIn .. '"'
-  -- 附加额外参数 (密钥文件等)
+  -- Extra arguments (key files etc.)
   local args = { ... }
   for _, a in ipairs(args) do
-    -- 写入额外参数到 temp 文件
+    -- Write extra arguments to a temp file
     local tmpArg = _os_tmpname()
     local af = _io_open(tmpArg, "wb")
     if af then af:write(a); af:close() end
@@ -3354,12 +3351,12 @@ local function _cryptoBridge(op, inputData, ...)
   local result = h and h:read("*a") or nil
   if h then h:close() end
   _os_remove(tmpIn)
-  -- 清理额外参数 temp 文件 (它们在 cmd 中被引用)
-  -- 由于在 popen 完成后文件已不需要, 清理
+  -- Remove the extra-argument temp file (referenced by cmd)
+  -- delete it once popen has finished
   return result
 end
 
--- 简化版 crypto bridge: 单参数 (md5, sha256, deflate, inflate)
+-- Simple crypto bridge: one argument (md5, sha256, deflate, inflate)
 local function _cryptoSingle(op, inputData)
   local tmpIn = _os_tmpname()
   local f = _io_open(tmpIn, "wb")
@@ -3374,7 +3371,7 @@ local function _cryptoSingle(op, inputData)
   return result
 end
 
--- 双参数 crypto bridge: 用于 encrypt/decrypt (inputData, key)
+-- Two-argument crypto bridge for encrypt/decrypt (inputData, key)
 local function _cryptoDouble(op, inputData, keyData)
   local tmpIn = _os_tmpname()
   local tmpKey = _os_tmpname()
@@ -3395,24 +3392,24 @@ local function _cryptoDouble(op, inputData, keyData)
   return result
 end
 
--- 创建分 Tier 的数据卡
--- tier: 1, 2, 或 3
+-- Create a tiered data card
+-- tier: 1, 2 or 3
 local function createDataCard(tier)
   local card = {
     type = "data",
     tier = tier,
   }
 
-  -- ==== T1 方法 (所有 Tier 都有) ====
+  -- ==== Tier 1 methods (available on every tier) ====
   card.encode64 = function(s) return _encode64(s) end
   card.decode64 = function(s) return _decode64(s) end
-  card.encodeBase64 = card.encode64  -- 兼容别名
+  card.encodeBase64 = card.encode64  -- compatibility alias
   card.decodeBase64 = card.decode64
   card.serialize = function(v) return _serialize(v) end
   card.deserialize = function(s) return _deserialize(s) end
   card.crc32 = function(s) return _crc32(s) end
 
-  -- ==== T2 方法 (Tier >= 2) ====
+  -- ==== Tier 2 methods (tier >= 2) ====
   if tier >= 2 then
     card.md5 = function(s)
       local result = _cryptoSingle("md5", s or "")
@@ -3450,21 +3447,21 @@ local function createDataCard(tier)
     end
   end
 
-  -- ==== T3 方法 (Tier >= 3) ====
+  -- ==== Tier 3 methods (tier >= 3) ====
   if tier >= 3 then
-    -- AES-256-CBC 加密: encrypt(data, key) → base64(iv + encrypted)
+    -- AES-256-CBC encrypt: encrypt(data, key) -> base64(iv + encrypted)
     card.encrypt = function(data, key)
       local result = _cryptoDouble("encrypt", data or "", key or "")
       if not result or result == "" then error("encrypt failed") end
       return result
     end
-    -- AES-256-CBC 解密: decrypt(base64(iv + encrypted), key) → original
+    -- AES-256-CBC decrypt: decrypt(base64(iv + encrypted), key) -> original
     card.decrypt = function(data, key)
       local result = _cryptoDouble("decrypt", data or "", key or "")
       if not result then error("decrypt failed") end
       return result
     end
-    -- 生成 RSA 密钥对: generateKeyPair([bits]) → {public, private}
+    -- Generate an RSA key pair: generateKeyPair([bits]) -> {public, private}
     card.generateKeyPair = function(bits)
       bits = bits or 2048
       local tmpArg = _os_tmpname()
@@ -3480,7 +3477,7 @@ local function createDataCard(tier)
       if ok and type(parsed) == "table" then
         return parsed.public, parsed.private
       end
-      -- 尝试 JSON 解析
+      -- try JSON parsing
       local fn = (loadstring or load)("return " .. result)
       if fn then
         local ok2, r = pcall(fn)
@@ -3490,13 +3487,13 @@ local function createDataCard(tier)
       end
       error("cannot parse key pair")
     end
-    -- RSA 签名: sign(data, privateKey) → base64 signature
+    -- RSA sign: sign(data, privateKey) -> base64 signature
     card.sign = function(data, privateKey)
       local result = _cryptoDouble("sign", data or "", privateKey or "")
       if not result or result == "" then error("sign failed") end
       return result
     end
-    -- RSA 验证: verify(data, signature, publicKey) → boolean
+    -- RSA verify: verify(data, signature, publicKey) -> boolean
     card.verify = function(data, signature, publicKey)
       local tmpData = _os_tmpname()
       local tmpSig = _os_tmpname()
@@ -3511,7 +3508,7 @@ local function createDataCard(tier)
       _os_remove(tmpData); _os_remove(tmpSig); _os_remove(tmpPub)
       return result == "true"
     end
-    -- DH 密钥交换: diffieHellman(privateKey, publicKey) → shared secret
+    -- DH exchange: diffieHellman(privateKey, publicKey) -> shared secret
     card.diffieHellman = function(privateKey, publicKey)
       local result = _cryptoDouble("diffieHellman", privateKey or "", publicKey or "")
       if not result or result == "" then error("diffieHellman failed") end
@@ -3522,14 +3519,14 @@ local function createDataCard(tier)
   return card
 end
 
--- data 变量: 默认 T1 (会在扩展卡注册时被替换为正确 Tier)
+-- data defaults to tier 1 and is replaced with the configured tier at card registration
 local data = createDataCard(1)
 
 -- ============================================================
--- 组件注册表
+-- Component registry
 -- ============================================================
--- 创造机箱: 2个硬盘位 + 1个软盘位 + 扩展卡
--- 第二个硬盘: 如果配置了 disk2 文件则从 .ocd 加载, 否则空磁盘
+-- Creative chassis: 2 HDD slots + 1 floppy slot + expansion cards
+-- Second HDD: load the configured disk2 .ocd, otherwise empty
 local fs2Addr = genAddr()
 -- tmpfs: RAM-based temporary filesystem, always writable, separate from disks
 local tmpAddr = genAddr()
@@ -3551,7 +3548,7 @@ if config.disk2File then
   end
 end
 
--- 软盘驱动器: 同样从 .ocd 加载
+-- Floppy drive: also loaded from .ocd
 floppyAddr = genAddr()
 floppyFiles = {}
 floppyLabel = "Floppy"
@@ -3562,18 +3559,20 @@ if config.floppyFile then
     floppyFiles = loadedF.files or {}
     floppyLabel = loadedF.label or "Floppy"
     floppyLocked = loadedF.locked == true
+    -- Keep the capacity from the image so a custom-sized floppy survives a save.
+    if loadedF.size then config.floppySize = loadedF.size end
     _stderr:write("[emulator] Floppy loaded: " .. floppyLabel .. " (locked=" .. tostring(floppyLocked) .. ")\n")
   else
     _stderr:write("[emulator] WARNING: cannot load floppy: " .. config.floppyFile .. "\n")
   end
 end
 
--- 创建通用文件系统代理。
--- onLabelSet: 标签变更回调。必须把新标签写回外层变量, 否则 saveAllDisks() 写盘时
---   用的是创建代理时的标签, 导致改标签只在本次运行内有效。
+-- Create a generic filesystem proxy.
+-- onLabelSet: label-change callback. Store the new label in the outer variable, otherwise
+-- saveAllDisks() writes the label captured at creation and renames last only until restart.
 local function makeFsProxy(filesTable, label, capacity, readOnly, onLabelSet, onDirty)
   local fs = {}
-  -- 发生修改时通知调用方 (磁盘打脏标记, tmpfs 不传此回调)
+  -- Notify the caller on modification (marks disks dirty; tmpfs passes no callback)
   local function touch()
     if onDirty then pcall(onDirty) end
   end
@@ -3582,7 +3581,7 @@ local function makeFsProxy(filesTable, label, capacity, readOnly, onLabelSet, on
     if readOnly then return nil, "filesystem is read-only" end
     label = tostring(l or "")
     if onLabelSet then pcall(onLabelSet, label) end
-    -- 立即落盘: 这样即使 VM 随后被强制结束, 这次改名也不会丢
+    -- Flush now so a forced VM stop does not lose the rename
     pcall(diskPersist.saveNow)
     return label
   end
@@ -3599,7 +3598,7 @@ local function makeFsProxy(filesTable, label, capacity, readOnly, onLabelSet, on
     path = vfsNormalize(path)
     if path == "/" then return true end
     if filesTable[path] ~= nil then return true end
-    -- 隐式目录: 存在以 path/ 开头的子条目
+    -- Implicit directory: a child entry starts with path/
     local prefix = path .. "/"
     for p in pairs(filesTable) do
       if p:sub(1, #prefix) == prefix then return true end
@@ -3611,7 +3610,7 @@ local function makeFsProxy(filesTable, label, capacity, readOnly, onLabelSet, on
     if path == "/" then return true end
     local info = filesTable[path]
     if info and info.type == "directory" then return true end
-    -- 隐式目录: 如果存在以 path/ 开头的子条目, 则视为目录
+    -- Implicit directory: treat as a directory when a child entry starts with path/
     local prefix = path .. "/"
     for p in pairs(filesTable) do
       if p:sub(1, #prefix) == prefix then return true end
@@ -3620,10 +3619,10 @@ local function makeFsProxy(filesTable, label, capacity, readOnly, onLabelSet, on
   end
   fs.list = function(path)
     path = vfsNormalize(path)
-    -- 按「条目名」聚合: 同一个名字既可能来自显式条目 (如 "/lib"), 也可能来自
-    -- 它的子条目 (如 "/lib/core/x.lua")。以名字为键可以避免同一目录重复列出;
-    -- 根条目 "/" 的 rest 为空串, 跳过它可避免返回空名字 —— OpenOS 的 full_ls
-    -- 会对每个名字调用 filesystem.name(), 空名字返回 nil, 导致 `ls /` 报错。
+    -- Group by entry name: the same name may come from an explicit entry ("/lib") or
+    -- from its children ("/lib/core/x.lua"); keying by name avoids duplicates;
+    -- the root entry "/" has an empty rest, and skipping it avoids an empty name: OpenOS full_ls
+    -- calls filesystem.name() per name, gets nil for the empty one and `ls /` fails.
     local names = {}
     local prefix = path == "/" and "/" or path .. "/"
     for p, info in pairs(filesTable) do
@@ -3633,7 +3632,7 @@ local function makeFsProxy(filesTable, label, capacity, readOnly, onLabelSet, on
           local slash = rest:find("/")
           local name = slash and rest:sub(1, slash - 1) or rest
           if slash then
-            names[name] = true -- 有子条目 => 目录
+            names[name] = true -- has children => directory
           elseif names[name] == nil then
             names[name] = info ~= nil and info.type == "directory"
           end
@@ -3645,7 +3644,7 @@ local function makeFsProxy(filesTable, label, capacity, readOnly, onLabelSet, on
       table.insert(result, isDir and (name .. "/") or name)
     end
     local i = 0
-    -- 返回真实数组 table + __call 迭代，确保全面兼容
+    -- Return a real array table with __call iteration for full compatibility
     return setmetatable(result, {
       __call = function()
         i = i + 1
@@ -3661,7 +3660,7 @@ local function makeFsProxy(filesTable, label, capacity, readOnly, onLabelSet, on
     touch()
     return true
   end
-  -- 文件句柄与 OpenComputers 一样是数字, 保存在本文件系统的句柄表里
+  -- Handles are numbers, as in OpenComputers, kept in this filesystem's handle table
   local handles, nextHandle = {}, 1
   local function handleOf(handle)
     local key = tonumber(handle)
@@ -3755,7 +3754,7 @@ local function makeFsProxy(filesTable, label, capacity, readOnly, onLabelSet, on
   end
   fs.format = function()
     if readOnly then return nil, "filesystem is read-only" end
-    -- 清空所有文件, 保留根目录
+    -- Drop all files, keep the root
     for k in pairs(filesTable) do
       if k ~= "/" then filesTable[k] = nil end
     end
@@ -3772,16 +3771,16 @@ local function makeFsProxy(filesTable, label, capacity, readOnly, onLabelSet, on
   fs.lastModified = function(path)
     path = vfsNormalize(path)
     local info = filesTable[path]
-    -- OC 标准: lastModified 返回毫秒 (real world timestamp)
+    -- OC standard: lastModified returns milliseconds (real-world timestamp)
     local mod = info and info.modified or os.time()
     return mod * 1000
   end
   return fs
 end
 
-local fs2 = makeFsProxy(fs2Files, fs2Label, 4 * 1024 * 1024, false, function(l) fs2Label = l end, diskPersist.mark)
-local floppy = makeFsProxy(floppyFiles, floppyLabel, 512 * 1024, floppyLocked, function(l) floppyLabel = l end, diskPersist.mark)
--- tmpfs: RAM-based, always writable, empty on boot (不落盘, 因此不传 onDirty)
+local fs2 = makeFsProxy(fs2Files, fs2Label, fs2Size or (4 * 1024 * 1024), false, function(l) fs2Label = l end, diskPersist.mark)
+local floppy = makeFsProxy(floppyFiles, floppyLabel, config.floppySize or (512 * 1024), floppyLocked, function(l) floppyLabel = l end, diskPersist.mark)
+-- tmpfs: RAM-based, always writable, empty on boot (never persisted, so no onDirty)
 local tmpfs = makeFsProxy(tmpFiles, "tmpfs", 4 * 1024 * 1024, false)
 
 componentRegistry = {
@@ -3791,18 +3790,18 @@ componentRegistry = {
   [fsAddr] = { type = "filesystem", proxy = filesystem },
   [eepromAddr] = { type = "eeprom", proxy = eeprom },
 }
--- disk2: 只有配置了才注册
+-- disk2: registered only when configured
 if config.disk2File then
   componentRegistry[fs2Addr] = { type = "filesystem", proxy = fs2 }
 end
--- 软盘: 只有配置了才注册
+-- floppy: registered only when configured
 if config.floppyFile then
   componentRegistry[floppyAddr] = { type = "filesystem", proxy = floppy }
 end
--- tmpfs: 始终注册, RAM 临时文件系统
+-- tmpfs: always registered, RAM scratch filesystem
 componentRegistry[tmpAddr] = { type = "filesystem", proxy = tmpfs }
 
--- Mods: 机器人 / 无人机 / 单片机 合并为一个组件
+-- Mods: robot / drone / microcontroller merged into one component
 modsAddr = nil
 if config.modsEnabled then
   modsAddr = genAddr()
@@ -3811,7 +3810,7 @@ if config.modsEnabled then
   _stderr:write("[emulator] Mods: robot / drone / microcontroller merged component\n")
 end
 
--- 扩展卡: 根据配置条件注册
+-- Expansion cards: registered according to config
 local modem = nil
 
 for i = 1, 3 do
@@ -3821,7 +3820,7 @@ for i = 1, 3 do
       componentRegistry[internetAddr] = { type = "internet", proxy = internet }
       _stderr:write("[emulator] Expansion " .. i .. ": Internet Card\n")
     elseif card:match("^data") then
-      -- 根据扩展卡类型确定 Tier: data_t1=1, data_t2=2, data_t3=3
+      -- Tier from the card type: data_t1=1, data_t2=2, data_t3=3
       local dtier = tonumber(card:match("t(%d)") or "1")
       if dtier < 1 then dtier = 1 end
       if dtier > 3 then dtier = 3 end
@@ -3829,14 +3828,14 @@ for i = 1, 3 do
       componentRegistry[dataAddr] = { type = "data", proxy = data }
       _stderr:write("[emulator] Expansion " .. i .. ": Data Card T" .. dtier .. "\n")
     elseif card:match("^modem") or card:match("^wireless") then
-      -- 无线网卡 (modem)
+      -- Wireless modem
       --
-      -- 信号强度 (对应现实 OC 的"格数限制"): 现实 OC 里无线范围按"格"(方块) 计算, 模拟器没有
-      -- 空间概念, 因此把范围改造成一个离散的"信号强度":
-      --   strength = 1  -> 本机自成一网, 无法发现/连接这台工具里的其他虚拟机
-      --   strength >= 2 -> 可以与其他虚拟机互相发现并收发 modem 消息
-      -- 默认值取卡片等级 (T1=1, T2=2), 也可以在 config.json 的
-      -- hardware.modemStrength 里显式指定 (上限 16)。
+      -- Signal strength maps to real OC's range in blocks; the emulator has no
+      -- spatial notion, so range becomes a discrete signal strength:
+      --   strength = 1  -> isolated: cannot see or reach other VMs in this tool
+      --   strength >= 2 -> discovers other VMs and exchanges modem messages
+      -- Defaults to the card tier (T1=1, T2=2); override in config.json via
+      -- hardware.modemStrength (max 16).
       local tier = tonumber(card:match("%d") or "1")
       if tier < 1 then tier = 1 end
       if tier > 2 then tier = 2 end
@@ -3846,10 +3845,10 @@ for i = 1, 3 do
       if strength > 16 then strength = 16 end
       local maxStrength = 16
       modem = {
-        -- 公开字段 (与真实 OC 一致, 脚本可直接读取)
+        -- Public fields (as in real OC, readable from scripts)
         type = "modem",
         tier = tier,
-        -- 内部状态
+        -- Internal state
         _openPorts = {},
         _strength = strength,
         _maxStrength = maxStrength,
@@ -3857,8 +3856,8 @@ for i = 1, 3 do
       modem.open = function(port)
         checkArg(1, port, "number")
         modem._openPorts[port] = true
-        -- 必须通知 server: modemHub 靠"哪些端口开着"来决定投递,
-        -- 不上报就会表现为"另一个虚拟机收不到消息"。
+        -- Must notify the server: modemHub routes by which ports are open,
+        -- otherwise other VMs silently receive nothing.
         sendToServer({ type = "modem_open_port", port = port })
         return true
       end
@@ -3868,7 +3867,7 @@ for i = 1, 3 do
           modem._openPorts[port] = nil
           sendToServer({ type = "modem_close_port", port = port })
         else
-          -- 无参数: 关闭所有端口
+          -- no argument: close every port
           for p in pairs(modem._openPorts) do
             sendToServer({ type = "modem_close_port", port = p })
           end
@@ -3887,24 +3886,24 @@ for i = 1, 3 do
         end
         return ports
       end
-      -- 单包最大字节数 (modem.maxPacketSize)。MineOS 的网络层优先检测这个方法,
-      -- 缺失时才会退回 getDeviceInfo()[addr].capacity (见上面的 MODEM_MAX_PACKET_SIZE)。
-      -- 用不了就会导致大消息分片长度算成 nil, 大响应发不回去。
+      -- Maximum packet size (modem.maxPacketSize). MineOS networking probes this first
+      -- and falls back to getDeviceInfo()[addr].capacity (see MODEM_MAX_PACKET_SIZE above).
+      -- Without it the fragment size is nil and large replies cannot be sent.
       modem.maxPacketSize = function()
         return MODEM_MAX_PACKET_SIZE
       end
       modem.send = function(dest, port, ...)
         checkArg(1, dest, "string")
         checkArg(2, port, "number")
-        -- 通过 server 路由到其他 VM。
-        -- 关键: 必须带上自己的 modem 地址 (from) 和目标地址 (to)。
-        -- 若只发 dest 而没有 from, server 端按 msg.from/msg.to 读取全是 nil,
-        -- 所有跨 VM 消息都会被判定为"没有目标地址"直接丢掉。
+        -- Route to other VMs through the server.
+        -- Must include both our modem address (from) and the target (to).
+        -- Without from the server reads msg.from/msg.to as nil,
+        -- treats every cross-VM message as having no destination and drops it.
         sendToServer({
           type = "modem_send",
           from = modemAddr,
           to = dest,
-          dest = dest,   -- 兼容旧字段名
+          dest = dest,   -- legacy field name
           port = port,
           data = { ... },
         })
@@ -3926,16 +3925,16 @@ for i = 1, 3 do
         if s < 0 then s = 0 end
         if s > modem._maxStrength then s = modem._maxStrength end
         modem._strength = s
-        -- 同步给 server: 信号强度 < 2 时这台 VM 会被隔离 (收不到也发不出)
+        -- Sync to the server: strength < 2 isolates this VM (no sends, no receives)
         sendToServer({ type = "modem_strength", strength = s })
         return s
       end
       modem.getMaxStrength = function() return modem._maxStrength end
       modem.isWireless = function() return true end
-      -- T2 modem 同时支持有线 (cable) 和无线; T1 仅无线
+      -- T2 modems support cable and wireless; T1 is wireless only
       modem.isWired = function() return tier >= 2 end
       componentRegistry[modemAddr] = { type = "modem", proxy = modem }
-      -- 注册到 server (带上信号强度, hub 据此判断能否跨 VM 通信)
+      -- Register with the server (including strength; the hub uses it for routing)
       sendToServer({ type = "modem_register", address = modemAddr, tier = tier, wired = (tier >= 2), strength = strength })
       _stderr:write("[emulator] Expansion " .. i .. ": Wireless Modem T" .. tier .. " (signal strength=" .. strength .. ")\n")
     end
@@ -3953,7 +3952,7 @@ component._primaries = {
   gpu = gpuAddr, screen = screenAddr, keyboard = keyboardAddr,
   filesystem = fsAddr, eeprom = eepromAddr,
 }
--- 根据注册情况添加 primaries
+-- Add primaries based on what was registered
 if componentRegistry[internetAddr] then component._primaries.internet = internetAddr end
 if componentRegistry[dataAddr] then component._primaries.data = dataAddr end
 if modemAddr then component._primaries.modem = modemAddr end
@@ -3967,9 +3966,9 @@ function component.list(filter, exact)
       dlog("  match:", info.type, addr:sub(1,8))
     end
   end
-  -- OC 的 component.list 返回的表支持两种用法:
+  -- OC's component.list result supports two usages:
   -- 1) for addr, type in pairs(component.list()) do
-  -- 2) for addr in component.list() do  (通过 __call 实现迭代器协议)
+  -- 2) for addr in component.list() do (iterator via __call)
   setmetatable(list, {
     __call = function(t, state, current)
       local k = next(t, current)
@@ -3982,7 +3981,7 @@ function component.proxy(address)
   local info = componentRegistry[address]
   if info then
     dlog("component.proxy:", info.type, "->", address:sub(1,8))
-    -- OpenOS 依赖 proxy.address 获取组件地址
+    -- OpenOS reads the address from proxy.address
     if not info.proxy.address then
       info.proxy.address = address
     end
@@ -4048,8 +4047,8 @@ setmetatable(component, {
     if addr then
       local info = componentRegistry[addr]
       if info then
-        -- 确保通过 component.xxx 访问时也有 address/type 字段
-        -- OpenOS 的 91_gpu.lua 依赖 component.screen.address
+        -- Ensure address/type are present when accessed via component.xxx
+        -- OpenOS 91_gpu.lua relies on component.screen.address
         if not info.proxy.address then
           info.proxy.address = addr
         end
@@ -4062,29 +4061,29 @@ setmetatable(component, {
 })
 
 -- ============================================================
--- 外部设备组件
+-- External device components
 --
--- 核电站这类设备不是计算机, 在真实环境里通过适配器接入组件网络。
--- 服务端每秒推送一次状态快照 (ext_state), 这里的组件方法读取本地快照;
--- 写操作 (setActive) 通过 ext_command 发回服务端执行。
+-- Devices like reactors are not computers; in real OC they join the component network via adapters.
+-- The server pushes a state snapshot (ext_state) every second; these methods read it locally,
+-- writes (setActive) go back through ext_command.
 --
--- 说明: Lua 5.1 的单个 chunk 最多 200 个 local, 这里用全局表保存,
--- 避免再占用 local 名额。
+-- Lua 5.1 allows at most 200 locals per chunk, so state lives in a global table
+-- to save local slots.
 -- ============================================================
 extComponents = { devices = {} }   -- devices: address -> proxy
 
--- 只读仪表组件: MineOS IC2Reactors.app 等程序通过 reactor_chamber 读取数值
+-- Read-only instrument components: MineOS IC2Reactors.app reads these via reactor_chamber
 extComponents.makeReactorChamber = function(address)
   local dev = { address = address, type = "reactor_chamber", _state = {} }
   local function S() return dev._state end
 
   function dev.getHeat() return tonumber(S().hullHeat) or 0 end
   function dev.getMaxHeat() return tonumber(S().hullHeatCapacity) or 0 end
-  -- 温度: 环境温度 + 堆芯热量, 上限为外壳热容量 + 环境温度
+  -- Temperature: ambient + core heat, capped at casing capacity + ambient
   function dev.getTemperature() return tonumber(S().temperature) or 0 end
   function dev.getMaxTemperature() return tonumber(S().maxTemperature) or 0 end
   function dev.getHeatCapacity() return dev.getMaxTemperature() end
-  -- 设置温度 (自动夹在环境温度 ~ 上限), 返回设置后的温度
+  -- Set temperature (clamped between ambient and the cap) and return it
   function dev.setTemperature(value)
     local v = tonumber(value) or 0
     local max = dev.getMaxTemperature()
@@ -4098,14 +4097,14 @@ extComponents.makeReactorChamber = function(address)
   function dev.getReactorEUOutput() return tonumber(S().euPerTick) or 0 end
   dev.getReactorEUEnergyOutput = dev.getReactorEUOutput
   function dev.getEnergyOutput() return tonumber(S().euPerTick) or 0 end
-  -- 每秒发热量 (IC2 反应堆按秒推进热量)
+  -- Heat per second (IC2 advances heat by the second)
   function dev.getHeatOutput()
     local s = S()
     return tonumber(s.heatPerSecond) or ((tonumber(s.heatPerTick) or 0) * 20)
   end
   function dev.isActive() return S().active == true end
   function dev.getActive() return S().active == true end
-  -- 是否正在发电: 开关打开且仍有未耗尽的燃料棒
+  -- Producing power when active and at least one fuel rod still has fuel
   function dev.producesEnergy()
     local s = S()
     if s.active ~= true then return false end
@@ -4114,7 +4113,7 @@ extComponents.makeReactorChamber = function(address)
   function dev.getSize() return tonumber(S().columns) or 0, tonumber(S().rows) or 0 end
   function dev.slotCount() return (tonumber(S().columns) or 0) * (tonumber(S().rows) or 0) end
   dev.getSlotCount = dev.slotCount
-  -- 槽位为 1 基编号, 与 OpenComputers 的 reactor_chamber 一致
+  -- Slots are 1-based, as in OpenComputers' reactor_chamber
   local function slotAt(slot)
     local index = tonumber(slot)
     local slots = S().slots
@@ -4127,7 +4126,7 @@ extComponents.makeReactorChamber = function(address)
   function dev.getStackInSlot(slot) return slotAt(slot) end
   dev.getComponentInfo = dev.getStackInSlot
 
-  -- 组件耐久: 返回当前耐久, 最大耐久; 空槽返回 0, 0
+  -- Component durability: current, max; empty slot returns 0, 0
   function dev.getComponentDurability(slot)
     local item = slotAt(slot)
     if not item then return 0, 0 end
@@ -4135,7 +4134,7 @@ extComponents.makeReactorChamber = function(address)
   end
   dev.getSlotDurability = dev.getComponentDurability
 
-  -- 组件剩余耐久比例 (0 ~ 1); 空槽或没有耐久的组件返回 0
+  -- Remaining durability ratio (0-1); 0 for empty slots or components without durability
   function dev.getComponentDurabilityRatio(slot)
     local item = slotAt(slot)
     if not item then return 0 end
@@ -4165,13 +4164,13 @@ extComponents.makeReactorChamber = function(address)
     return min
   end
 
-  -- 同类组件中最低的耐久比例 (0 ~ 1); category 省略表示全部组件, 无对应组件返回 0
+  -- Lowest durability ratio in a category (0-1); omitted category means all, 0 when none
   function dev.getDurabilityRatio(category)
     local r = lowestDurability(category)
     return r or 0
   end
 
-  -- 单个组件的当前温度 (°C); 空槽返回 0
+  -- Current temperature of one component (C); 0 for an empty slot
   function dev.getComponentTemperature(slot)
     local item = slotAt(slot)
     if not item then return 0 end
@@ -4179,7 +4178,7 @@ extComponents.makeReactorChamber = function(address)
   end
   dev.getSlotTemperature = dev.getComponentTemperature
 
-  -- 单个组件的温度比例 (0 ~ 1); 空槽返回 0
+  -- Temperature ratio of one component (0-1); 0 for an empty slot
   function dev.getComponentTemperatureRatio(slot)
     local item = slotAt(slot)
     if not item then return 0 end
@@ -4214,8 +4213,8 @@ extComponents.makeReactorChamber = function(address)
   return dev
 end
 
--- 传动器组件: 侧面 0 = 反应堆堆芯, 1 = 燃料箱, 2 = 废料箱
--- 库存内容随 ext_state 每秒刷新, transferItem 通过 ext_command 交给服务端执行
+-- Actuator component: side 0 = reactor core, 1 = fuel tank, 2 = waste tank
+-- Inventory refreshes with ext_state every second; transferItem goes through ext_command
 extComponents.makeTransposer = function(address)
   local dev = { address = address, type = "transposer", _state = {} }
 
@@ -4234,7 +4233,7 @@ extComponents.makeTransposer = function(address)
     local _, size = sideSlots(sideData(side))
     return size
   end
-  -- OpenComputers 的库存尺寸方法名
+  -- OpenComputers inventory size method name
   dev.getInventorySize = dev.getSize
 
   function dev.getStackInSlot(side, slot)
@@ -4244,8 +4243,8 @@ extComponents.makeTransposer = function(address)
     return slots[tostring(index - 1)]
   end
 
-  -- 库存描述: 可调用迭代器 (与 OpenComputers 的库存对象一致),
-  -- 另提供 getAll / count / reset / getSize / getStackInSlot, 槽位从 1 开始
+  -- Inventory descriptor: callable iterator (like the OpenComputers inventory object)
+  -- plus getAll / count / reset / getSize / getStackInSlot; slots start at 1
   function dev.getAllStacks(side)
     local slots, size = sideSlots(sideData(side))
     local cursor = 0
@@ -4267,7 +4266,7 @@ extComponents.makeTransposer = function(address)
     function controller.removeItems() return 1 end
     return setmetatable(controller, {
       __call = function()
-        -- 跳过空槽, 只有到达末尾才结束迭代
+        -- skip empty slots; iteration ends only at the end
         while cursor < size do
           cursor = cursor + 1
           local stack = slots[tostring(cursor - 1)]
@@ -4278,8 +4277,8 @@ extComponents.makeTransposer = function(address)
     })
   end
 
-  -- 在侧面之间搬运一个物品; 槽位为 1 基编号, 传 0 或省略表示自动选择
-  -- 与 OpenComputers 一致返回搬运数量
+  -- Move one item between sides; slots are 1-based, 0 or nil picks automatically
+  -- Returns the moved count, as in OpenComputers
   function dev.transferItem(from, to, count, fromSlot, toSlot)
     sendToServer({
       type = "ext_command",
@@ -4293,8 +4292,8 @@ extComponents.makeTransposer = function(address)
   return dev
 end
 
--- 自定义脚本机器的组件: 属性 / 只读方法 / 动作由 machine.lua 定义,
--- 服务端在 ext_devices 的 meta 中下发属性表与方法名。
+-- Custom-script machine components: properties, read-only methods and actions come from machine.lua;
+-- the server sends property tables and method names in ext_devices meta.
 extComponents.makeMachineComponent = function(address, meta)
   meta = type(meta) == "table" and meta or {}
   local dev = { address = address, type = "machine_component", _state = {}, _meta = meta }
@@ -4337,7 +4336,7 @@ extComponents.makeMachineComponent = function(address, meta)
   function dev.getComponentType() return dev.type end
   dev.getType = dev.getComponentType
 
-  -- 每个可写属性自动生成 getXxx() / setXxx()
+  -- Each writable property gets generated getXxx() / setXxx()
   for _, prop in ipairs(props()) do
     if type(prop.key) == "string" and prop.key:match("^[%a_][%w_]*$") then
       local suffix = capitalize(prop.key)
@@ -4352,7 +4351,7 @@ extComponents.makeMachineComponent = function(address, meta)
     end
   end
 
-  -- 只读方法: 脚本每 tick 计算一次, 结果随状态快照下发
+  -- Read-only methods: computed once per tick and shipped in the state snapshot
   if type(meta.methods) == "table" then
     for _, name in ipairs(meta.methods) do
       if type(name) == "string" and name:match("^[%a_][%w_]*$") and dev[name] == nil then
@@ -4361,7 +4360,7 @@ extComponents.makeMachineComponent = function(address, meta)
     end
   end
 
-  -- 动作: 异步发回脚本执行, 结果在下一帧状态里可见
+  -- Actions: sent back to the script asynchronously; results appear in the next snapshot
   if type(meta.actions) == "table" then
     for _, name in ipairs(meta.actions) do
       if type(name) == "string" and name:match("^[%a_][%w_]*$") and dev[name] == nil then
@@ -4406,7 +4405,7 @@ extComponents.makeRedstone = function(address, meta)
     return math.floor(r * 15 + 0.5)
   end
 
-  -- 同类组件中最低的耐久比例; 无对应组件返回 nil
+  -- Lowest durability ratio in a category; nil when no component matches
   local function lowestDurability(category)
     local s = S()
     local slots = s.slots
@@ -4426,14 +4425,14 @@ extComponents.makeRedstone = function(address, meta)
     return min
   end
 
-  -- 耐久比例换算成 0~15 信号; 没有对应组件时返回 0
+  -- Durability ratio mapped to a 0-15 signal; 0 when no component matches
   local function durabilitySignal(category)
     local r = lowestDurability(category)
     if r == nil then return 0 end
     return clamp(r * 15 + 0.5)
   end
 
-  -- 同类组件中最高的温度比例; 无对应组件返回 nil
+  -- Highest temperature ratio in a category; nil when no component matches
   local function highestTemperatureRatio(category)
     local s = S()
     local slots = s.slots
@@ -4455,23 +4454,23 @@ extComponents.makeRedstone = function(address, meta)
     return r
   end
 
-  -- 温度比例换算成 0~15 信号; 没有对应组件时返回 0
+  -- Temperature ratio mapped to a 0-15 signal; 0 when no component matches
   local function temperatureSignal(category)
     local r = highestTemperatureRatio(category)
     if r == nil then return 0 end
     return clamp(r * 15 + 0.5)
   end
 
-  -- 输入通道 (反应堆 -> 计算机)
-  --   0: 堆芯热量百分比   1: EU/t (每 100 EU/t 一档, 上限 15)
-  --   2: 燃料棒数量       3: 状态 (off 0 / idle 3 / stable 8 / warning 12 / critical、overheat 15)
-  --   4: 剩余吸热百分比   5: 是否运行 (0 / 15)
-  --   6: 燃料棒最低耐久   7: 冷却单元最低耐久
-  --   8: 冷凝模块最低耐久 9: 全部组件最低耐久 (均为百分比 × 15)
-  --  10: 燃料棒最高温度  11: 冷却单元最高温度
-  --  12: 冷凝模块最高温度 13: 全部组件最高温度 (均为温度比例 × 15)
-  -- 自定义脚本机器的红石端口: 状态里带 machine = true,
-  -- inputs / outputs 是按属性顺序排列的 0~15 数组。
+  -- Input channels (reactor -> computer)
+  --   0: core heat %   1: EU/t (one step per 100 EU/t, max 15)
+  --   2: fuel rod count   3: state (off 0 / idle 3 / stable 8 / warning 12 / critical or overheat 15)
+  --   4: remaining cooling %   5: running (0 / 15)
+  --   6: min fuel rod durability   7: min coolant durability
+  --   8: min condenser durability   9: min over all components (percent x 15)
+  --  10: max fuel rod temperature  11: max coolant temperature
+  --  12: max condenser temperature  13: max over all components (ratio x 15)
+  -- Custom-script machine redstone port: its state has machine = true,
+  -- and inputs / outputs are 0-15 arrays in property order.
   local function isMachine() return S().machine == true or dev._meta.machine == true end
 
   local function machineSideCount()
@@ -4489,7 +4488,7 @@ extComponents.makeRedstone = function(address, meta)
   end
 
   function dev.getInput(side)
-    -- 与 OpenComputers 一致: 不传 side 时返回全部通道的读数表
+    -- As in OpenComputers: no side returns readings for every channel
     if side == nil then
       local all = {}
       for i = 0, 13 do all[i] = dev.getInput(i) end
@@ -4532,7 +4531,7 @@ extComponents.makeRedstone = function(address, meta)
   dev.getComparatorInput = dev.getInput
 
   function dev.getOutput(side)
-    -- 与 OpenComputers 一致: 不传 side 时返回全部通道的输出表
+    -- As in OpenComputers: no side returns outputs for every channel
     if side == nil then
       local all = {}
       for i = 0, 13 do all[i] = dev.getOutput(i) end
@@ -4547,18 +4546,18 @@ extComponents.makeRedstone = function(address, meta)
       end
       return 0
     end
-    -- 反应堆端口: 输出值跟随实际开关状态, 便于 IC2Reactors 初始化按钮
+    -- Reactor port: outputs mirror the actual on/off state so IC2Reactors can init buttons
     if S().active ~= nil then
       return S().active == true and 15 or 0
     end
     return dev._out[side] or 0
   end
 
-  -- 输出通道 (计算机 -> 机器): 任一通道都可控制开关, > 0 为运行
+  -- Output channels (computer -> machine): any channel sets the switch; > 0 means active
   function dev.setOutput(side, value)
     side = tonumber(side) or 0
     value = clamp(value)
-    -- 与 OpenComputers 一致: 返回写入前的值
+    -- As in OpenComputers: return the previous value
     local previous = dev.getOutput(side)
     dev._out[side] = value
     sendToServer({ type = "ext_command", address = address, method = "setOutput", args = { side, value } })
@@ -4575,7 +4574,7 @@ extComponents.makeRedstone = function(address, meta)
     return dev._bout[tonumber(side) or 0] or 0
   end
 
-  -- bit0 表示开关, 任一通道均可; 返回写入前的值
+  -- bit0 is the switch on any channel; return the previous value
   function dev.setBundledOutput(side, mask)
     side = tonumber(side) or 0
     mask = tonumber(mask) or 0
@@ -4587,7 +4586,7 @@ extComponents.makeRedstone = function(address, meta)
     return previous
   end
 
-  -- 0 号通道的 bit0..bit3: 运行 / 稳定 / 注意 / 危险
+  -- channel 0 bit0..bit3: running / stable / warning / danger
   function dev.getBundledInput(side)
     side = tonumber(side) or 0
     if isMachine() then return 0 end
@@ -4637,7 +4636,7 @@ extComponents.apply = function(list)
       end
     end
   end
-  -- 服务端已不存在的设备要从组件表里移除
+  -- Drop devices the server no longer knows about
   for address, proxy in pairs(extComponents.devices) do
     if not seen[address] then
       extComponents.devices[address] = nil
@@ -4658,7 +4657,7 @@ extComponents.update = function(list)
   end
 end
 
--- 启动时载入 devices.json: 程序一开始运行就能访问外部设备
+-- Load devices.json at startup so external devices exist as soon as programs run
 do
   local f = _io_open(vmDir .. "/devices.json", "r")
   if f then
@@ -4673,18 +4672,18 @@ do
 end
 
 -- ============================================================
--- unicode API (UTF-8 支持)
+-- unicode API (UTF-8)
 -- ============================================================
 local unicode = {}
 
--- 计算 UTF-8 字符串的字符数
+-- Count characters in a UTF-8 string
 unicode.len = function(s)
   local n = 0
   for _ in s:gmatch(".[\128-\191]*") do n = n + 1 end
   return n
 end
 
--- 计算显示宽度 (窄字符=1, 宽字符=2)
+-- Display width (narrow = 1, wide = 2)
 unicode.wlen = function(s)
   local w = 0
   for ch in s:gmatch(".[\128-\191]*") do
@@ -4693,7 +4692,7 @@ unicode.wlen = function(s)
   return w
 end
 
--- 按字符索引截取（UTF-8 安全）
+-- Substring by character index (UTF-8 safe)
 unicode.sub = function(s, i, j)
   local chars = {}
   for ch in s:gmatch(".[\128-\191]*") do table.insert(chars, ch) end
@@ -4706,14 +4705,14 @@ unicode.sub = function(s, i, j)
 end
 
 unicode.upper = function(s)
-  -- 简单实现：只处理 ASCII
+  -- Simple implementation: ASCII only
   return (s:gsub("%a", string.upper))
 end
 unicode.lower = function(s)
   return (s:gsub("%a", string.lower))
 end
 
--- 从 Unicode 码点生成 UTF-8 字符
+-- UTF-8 character from a Unicode code point
 unicode.char = function(...)
   local result = {}
   for _, cp in ipairs({...}) do
@@ -4730,7 +4729,7 @@ unicode.char = function(...)
   return table.concat(result)
 end
 
--- 从 UTF-8 字符串获取 Unicode 码点
+-- Unicode code point from a UTF-8 string
 unicode.byte = function(s, i, j)
   i = i or 1
   j = j or i
@@ -4765,12 +4764,12 @@ unicode.gmatch = string.gmatch
 unicode.gsub = string.gsub
 unicode.match = string.match
 
--- 判断字符是否为宽字符（显示宽度=2）
--- OC 标准: 只有 CJK 统一表意文字、全角字符等才是宽字符
--- 拉丁扩展、块字符(█▀▄)等都是窄字符(宽度=1)
+-- Is the character wide (display width 2)?
+-- OC: only CJK ideographs, fullwidth characters etc. are wide
+-- Latin extensions and block characters (█▀▄) are narrow (width 1)
 unicode.isWide = function(ch)
   if not ch or ch == "" then return false end
-  -- 解析 UTF-8 码点
+  -- Decode the UTF-8 code point
   local b = ch:byte(1)
   local cp
   if b < 0x80 then
@@ -4782,15 +4781,15 @@ unicode.isWide = function(ch)
   else
     cp = ((b % 0x08) * 0x40000) + ((ch:byte(2) % 0x40) * 0x1000) + ((ch:byte(3) % 0x40) * 0x40) + (ch:byte(4) % 0x40)
   end
-  -- 宽字符范围: CJK 统一表意文字、全角形式、韩文等
+  -- Wide ranges: CJK ideographs, fullwidth forms, Hangul, ...
   -- 0x1100-0x115F: Hangul Jamo
-  -- 0x2E80-0xA4CF: CJK 部首、康熙字典、CJK符号、日文、韩文
+  -- 0x2E80-0xA4CF: CJK radicals, Kangxi, CJK symbols, Japanese, Hangul
   -- 0xAC00-0xD7A3: Hangul Syllables
-  -- 0xF900-0xFAFF: CJK 兼容表意文字
-  -- 0xFE30-0xFE4F: CJK 兼容形式
-  -- 0xFF00-0xFF60: 全角ASCII
-  -- 0xFFE0-0xFFE6: 全角符号
-  -- 0x1F300-0x1FAFF: Emoji 和符号
+  -- 0xF900-0xFAFF: CJK compatibility ideographs
+  -- 0xFE30-0xFE4F: CJK compatibility forms
+  -- 0xFF00-0xFF60: fullwidth ASCII
+  -- 0xFFE0-0xFFE6: fullwidth signs
+  -- 0x1F300-0x1FAFF: emoji and symbols
   if (cp >= 0x1100 and cp <= 0x115F) or
      (cp >= 0x2E80 and cp <= 0xA4CF) or
      (cp >= 0xAC00 and cp <= 0xD7A3) or
@@ -4804,7 +4803,7 @@ unicode.isWide = function(ch)
   return false
 end
 
--- 按显示宽度截断字符串
+-- Truncate a string to a display width
 unicode.wtrunc = function(s, width)
   if width <= 0 then return "" end
   local w = 0
@@ -4818,13 +4817,13 @@ unicode.wtrunc = function(s, width)
   return table.concat(result)
 end
 
--- 字符迭代器
+-- Character iterator
 unicode.chars = function(s)
   return s:gmatch(".[\128-\191]*")
 end
 
 -- ============================================================
--- keyboard 全局库
+-- Global keyboard library
 -- ============================================================
 keyboard.keys = {
   escape = 1, f1 = 2, f2 = 3, f3 = 4, f4 = 5, f5 = 6, f6 = 7, f7 = 8, f8 = 9,
@@ -4877,7 +4876,7 @@ serialization.unserialize = function(s)
 end
 
 -- ============================================================
--- 注入全局环境
+-- Inject into the global environment
 -- ============================================================
 _G.component = component
 _G.computer = computer
@@ -4901,18 +4900,18 @@ if not _G.checkArg then
   end
 end
 
--- 保存原始 os 函数（避免递归调用）
+-- Keep original os functions (avoid recursion)
 local _os_time = os.time
 local _os_date = os.date
--- _os_clock 已在文件开头定义
+-- _os_clock is defined at the top of the file
 local _os_execute = os.execute
 
 if not _G.os then _G.os = {} end
 if not _G.os.sleep then _G.os.sleep = function(t) computer.pullSignal(t or 0) end end
 _G.os.time = function() return _os_time() end
--- Windows 的 strftime 不支持 POSIX 扩展的转换符 (%T/%D/%R/%r/%n/%t/%s/%e),
--- 而真机 OC 跑在 LuaJ 上支持它们 (Fuchas 的任务栏就是 os.date("%T"))。
--- 这里先把这些转换符展开成宿主支持的等价写法, 再交给原生 os.date。
+-- Windows strftime lacks POSIX extension specifiers (%T/%D/%R/%r/%n/%t/%s/%e),
+-- while real OC on LuaJ supports them (Fuchas' task bar uses os.date("%T")).
+-- Expand them into host-supported equivalents before calling the native os.date.
 local posixDateAliases = {
   T = "%H:%M:%S",
   D = "%m/%d/%y",
@@ -4922,7 +4921,7 @@ local posixDateAliases = {
   t = "\t",
   e = "%d",
 }
--- 逐字符展开转换符; "%s" 没有等价 strftime 写法, 直接内联时间戳
+-- Expand each specifier; "%s" has no strftime equivalent, so inline the timestamp
 local function normalizeDateFormat(fmt, now)
   local out, i, len = {}, 1, #fmt
   while i <= len do
@@ -4958,13 +4957,13 @@ _G.os.execute = function(cmd)
   return _os_execute(cmd)
 end
 _G.os.exit = function(code) _os_exit(code or 0) end
--- 真机 OpenComputers 的沙箱 os 表不暴露 getenv，这里保持一致（Fuchas 等系统依赖此判断运行环境）
+-- Real OC sandboxes do not expose os.getenv; stay consistent (Fuchas checks this)
 _G.os.getenv = nil
 _G.os.remove = function(path) return vfsRemove(path) end
 _G.os.rename = function(from, to) return vfsRename(from, to) end
 _G.os.tmpname = function() return "/tmp/tmp" .. math.random(100000, 999999) end
 
--- event 库
+-- event library
 local event = {}
 local eventHandlers = {}
 event.addHandler = function(cb, name) table.insert(eventHandlers, { callback = cb, name = name }); return #eventHandlers end
@@ -4989,11 +4988,11 @@ event.ignore = function(name, cb)
 end
 _G.event = event
 
--- loadfile / dofile 使用虚拟路径
+-- loadfile / dofile use virtual paths
 function _G.loadfile(path, ...)
   local content = vfsRead(path)
   if not content then return nil, "file not found: " .. path end
-  -- Lua 5.1 用 loadstring, 5.2+ 用 load
+  -- loadstring on 5.1, load on 5.2+
   if loadstring then
     return loadstring(content, "=" .. path)
   else
@@ -5007,10 +5006,10 @@ function _G.dofile(path, ...)
 end
 
 -- ============================================================
--- require: 从虚拟文件系统加载模块
+-- require: load modules from the virtual filesystem
 -- ============================================================
--- 保留原始 package 的 path/config/cpath/loaders 等字段
--- (OpenOS 的 /lib/package.lua 需要这些字段)
+-- Keep the original package path/config/cpath/loaders fields
+-- (OpenOS /lib/package.lua needs them)
 local _orig_package = package
 _G.package = {
   loaded = {},
@@ -5025,7 +5024,7 @@ _G.package = {
   seeall = _orig_package.seeall or function(t) end,
 }
 
--- 预加载核心模块
+-- Preload core modules
 _G.package.loaded.component = component
 _G.package.loaded.computer = computer
 _G.package.loaded.unicode = unicode
@@ -5054,11 +5053,11 @@ function _G.require(name)
   if _G.package.loaded[name] then return _G.package.loaded[name] end
   if _G.package.loading[name] then error("loop loading " .. name) end
   _G.package.loading[name] = true
-  -- 尝试 /lib/name.lua
+  -- try /lib/name.lua
   local path = "/lib/" .. name .. ".lua"
   local content = vfsRead(path)
   if not content then
-    -- 尝试 /lib/name/init.lua
+    -- try /lib/name/init.lua
     path = "/lib/" .. name .. "/init.lua"
     content = vfsRead(path)
   end
@@ -5080,7 +5079,7 @@ function _G.require(name)
 end
 
 -- ============================================================
--- 屏幕错误显示辅助函数 (必须在磁盘加载之前定义, 因为加载失败时需要调用)
+-- Screen error display helper (must exist before disk loading, which may fail)
 -- ============================================================
 local function _showScreenMessage(msg)
   pcall(function()
@@ -5102,10 +5101,10 @@ end
 showScreenMessage = _showScreenMessage
 
 -- ============================================================
--- 加载磁盘
+-- Load disks
 -- ============================================================
 if projectPath then
-  -- 项目模式: 直接使用项目文件夹, 不加载磁盘镜像
+  -- Project mode: use the project folder directly, no disk image
   _stderr:write("[emulator] using project folder: " .. projectPath .. "\n")
 elseif config.diskFile then
   dlog("loading disk:", config.diskFile)
@@ -5124,7 +5123,7 @@ else
   _stderr:write("[emulator] disk1: none (empty)\n")
 end
 
--- 检测操作系统类型 (仅用于日志显示)
+-- Detect the OS type (logging only)
 dlog("/init.lua exists:", vfsExists("/init.lua"))
 dlog("/OS.lua exists:", vfsExists("/OS.lua"))
 if vfsExists("/init.lua") then
@@ -5134,14 +5133,14 @@ elseif vfsExists("/OS.lua") then
 end
 
 -- ============================================================
--- 启动 - 运行 EEPROM (BIOS)
+-- Boot: run the EEPROM (BIOS)
 -- ============================================================
--- 启动顺序: 按配置的 bootOrder 查找第一个可引导的设备
+-- Boot order: pick the first bootable device from bootOrder
 -- ============================================================
 local function isBootable(fsProxy)
-  -- 只要文件系统存在且可访问,就认为可能可引导
-  -- 具体能否引导由 EEPROM/BIOS 决定,模拟器不做硬编码的文件名判断
-  -- 这样可以兼容任何操作系统 (OpenOS, MineOS 等)
+  -- Any accessible filesystem counts as potentially bootable
+  -- The EEPROM/BIOS decides; the emulator does not hardcode file names
+  -- so any OS works (OpenOS, MineOS, ...)
   if not fsProxy then return false end
   if fsProxy.exists and fsProxy.open and fsProxy.list then
     return true
@@ -5150,24 +5149,24 @@ local function isBootable(fsProxy)
 end
 
 local function resolveBootAddress()
-  -- 读取启动顺序配置
+  -- Read the boot order
   local order = config.bootOrder
   if not order or type(order) ~= "table" or #order == 0 then
     order = { "disk1", "disk2", "floppy" }
   end
-  -- 设备地址映射
+  -- Device address map
   local deviceMap = {
     disk1 = fsAddr,
     disk2 = fs2Addr,
     floppy = floppyAddr,
   }
-  -- 设备 filesystem proxy 映射
+  -- Device filesystem proxy map
   local fsMap = {
     disk1 = filesystem,
     disk2 = fs2,
     floppy = floppy,
   }
-  -- 按顺序查找第一个可引导的设备
+  -- Find the first bootable device
   for _, dev in ipairs(order) do
     local addr = deviceMap[dev]
     local proxy = fsMap[dev]
@@ -5176,7 +5175,7 @@ local function resolveBootAddress()
       return addr
     end
   end
-  -- 都不可引导, 显示错误并退出
+  -- Nothing bootable: show an error and exit
   dlog("no bootable device found")
   _stderr:write("[emulator] no bootable device found\n")
   showScreenMessage("No bootable device found\nNo filesystem available (check disk/floppy)")
@@ -5184,19 +5183,19 @@ local function resolveBootAddress()
 end
 
 gpu.bind(screenAddr)
--- 根据启动顺序设置启动地址，BIOS 会从该磁盘加载引导脚本
+-- Set the boot address so the BIOS loads its boot script from that disk
 local bootAddr = resolveBootAddress()
 eepromData = bootAddr
 computer._bootAddr = bootAddr
 computer._runlevel = 1
 
--- 执行 EEPROM 代码 (内置 OC BIOS 或自定义 EEPROM)
+-- Run the EEPROM code (built-in OC BIOS or custom)
 local bootCode = eepromCode
 local bootPath = "eeprom"
 dlog("booting EEPROM, size:", #bootCode)
 _stderr:write("[emulator] booting EEPROM (" .. eepromLabel .. ", " .. #bootCode .. " bytes)\n")
 _stderr:write("[emulator] boot address: " .. bootAddr:sub(1, 8) .. "\n")
--- 兼容 Lua 5.1 (loadstring) 和 5.2+ (load)
+-- support Lua 5.1 (loadstring) and 5.2+ (load)
 local loadfunc = loadstring or load
 local chunk, err = loadfunc(bootCode, "=" .. bootPath)
 if not chunk then
@@ -5206,7 +5205,7 @@ if not chunk then
   _os_exit(1)
 end
 
--- Lua 5.1 兼容: setfenv 设置环境
+-- Lua 5.1 compatibility: setfenv
 if setfenv then setfenv(chunk, _G) end
 
 local ok, err = xpcall(chunk, function(e) return debug.traceback(e) end)
@@ -5220,7 +5219,7 @@ end
 
 diskPersist.saveNow()
 
--- 如果使用了临时 VM 磁盘，尝试将修改写回 VM 文件
+-- With a temporary VM disk, try to write changes back to the VM files
 if vmTempDisk and arg[1] and arg[1]:match("%.ocvm$") then
   local f = _io_open(vmTempDisk, "rb")
   if f then

@@ -1,19 +1,19 @@
 -- ============================================================
--- machine-host.lua - 自定义脚本机器的宿主进程
+-- machine-host.lua - host process for custom-script machines
 --
--- 用法: <lua> machine-host.lua <projectDir>
--- 服务端通过 stdin/stdout 按行交换 JSON:
---   服务端 -> 宿主: init / tick / set / action / quit
---   宿主 -> 服务端: ready / state / error
+-- Usage: <lua> machine-host.lua <projectDir>
+-- Server and host exchange one JSON object per line over stdin/stdout:
+--   server -> host: init / tick / set / action / quit
+--   host -> server: ready / state / error
 --
--- 脚本 machine.lua 返回一个定义表 (见 MODS.md):
+-- machine.lua returns a definition table (see MODS.md):
 --   return {
 --     redstone = true,
 --     components = {
 --       { type = "...", label = "...",
 --         state = { energy = 0 },
 --         readonly = { "maxEnergy" },
---         props = { energy = { label = "能量", unit = "EU", min = 0, max = 10000 } },
+--         props = { energy = { label = "Energy", unit = "EU", min = 0, max = 10000 } },
 --         tick = function(self, dt) ... end,
 --         methods = { isFull = function(self) ... end },
 --         actions = { reset = function(self) ... end } }
@@ -41,7 +41,7 @@ local function reportError(message)
   send({ type = "error", message = message })
 end
 
--- 用户脚本可用的安全环境: 不提供 io / os.execute / loadfile
+-- Sandbox for user scripts: no io / os.execute / loadfile
 local scriptEnv = {
   math = math,
   string = string,
@@ -68,7 +68,7 @@ local machineRedstone = true
 local function isScalar(value)
   local t = type(value)
   if t == "number" then
-    -- NaN / inf 无法编码成 JSON, 直接跳过
+    -- NaN / inf cannot be encoded as JSON; skip them
     return value == value and value ~= math.huge and value ~= -math.huge
   end
   return t == "boolean" or t == "string"

@@ -1,7 +1,7 @@
 -- ============================================================
--- Lua 解释器校验模块 (含 hash 缓存)
--- 用法: lua lua_check.lua <luaExe路径>
--- 输出: 单行 JSON 到 stdout
+-- Lua interpreter check module (with hash cache)
+-- Usage: lua lua_check.lua <path-to-lua-executable>
+-- Output: a single JSON line on stdout
 -- ============================================================
 
 local json = require("json")
@@ -22,7 +22,7 @@ local function adler32(data)
   return b * 65536 + a
 end
 
--- 计算 luaExe 的 hash (size + 内容前 4KB 的 adler32)
+-- Hash of the Lua executable: size + Adler-32 of the first 4 KB
 local function computeHash(path)
   local f = io.open(path, "rb")
   if not f then return nil, "cannot open" end
@@ -33,7 +33,7 @@ local function computeHash(path)
   return string.format("%d:%d", size, adler32(head))
 end
 
--- 通过 io.popen 执行 Lua 代码片段
+-- Run a Lua snippet through io.popen
 local function runLuaSnippet(luaPath, code)
   local tmpFile = os.tmpname and os.tmpname() or "/tmp/lua_check_snippet"
   local f = io.open(tmpFile, "w")
@@ -58,14 +58,14 @@ local result = {
   errors = {},
 }
 
--- 1. 检查文件存在
+-- 1. Check that the file exists
 if not hash then
   result.errors[1] = "file not found or unreadable"
   io.stdout:write(json.encode(result) .. "\n")
   os.exit(1)
 end
 
--- 2. 获取版本
+-- 2. Get the version
 local versionOutput = runLuaSnippet(target, [[
   print("VERSION:" .. _VERSION)
   print("HAS_BIT32:" .. tostring(bit32 ~= nil))
@@ -75,7 +75,7 @@ local versionOutput = runLuaSnippet(target, [[
   print("HAS_STRING_FORMAT:" .. tostring(string.format ~= nil))
   print("HAS_UTF8:" .. tostring(utf8 ~= nil))
   print("HAS_TABLE_PACK:" .. tostring(table.pack ~= nil))
-  -- Lua 5.3+ 才有 // 整除运算符, 5.1/5.2 没有 (但 emulator 自带 polyfill)
+  -- Integer division (//) exists from Lua 5.3 on; the emulator ships a polyfill.
   local fn = load("return 1 // 2")
   print("HAS_BITOP:" .. tostring(fn ~= nil))
   print("TEST:" .. string.format("%d", 42))
@@ -87,13 +87,13 @@ if not versionOutput then
   os.exit(1)
 end
 
--- 解析输出
+-- Parse the output
 for line in versionOutput:gmatch("[^\r\n]+") do
   local key, val = line:match("^([^:]+):(.*)$")
   if key then
     if key == "VERSION" then
       result.version = val
-      -- 接受 Lua 5.1+ (emulator 自带 bit32 / table.pack polyfill)
+      -- Accept Lua 5.1+ (the emulator ships bit32 / table.pack polyfills)
       local major, minor = val:match("Lua (5)%.(%d)")
       if major and minor then
         local mi = tonumber(minor)
@@ -108,7 +108,7 @@ for line in versionOutput:gmatch("[^\r\n]+") do
   end
 end
 
--- 3. 检查必需库
+-- 3. Check required libraries
 local required = {"IO_POPEN", "OS_EXECUTE", "MATH_RANDOM", "STRING_FORMAT"}
 for _, req in ipairs(required) do
   if result.libs[req] == false then

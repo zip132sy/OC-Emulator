@@ -1,10 +1,10 @@
 // ============================================================
-// modView.js - Mods 设备视图
+// modView.js - Mods device view
 //
-// 标签页:
-//   1. 3D 场景  - 坐标轴、网格、设备位置、目标点、朝向、速度、标记点
-//   2. 物品/状态 - 物品栏、工具、储罐、能量、位置
-//   3. 控制台/EFI - 内置 EFI 启动日志与远程命令反馈
+// Tabs:
+//   1. 3D scene   - axes, grid, device position, target, facing, velocity, markers
+//   2. Items/state - inventory, tools, tanks, energy, position
+//   3. Console/EFI - built-in EFI boot log and remote command output
 // ============================================================
 
 const ModView = (() => {
@@ -58,7 +58,7 @@ const ModView = (() => {
     return T(key, fallback);
   }
 
-  // ---------- 创建视图 ----------
+  // ---------- View creation ----------
   function render(pane, modName) {
     const info = typeInfo('');
     pane.innerHTML = `
@@ -209,7 +209,7 @@ const ModView = (() => {
     bindFullscreen(view);
     setupCanvas(view);
 
-    // WebSocket 断开时用低频轮询兜底
+    // Low-frequency polling covers for a dropped WebSocket
     view.timer = setInterval(() => {
       const ws = App.state && App.state.ws;
       if (!ws || ws.readyState !== 1) reload(modName);
@@ -219,7 +219,7 @@ const ModView = (() => {
     return view;
   }
 
-  // ---------- 工具栏 ----------
+  // ---------- Toolbar ----------
   function bindToolbar(view) {
     $$('[data-act]', view.pane).forEach(btn => {
       btn.addEventListener('click', async () => {
@@ -237,13 +237,13 @@ const ModView = (() => {
     });
   }
 
-  // ---------- 双击复制无线地址 ----------
+  // ---------- Double-click to copy the wireless address ----------
   async function copyText(text) {
     if (navigator.clipboard && window.isSecureContext) {
       try {
         await navigator.clipboard.writeText(text);
         return true;
-      } catch { /* 回退到 execCommand */ }
+      } catch { /* fall back to execCommand */ }
     }
     try {
       const ta = document.createElement('textarea');
@@ -292,9 +292,9 @@ const ModView = (() => {
     });
   }
 
-  // ---------- 双击全屏 ----------
-  // 机器类设备 (核电站) 始终允许; 计算机类设备由程序通过
-  // mods.setDoubleClickFullscreen(false) 关闭。
+  // ---------- Double-click fullscreen ----------
+  // Machine-like devices (reactors) always allow it; computers can opt out from the program via
+  // mods.setDoubleClickFullscreen(false).
   function isFullscreenAllowed(view) {
     if (view.meta && view.meta.computer === false) return true;
     return !(view.state && view.state.doubleClickFullscreen === false);
@@ -323,7 +323,7 @@ const ModView = (() => {
     if (window.App && App.setStatus) {
       App.setStatus(view.fullscreen ? T('mods.fullscreen.enter') : T('mods.fullscreen.exit'));
     }
-    // 画布尺寸会随布局变化
+    // Canvas size changes with the layout
     resizeCanvas(view);
     scheduleDraw(view);
   }
@@ -333,14 +333,14 @@ const ModView = (() => {
     if (!view.viewRoot) return;
     view.viewRoot.addEventListener('dblclick', (e) => {
       const target = e.target;
-      // 交互控件与地址标签保留自己的双击行为
+      // Interactive controls and the address label keep their own double-click behavior
       if (target.closest('button, input, textarea, select, a, .mod-addr')) return;
       if (!isFullscreenAllowed(view)) return;
       toggleFullscreen(view);
     });
   }
 
-  // ---------- 标签页 ----------
+  // ---------- Tabs ----------
   function bindTabs(view) {
     $$('.mod-tab', view.pane).forEach(btn => {
       btn.addEventListener('click', () => {
@@ -355,7 +355,7 @@ const ModView = (() => {
     });
   }
 
-  // ---------- 场景控件 ----------
+  // ---------- Scene controls ----------
   function bindScene(view) {
     $$('[data-cmd]', view.pane).forEach(btn => {
       btn.addEventListener('click', () => {
@@ -421,7 +421,7 @@ const ModView = (() => {
     }
   }
 
-  // ---------- 画布 ----------
+  // ---------- Canvas ----------
   function setupCanvas(view) {
     const c = view.canvas;
     c.addEventListener('pointerdown', (e) => {
@@ -560,14 +560,14 @@ const ModView = (() => {
 
     ctx.clearRect(0, 0, w, h);
 
-    // 背景
+    // Background
     const grad = ctx.createRadialGradient(w / 2, h * 0.45, 20, w / 2, h * 0.45, Math.max(w, h) * 0.7);
     grad.addColorStop(0, '#111b26');
     grad.addColorStop(1, '#070a0e');
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, w, h);
 
-    // 网格 (XZ 平面)
+    // Grid (XZ plane)
     const R = 8;
     for (let i = -R; i <= R; i++) {
       const color = i === 0 ? 'rgba(120, 150, 180, 0.35)' : 'rgba(70, 95, 120, 0.16)';
@@ -575,7 +575,7 @@ const ModView = (() => {
       line3d(ctx, view, [-R, 0, i], [R, 0, i], color, 1);
     }
 
-    // 坐标轴
+    // Axes
     line3d(ctx, view, [-R, 0, 0], [R, 0, 0], 'rgba(255, 107, 107, 0.9)', 2);
     line3d(ctx, view, [0, -R * 0.35, 0], [0, R * 0.75, 0], 'rgba(104, 211, 145, 0.9)', 2);
     line3d(ctx, view, [0, 0, -R], [0, 0, R], 'rgba(99, 179, 237, 0.9)', 2);
@@ -587,7 +587,7 @@ const ModView = (() => {
     const axisEndZ = project(view, 0, 0, R);
     drawLabel(ctx, 'Z', axisEndZ.x + 6, axisEndZ.y, '#8cc8f5');
 
-    // 原点
+    // Origin
     const o = project(view, 0, 0, 0);
     ctx.strokeStyle = 'rgba(220, 230, 240, 0.7)';
     ctx.lineWidth = 1;
@@ -603,7 +603,7 @@ const ModView = (() => {
     const isDrone = type === 'drone';
     const deviceColor = isDrone ? '#56d4e8' : '#ffb454';
 
-    // 自定义标记点
+    // Custom markers
     for (const marker of (view.markers || [])) {
       const x = Number(marker.x) || 0;
       const y = Number(marker.y) || 0;
@@ -636,7 +636,7 @@ const ModView = (() => {
       return;
     }
 
-    // 位置 -> 目标 连线
+    // Position -> target line
     if (target && (Math.abs(target.x - pos.x) > 0.01 || Math.abs(target.y - pos.y) > 0.01 || Math.abs(target.z - pos.z) > 0.01)) {
       line3d(ctx, view, [pos.x, pos.y, pos.z], [target.x, target.y, target.z], 'rgba(200, 220, 240, 0.55)', 1, true);
       const tp = project(view, target.x, target.y, target.z);
@@ -650,7 +650,7 @@ const ModView = (() => {
       drawLabel(ctx, `${T('mods.scene.target-label', '目标')} (${fmt(target.x, 1)}, ${fmt(target.y, 1)}, ${fmt(target.z, 1)})`, tp.x + 10, tp.y - 8, '#cfe2f5');
     }
 
-    // 设备位置
+    // Device position
     const p = project(view, pos.x, pos.y, pos.z);
     ctx.save();
     ctx.shadowColor = deviceColor;
@@ -669,7 +669,7 @@ const ModView = (() => {
     ctx.restore();
     drawLabel(ctx, `${isDrone ? '🛸' : '🤖'} ${view.name} (${fmt(pos.x, 1)}, ${fmt(pos.y, 1)}, ${fmt(pos.z, 1)})`, p.x + 12, p.y - 10, deviceColor);
 
-    // 朝向箭头
+    // Facing arrow
     const facing = st.facing || 1;
     const dirs = { 1: [0, 0, 1], 2: [-1, 0, 0], 3: [0, 0, -1], 4: [1, 0, 0] };
     const dir = dirs[facing] || dirs[1];
@@ -691,7 +691,7 @@ const ModView = (() => {
     ctx.fill();
     ctx.restore();
 
-    // 无人机速度矢量
+    // Drone velocity vector
     if (isDrone && st.velocity) {
       const vx = Number(st.velocity.x) || 0;
       const vy = Number(st.velocity.y) || 0;
@@ -711,11 +711,11 @@ const ModView = (() => {
       }
     }
 
-    // 原点标签
+    // Origin label
     drawLabel(ctx, 'O', o.x + 7, o.y - 6, '#b8c7d9');
   }
 
-  // ---------- 状态 / HUD ----------
+  // ---------- State / HUD ----------
   function updateState(modName, state, extra = {}) {
     const view = views.get(modName);
     if (!view) return;
@@ -732,7 +732,7 @@ const ModView = (() => {
     scheduleDraw(view);
   }
 
-  // 核电站 / 自定义机器显示专用面板
+  // Reactors and custom machines get dedicated panels
   function applyTypeLayout(view) {
     const type = (view.meta && view.meta.type) || 'robot';
     const isReactor = type === 'reactor';
@@ -749,7 +749,7 @@ const ModView = (() => {
     reactorTab.style.display = isReactor ? '' : 'none';
     if (machineTab) machineTab.style.display = isMachine ? '' : 'none';
     if (itemsTab) itemsTab.style.display = isMachine ? 'none' : '';
-    // 机器类设备没有程序, 控制台标签页也没有意义
+    // Machine-like devices run no program, so the console tab is meaningless
     if (consoleTab) consoleTab.style.display = machineLike ? 'none' : '';
 
     if (isReactor && !view.reactorTabApplied) {
@@ -773,7 +773,7 @@ const ModView = (() => {
       return;
     }
 
-    // 机器类设备的数值每秒都在变, 打开面板期间持续刷新
+    // Machine values change every second, so keep polling while the panel is open
     ensureReactorPolling(view, true);
 
     if (isMachine) {
@@ -786,7 +786,7 @@ const ModView = (() => {
     const infoRoot = $('[data-role="reactor-info"]', view.pane);
     if (!data || !infoRoot) return;
 
-    // 布局或运行块结构变化时重建面板; 仅数值变化时原地更新
+    // Rebuild only when the layout or runtime block shape changes; otherwise update in place
     const cfg = data.config || {};
     const runtime = data.runtime || null;
     const layoutSig = JSON.stringify([cfg.columns, cfg.active, cfg.grid, !!runtime, data.connectedVm || null]);
@@ -810,7 +810,7 @@ const ModView = (() => {
       Math.round(runtime.remainingCapacity || 0), Math.round(runtime.generatedEu || 0), runtime.status].join('|');
   }
 
-  // 自定义机器: 通用属性面板 + 脚本编辑
+  // Custom machines: generic property panel + script editor
   function renderMachine(view) {
     if (!window.MachineView) return;
     const data = view.meta && view.meta.machine;
@@ -878,7 +878,7 @@ const ModView = (() => {
     });
   }
 
-  // 启动 / 停止 / 复位堆芯
+  // Start / stop / reset the core
   function bindReactorActions(infoRoot, view) {
     const setActive = async (active, btn) => {
       btn.disabled = true;
@@ -960,7 +960,7 @@ const ModView = (() => {
     });
   }
 
-  // 连接到虚拟机: 相当于接一根线, 只有选中的虚拟机能看到该组件
+  // Connect to a VM: like wiring the component in, only that VM can see it
   async function openConnectDialog(view) {
     let vms = [];
     try {
@@ -1054,7 +1054,7 @@ const ModView = (() => {
     view.stateEl.className = `mod-state ${runtime}`;
     view.stateEl.textContent = stateLabel(runtime);
 
-    // 机器类设备 (核电站) 没有程序与无线网卡, 只显示组件地址
+    // Machine-like devices (reactors) have no program or wireless card, so show the component address
     const isMachine = view.meta ? view.meta.computer === false : false;
     const addrLabel = isMachine
       ? T('mods.component-address', '组件地址')
@@ -1081,7 +1081,7 @@ const ModView = (() => {
       view.efiEl.style.color = efi === 'missing' ? 'var(--err)' : '';
     }
 
-    // 机器类设备没有启动/停止/重启
+    // Machine-like devices have no start/stop/restart
     $$('[data-act]', view.pane).forEach(btn => {
       const act = btn.dataset.act;
       if (isMachine && (act === 'start' || act === 'stop' || act === 'restart')) {
@@ -1102,10 +1102,10 @@ const ModView = (() => {
       if (cmd && !viewOnly) {
         btn.disabled = disabled;
       }
-      // 机器人移动与无人机偏移只显示对应的控制组
+      // Show robot movement and drone offset controls only for the matching type
       if (cmd === 'dmove' && !isDrone) btn.disabled = true;
       if ((cmd === 'move' || cmd === 'turn') && isDrone) btn.disabled = true;
-      // 核电站不移动, 只保留视角控制
+      // Reactors do not move; keep only the camera controls
       if (isReactor && !viewOnly) btn.disabled = true;
     });
   }
@@ -1134,7 +1134,7 @@ const ModView = (() => {
     `;
   }
 
-  // ---------- 物品 / 状态页 ----------
+  // ---------- Items / state tab ----------
   function renderItems(view) {
     const st = view.state;
     const meta = view.meta || {};
@@ -1159,7 +1159,7 @@ const ModView = (() => {
     ];
     if (st.lastError) cards.push({ k: T('mods.card.last-error'), v: String(st.lastError), cls: 'err' });
 
-    // 核电站摘要
+    // Reactor summary
     const reactor = meta.reactor;
     if (reactor && reactor.stats) {
       const rs = reactor.stats;
@@ -1177,7 +1177,7 @@ const ModView = (() => {
       </div>
     `).join('');
 
-    // 工具 (主手 / 副手)
+    // Tools (main hand / off hand)
     const toolRow = (label, t) => {
       if (!t) return `<tr><td>${escapeHTML(label)}</td><td>${T('common.empty-hand')}</td><td class="num">-</td></tr>`;
       const dur = (t.durability != null && t.maxDurability)
@@ -1194,7 +1194,7 @@ const ModView = (() => {
         </table>`;
     }
 
-    // 储罐
+    // Tanks
     let tanksHTML = `<div class="mod-empty">${T('mods.tank.none')}</div>`;
     if (Array.isArray(st.tanks) && st.tanks.length > 0) {
       const rows = st.tanks.map((tk, i) => `
@@ -1212,7 +1212,7 @@ const ModView = (() => {
         </table>`;
     }
 
-    // 物品栏
+    // Inventory
     let invHTML = `<div class="mod-empty">${T('mods.inv.empty')}</div>`;
     if (Array.isArray(st.inventory) && st.inventory.length > 0) {
       const rows = st.inventory.map(it => `
@@ -1248,7 +1248,7 @@ const ModView = (() => {
     `;
   }
 
-  // 机器类设备 (核电站) 的摘要: 没有物品栏与工具, 只显示设备参数
+  // Machine-like device (reactor) summary: no inventory or tools, only device parameters
   function renderMachineInfo(view) {
     const meta = view.meta || {};
     const reactor = meta.reactor || null;
@@ -1263,7 +1263,7 @@ const ModView = (() => {
       const comp = components[id];
       return comp && comp.label ? comp.label : String(id || '-');
     };
-    // 燃料棒寿命固定为 10000 秒, 其它组件用蓄热容量
+    // Fuel rods last a fixed 10000 seconds; other parts use their heat capacity
     const componentMaxDurability = (id) => {
       const comp = components[id];
       if (!comp) return 0;
@@ -1315,7 +1315,7 @@ const ModView = (() => {
       </div>
     `).join('');
 
-    // 堆芯里已放置的组件
+    // Parts currently in the core
     let coreHTML = `<div class="mod-empty">${T('reactor.info.no-parts', '还没有放置任何组件')}</div>`;
     if (stats && Array.isArray(stats.cells)) {
       const cells = stats.cells.filter(cell => cell && cell.id);
@@ -1336,7 +1336,7 @@ const ModView = (() => {
       }
     }
 
-    // 燃料箱 / 废料箱: 只列出有物品的槽位
+    // Fuel / waste boxes: list only slots holding an item
     const boxHTML = (title, list) => {
       const rows = Array.isArray(list)
         ? list.map((entry, index) => (entry && entry.id ? { slot: index + 1, entry } : null)).filter(Boolean)
@@ -1379,7 +1379,7 @@ const ModView = (() => {
     `;
   }
 
-  // ---------- 日志 ----------
+  // ---------- Log ----------
   function appendLog(modName, entry) {
     const view = views.get(modName);
     if (!view || !entry) return;
@@ -1398,7 +1398,7 @@ const ModView = (() => {
     view.consoleEl.scrollTop = view.consoleEl.scrollHeight;
   }
 
-  // ---------- 核电站配置: 只有设备本身, 没有 EFI / 磁盘 ----------
+  // ---------- Reactor config: the device only, no EFI or disks ----------
   async function openReactorConfig(modName, mod) {
     let data = mod.reactor || null;
     if (!data) {
@@ -1431,13 +1431,13 @@ const ModView = (() => {
     });
   }
 
-  // ---------- 配置 (EFI / 硬件) ----------
+  // ---------- Config (EFI / hardware) ----------
   async function openConfig(modName) {
     let mod, efi;
     try {
       mod = await App.api(`mods/${encodeURIComponent(modName)}`) || {};
       if (mod.error) throw new Error(mod.error);
-      // 机器类设备没有程序与硬件, 只配置设备本身
+      // Machine-like devices have no program or hardware; only the device itself is configured
       if (mod.type === 'reactor') return openReactorConfig(modName, mod);
       if (mod.type === 'machine') return openMachineScriptDialog(modName);
       efi = await App.api(`mods/${encodeURIComponent(modName)}/efi`) || {};
@@ -1454,14 +1454,14 @@ const ModView = (() => {
     const exp = Array.isArray(hw.expansion) ? hw.expansion : [null, null, null];
     const curApu = (hw.apu && hw.apu.tier) || 1;
     const curMem = (Array.isArray(hw.memory) && hw.memory.length ? hw.memory[0] : 1);
-    // 自定义内存容量 (MB): 有值时下拉框显示「自定义」
+    // Custom memory size (MB): when set, the dropdown shows "custom"
     const curMemMB = Array.isArray(hw.memoryMB) && hw.memoryMB[0] != null ? Number(hw.memoryMB[0]) : null;
     const curScreen = (cfg.screen && cfg.screen.tier) || 1;
     const curStrength = hw.modemStrength == null ? '' : String(hw.modemStrength);
     const isRunning = mod.state === 'running' || mod.state === 'starting';
     const maxSize = Number(efi.maxSize) || 4096;
 
-    // 设备专属配置: 机器人 (主手/副手工具) / 无人机 (飞行参数)
+    // Device-specific config: robot (main/off hand tools) / drone (flight parameters)
     const profile = mod.profile || null;
     const hasProfile = !!(profile && (profile.type === 'robot' || profile.type === 'drone'));
     const isDroneProfile = hasProfile && profile.type === 'drone';
@@ -1606,7 +1606,7 @@ const ModView = (() => {
         updateSize();
         editor.addEventListener('input', updateSize);
 
-        // Tab 插入两个空格, Ctrl+S 保存
+        // Tab inserts two spaces; Ctrl+S saves
         editor.addEventListener('keydown', (e) => {
           if (e.key === 'Tab') {
             e.preventDefault();
@@ -1638,7 +1638,7 @@ const ModView = (() => {
           });
         });
 
-        // 内存容量: 选择「自定义」时显示 MB 输入框
+        // Memory: choosing "custom" reveals the MB input
         const memSel = body.querySelector('#mod-hw-memory');
         const memMbRow = body.querySelector('#mod-hw-memory-mb-row');
         if (memSel && memMbRow) {
@@ -1658,7 +1658,7 @@ const ModView = (() => {
             return;
           }
 
-          // 内存: 下拉框选「自定义」时按 MB 提交, 否则按等级提交
+          // Memory: submit MB when "custom" is selected, otherwise submit the tier
           const memSelect = body.querySelector('#mod-hw-memory').value;
           let memPatch;
           if (memSelect === 'custom') {
@@ -1745,7 +1745,7 @@ const ModView = (() => {
     });
   }
 
-  // ---------- 加载 ----------
+  // ---------- Loading ----------
   async function reload(modName) {
     const view = views.get(modName);
     if (!view) return;
@@ -1786,7 +1786,7 @@ const ModView = (() => {
     views.delete(modName);
   }
 
-  // ---------- 服务器消息 ----------
+  // ---------- Server messages ----------
   function onServerMessage(msg) {
     if (!msg || !msg.mod) return;
     if (msg.type === 's2c.mod.state') {

@@ -1,13 +1,13 @@
 // ============================================================
-// console.js - VM 控制台 (Canvas 渲染 + 工具栏 + 硬件面板)
+// console.js - VM console (canvas rendering + toolbar + hardware panel)
 //
-// 屏幕数据格式 (来自 vmManager 的 s2c.screen):
-//   full:  { w, h, cells: [[bg,fg,char],...] }  长度 = w*h
-//   dirty: { dirty: [[x,y,bg,fg,char],...] }   增量, x/y 从 1 开始
+// Screen payloads (s2c.screen from vmManager):
+//   full:  { w, h, cells: [[bg,fg,char],...] }  length = w*h
+//   dirty: { dirty: [[x,y,bg,fg,char],...] }   incremental, x/y are 1-based
 // ============================================================
 
 const Console = (() => {
-  // OC 16 色调色板 (0xRRGGBB)
+  // OC 16-color palette (0xRRGGBB)
   const PALETTE = [
     0x000000, 0xff3333, 0x33ff33, 0xffff33,
     0x3333ff, 0xff33ff, 0x33ffff, 0xffffff,
@@ -16,9 +16,9 @@ const Console = (() => {
   ];
 
   // ---------- Bitmap Font (OC hexfont) ----------
-  // OC 使用 GNU Unifont .hex 格式位图字体, 每字符 8x16 或 16x16 像素
+  // OC uses GNU Unifont .hex bitmap fonts: 8x16 or 16x16 pixels per glyph
   let hexFont = null; // Map<codePoint, {width: 8|16, bytes: Uint8Array}>
-  let glyphCache = null; // Map<codePoint, HTMLCanvasElement> 预渲染字形
+  let glyphCache = null; // Map<codePoint, HTMLCanvasElement> pre-rendered glyphs
 
   async function loadHexFont() {
     try {
@@ -42,7 +42,7 @@ const Console = (() => {
         hexFont.set(cp, { width, bytes });
       }
       console.log(`[hexFont] Loaded ${hexFont.size} glyphs from font.hex`);
-      // 字体加载后重绘所有可见 VM
+      // Repaint every visible VM once the font is loaded
       for (const [name, view] of views) {
         if (view.cells && view.cells.length && view.ctx) {
           resizeCanvas(name);
@@ -54,13 +54,13 @@ const Console = (() => {
     }
   }
 
-  // 获取预渲染的字形 canvas (按需创建并缓存)
+  // Get the pre-rendered glyph canvas (created and cached on demand)
   function getGlyphCanvas(cp) {
     const cached = glyphCache.get(cp);
     if (cached) return cached;
     const glyph = hexFont.get(cp) || hexFont.get(0x20);
     if (!glyph) return null;
-    // 创建离屏 canvas, 白色字形 + 透明背景 (用作 alpha 蒙版)
+    // Offscreen canvas with a white glyph on transparent background (used as an alpha mask)
     const cv = document.createElement('canvas');
     cv.width = glyph.width;
     cv.height = 16;
@@ -85,9 +85,9 @@ const Console = (() => {
     }
     ctx.putImageData(imgData, 0, 0);
     glyphCache.set(cp, cv);
-    // 限制缓存大小
+    // Bound the cache size
     if (glyphCache.size > 3000) {
-      // 保留最常用的 ASCII 范围, 清空其他
+      // Keep the common ASCII range and evict the rest
       for (const key of glyphCache.keys()) {
         if (key > 127) glyphCache.delete(key);
       }
@@ -95,7 +95,7 @@ const Console = (() => {
     return cv;
   }
 
-  // 宽字符快速判断缓存 (避免每次都查 hexFont)
+  // Wide-glyph lookup cache (avoids hitting hexFont on every call)
   const _wideCache = new Map();
   function isWideGlyph(ch) {
     if (!ch || ch.length === 0) return false;
@@ -109,16 +109,16 @@ const Console = (() => {
     return result;
   }
 
-  // VM 视图缓存: vmName -> { canvas, ctx, offscreen, offCtx, w, h, cells, charW, charH, logLines }
+  // VM view cache: vmName -> { canvas, ctx, offscreen, offCtx, w, h, cells, charW, charH, logLines }
   const views = new Map();
 
-  // WebSocket 不可用时只提示一次, 避免日志刷屏
+  // Warn only once when the WebSocket is unavailable, to keep the log readable
   let inputDropWarned = false;
 
-  // 帧率显示 (客户端偏好, 存 localStorage)
+  // FPS overlay (client preference persisted in localStorage)
   const SHOW_FPS_KEY = 'oc-show-fps';
   let showFps = false;
-  try { showFps = localStorage.getItem(SHOW_FPS_KEY) === '1'; } catch (e) { /* 忽略 */ }
+  try { showFps = localStorage.getItem(SHOW_FPS_KEY) === '1'; } catch (e) { /* ignore */ }
 
   function isShowFps() { return showFps; }
 
@@ -127,18 +127,18 @@ const Console = (() => {
     try {
       if (showFps) localStorage.setItem(SHOW_FPS_KEY, '1');
       else localStorage.removeItem(SHOW_FPS_KEY);
-    } catch (e) { /* 忽略 */ }
+    } catch (e) { /* ignore */ }
     views.forEach((view) => {
       if (view.fpsEl) view.fpsEl.style.display = showFps ? '' : 'none';
       view._fpsFrames = 0;
     });
   }
 
-  // ---------- 前端日志 ----------
-  // 与设置里的「日志级别」共用开关:
-  //   full  -> 渲染帧统计 / 滚轮与输入等调试信息
-  //   error -> 只输出错误 (默认)
-  //   off   -> 全部关闭
+  // ---------- Frontend logging ----------
+  // Shares the Log level setting:
+  //   full  -> render stats plus wheel and input diagnostics
+  //   error -> errors only (default)
+  //   off   -> everything off
   const LOG_RANK = { off: 0, error: 1, full: 2 };
   const diag = { wheelSeen: 0, wheelSent: 0, wheelSkipped: 0, wheelInside: false, inputDropped: 0 };
   let _renderStats = { since: Date.now(), frames: 0, cells: 0, full: 0 };
@@ -171,8 +171,8 @@ const Console = (() => {
         state: 'stopped',
         subscribed: false,
         isFullscreen: false,
-        stoppedAppearance: null,  // null | 'black'(正常关闭) | 'gray'(异常停止)
-        expectCleanStop: false,   // 用户主动点停止/重启 -> 归入"正常关闭"
+        stoppedAppearance: null,  // null | 'black' (clean shutdown) | 'gray' (abnormal stop)
+        expectCleanStop: false,   // A user-pressed stop/restart counts as a clean shutdown
       });
     }
     return views.get(vmName);
@@ -261,7 +261,7 @@ const Console = (() => {
     view.fpsEl = pane.querySelector(`#fps-${cssEsc(vmName)}`);
     if (view.fpsEl) view.fpsEl.style.display = showFps ? '' : 'none';
 
-    // 日志面板最小化/展开
+    // Log panel minimize / expand
     const logHeader = pane.querySelector(`#log-header-${cssEsc(vmName)}`);
     const logToggle = pane.querySelector(`#log-toggle-${cssEsc(vmName)}`);
     const logClear = pane.querySelector(`#log-clear-${cssEsc(vmName)}`);
@@ -294,27 +294,26 @@ const Console = (() => {
         toggleLogPanel(vmName);
       });
     }
-    // 手机上日志是底部抽屉, 默认收起, 避免一打开就遮住半个画布
+    // On phones the log is a bottom drawer, collapsed by default so it does not cover half the canvas
     const isPhone = !!(window.matchMedia && window.matchMedia('(max-width: 767px)').matches);
     if (view.logMinimized === undefined) view.logMinimized = isPhone;
     if (view.logContainer) view.logContainer.style.display = view.logMinimized ? 'none' : '';
     if (showHandle) showHandle.style.display = view.logMinimized ? '' : 'none';
 
-    // 工具栏事件
     pane.querySelectorAll('button[data-action]').forEach(btn => {
       btn.addEventListener('click', () => onToolbarAction(btn.dataset.action, vmName));
     });
 
-    // 标签页重建后立即按当前已知状态刷新一次: 按钮可用性, 以及"已停止"的
-    // 画面表现: 画布是刚创建的, 需要在这里补画黑屏/灰屏。
+    // Refresh once from the known state after a tab rebuild: button availability and the
+    // "stopped" look, because the freshly created canvas still needs its black/gray fill.
     updateStateBadge(vmName);
     applyStoppedVisual(vmName);
 
-    // 键盘事件转发 (使用 keydown/keyup, 不使用已废弃的 keypress)
+    // Keyboard forwarding (keydown/keyup; keypress is deprecated)
     view.canvas.setAttribute('tabindex', '0');
     view.canvas.addEventListener('keydown', (e) => onKey(e, vmName));
     view.canvas.addEventListener('keyup', (e) => onKey(e, vmName));
-    // 鼠标事件: down/up/move/wheel, 全部阻止默认 + 屏蔽右键菜单
+    // Mouse events: down/up/move/wheel, all with preventDefault, plus context-menu suppression
     view.canvas.addEventListener('mousedown', (e) => {
       e.preventDefault();
       view.canvas.focus();
@@ -331,7 +330,7 @@ const Console = (() => {
     });
     view.canvas.addEventListener('mousemove', (e) => {
       if (!view._mouseDown) return;
-      // 拖拽事件节流: 用 requestAnimationFrame 合并, 避免高频事件卡顿
+      // Throttle drag events through requestAnimationFrame so fast moves do not stall
       if (view._dragPending) {
         view._dragEvent = e;
         return;
@@ -346,7 +345,7 @@ const Console = (() => {
         view._dragEvent = null;
       });
     });
-    // window 上的 mouseup: 鼠标移出 canvas 后松开时兜底
+    // Window-level mouseup: catches releases that happen outside the canvas
     window.addEventListener('mouseup', (e) => {
       if (view._mouseDown) {
         view._mouseDown = false;
@@ -354,12 +353,12 @@ const Console = (() => {
       }
     });
     view.canvas.addEventListener('contextmenu', (e) => e.preventDefault());
-    // 滚轮事件: 绑定在【整个虚拟机面板】上 (工具栏 / 屏幕 / 画布四周留白都算), 只排除日志面板。
+    // Wheel: bound to the whole VM pane (toolbar, screen, canvas margins), excluding only the log panel.
     //
-    // 真机滚轮由浏览器做命中测试: 若只绑在 .console-canvas-wrap 上, 鼠标稍微偏到画布留白
-    // 或工具栏上, 事件就不落在监听元素里 —— 表现为"滚轮完全没反应", 容易被误判成鼠标或
-    // 模拟器坏了。因此放大到整个面板, 并把日志面板排除在外 (否则没法用滚轮翻日志)。
-    // 只绑定一次: renderVMView 可能被多次调用, 重复绑会让一次滚轮发出多条 scroll 信号。
+    // Browsers hit-test wheel events, so binding only .console-canvas-wrap means a slightly off
+    // pointer (canvas margin or toolbar) lands outside the listener and looks like "the wheel is dead".
+    // Hence the whole pane, with the log panel excluded so the wheel can still scroll the log.
+    // Bind once: renderVMView runs repeatedly, and duplicate bindings emit several scroll signals per notch.
     if (!pane.dataset.ocWheelBound) {
       pane.dataset.ocWheelBound = '1';
       pane.addEventListener('wheel', (e) => {
@@ -372,9 +371,9 @@ const Console = (() => {
     }
     view.canvasWrap.addEventListener('mousedown', () => view.canvas.focus());
 
-    // 触屏: 浏览器在触屏上只会合成迟到的鼠标事件, 拖动过程收不到 mousemove,
-    // 因此单独把 touchstart/touchmove/touchend 映射成 touch/drag/drop。
-    // touchstart 里 preventDefault 可同时抑制重复的兼容鼠标事件与页面滚动/缩放。
+    // Touch: browsers synthesize only late mouse events on touch screens, so drags never produce
+    // mousemove. Map touchstart/touchmove/touchend to touch/drag/drop instead. Calling
+    // preventDefault in touchstart also suppresses the duplicate mouse events and page scroll/zoom.
     const findTouch = (list, id) => {
       for (let i = 0; i < (list ? list.length : 0); i++) {
         if (list[i].identifier === id) return list[i];
@@ -387,9 +386,9 @@ const Console = (() => {
       if (!touch) return;
       e.preventDefault();
       view._touchId = touch.identifier;
-      // 点屏幕时把焦点拉回画布 (若软键盘正开着, 同时会收起键盘)
+      // Focus the canvas on tap (which also dismisses the soft keyboard if it is open)
       try { view.canvas.focus({ preventScroll: true }); } catch (err) { view.canvas.focus(); }
-      // 全屏 + 运行中: 按下先不发送; 按住达到长按时长发送右键, 直接抬起发送左键
+      // Fullscreen + running: defer the press; holding long enough emits right click, a quick release emits left
       if (isRightClickGesture(view)) {
         view._pressPoint = { x: touch.clientX, y: touch.clientY };
         view._lpFired = false;
@@ -411,11 +410,11 @@ const Console = (() => {
     }, { passive: false });
     view.canvas.addEventListener('touchmove', (e) => {
       if (view._touchId == null) return;
-      if (view._lpFired) return; // 右键已发送, 本次触摸不再产生拖动
+      if (view._lpFired) return; // Right click already sent; this touch must not become a drag
       const touch = findTouch(e.changedTouches, view._touchId) || e.touches[0];
       if (!touch) return;
       e.preventDefault();
-      // 按下尚未发送: 移动超过阈值才转为拖动, 并补发左键按下
+      // Press not sent yet: past the threshold it becomes a drag, so send the left press first
       if (view._pressPoint) {
         const dx = touch.clientX - view._pressPoint.x;
         const dy = touch.clientY - view._pressPoint.y;
@@ -425,7 +424,7 @@ const Console = (() => {
         view._pressPoint = null;
         sendTouchAt(vmName, p.x, p.y, 'touch');
       }
-      // 与鼠标拖拽一样按帧合并, 避免高频事件把消息刷爆
+      // Coalesce per frame like mouse drags, so fast moves do not flood the socket
       if (view._touchPending) {
         view._touchMoveEvent = touch;
         return;
@@ -454,7 +453,7 @@ const Console = (() => {
         return;
       }
       if (view._pressPoint) {
-        // 未达到长按时长: 一次左键点击
+        // Below the long-press duration: a single left click
         view._pressPoint = null;
         sendTouchAt(vmName, touch.clientX, touch.clientY, 'touch');
         sendTouchAt(vmName, touch.clientX, touch.clientY, 'drop');
@@ -470,25 +469,22 @@ const Console = (() => {
       view._lpFired = false;
       clearLongPress(view);
     });
-    // 双击逻辑:
-    // - 非全屏时: 双击进入全屏
-    // - 全屏且系统未运行/报错时: 双击退出全屏
-    // - 全屏且系统运行中: 不切换全屏 (触屏连点两下就是两次左键, 长按为右键)
+    // Double click:
+    // - not fullscreen: enter fullscreen
+    // - fullscreen and not running/erroring: leave fullscreen
+    // - fullscreen while running: do not toggle (two taps are two left clicks, long press is right click)
     view.canvas.addEventListener('dblclick', (e) => {
       const view = getView(vmName);
       if (!view.isFullscreen) {
-        // 非全屏 → 双击进入全屏
         e.preventDefault();
         toggleFullscreen(vmName);
       } else if (view.state !== 'running') {
-        // 全屏 + 系统未运行 → 双击退出全屏
         e.preventDefault();
         toggleFullscreen(vmName);
       }
-      // 全屏 + 运行中 → 不拦截, 双击交给系统
+      // Fullscreen and running: do not intercept, pass the double click to the guest
     });
 
-    // 全屏按钮
     const fsBtn = pane.querySelector(`#fs-btn-${cssEsc(vmName)}`);
     if (fsBtn) {
       fsBtn.addEventListener('click', (e) => {
@@ -500,7 +496,7 @@ const Console = (() => {
     bindImeInput(view, vmName);
     bindVirtualKeyboard(view, vmName);
 
-    // 虚拟滚轮: 触屏全屏时显示, 按指针最后位置滚动
+    // Virtual wheel: shown in touch fullscreen, scrolls at the pointer's last position
     const scrollUpBtn = pane.querySelector(`#scroll-up-${cssEsc(vmName)}`);
     const scrollDownBtn = pane.querySelector(`#scroll-down-${cssEsc(vmName)}`);
     if (scrollUpBtn) {
@@ -516,19 +512,17 @@ const Console = (() => {
       });
     }
 
-    // 窗口大小变化时重绘画布并重新渲染所有单元格
+    // On resize, refit the canvas and repaint every cell
     view._resizeHandler = () => {
-      // 手机旋转后重新判断是否需要 CSS 旋转兜底
+      // Re-evaluate the CSS-rotation fallback after a phone rotation
       syncFsRotation(vmName);
       fitCanvasToContainer(vmName);
       repaintAll(vmName);
     };
     window.addEventListener('resize', view._resizeHandler);
 
-    // 拉取最新状态
     reloadView(vmName);
 
-    // 自动获取焦点
     setTimeout(() => {
       view.canvas.focus();
       fitCanvasToContainer(vmName);
@@ -536,9 +530,9 @@ const Console = (() => {
     }, 100);
   }
 
-  // 从服务端重新拉取一次权威状态与最新画面。
-  // 打开标签页时调用一次; 顶部的"刷新"按钮也会调用它, 用于在 WebSocket 掉线、
-  // 或某条状态消息丢失时, 手动强制同步虚拟机状态与画面。
+  // Re-fetch authoritative state and the latest frame from the server.
+    // Called when a tab opens and by the toolbar Refresh button, to force a sync
+    // after a WebSocket drop or a lost state message.
   function reloadView(vmName) {
     const view = getView(vmName);
     return App.api(`vms/${encodeURIComponent(vmName)}/state`).then(s => {
@@ -546,7 +540,7 @@ const Console = (() => {
       view.state = s.state || 'stopped';
       updateStateBadge(vmName);
       const isStopped = (view.state === 'stopped' || view.state === 'error');
-      // 已停止的 VM 不要画回服务端残留的最后一帧 (否则会盖掉黑屏/灰屏表现)
+      // Never repaint a stopped VM's stale last frame: it would cover the black/gray look
       if (!isStopped && s.screen && s.screen.cells && s.screen.cells.length > 0) {
         view.w = s.screen.width;
         view.h = s.screen.height;
@@ -565,13 +559,13 @@ const Console = (() => {
     const badge = document.getElementById(`vm-state-${cssEsc(vmName)}`);
     const stateKey = 'vm.state.' + (view.state || 'unknown');
     if (badge) badge.textContent = I18N.t(stateKey);
-    // 启用/禁用按钮
+    // Enable / disable buttons
     const start = document.getElementById(`btn-start-${cssEsc(vmName)}`);
     const stop = document.getElementById(`btn-stop-${cssEsc(vmName)}`);
     const pause = document.getElementById(`btn-pause-${cssEsc(vmName)}`);
     const restart = document.getElementById(`btn-restart-${cssEsc(vmName)}`);
     const isRunning = (view.state === 'running' || view.state === 'paused');
-    const isBusy = (view.state === 'starting');  // 重启中等异步过程
+    const isBusy = (view.state === 'starting');  // asynchronous transitions such as restarting
     if (start) start.disabled = isBusy || isRunning;
     if (stop) stop.disabled = isBusy || !isRunning;
     if (restart) restart.disabled = isBusy || !isRunning;
@@ -585,17 +579,17 @@ const Console = (() => {
         pause.dataset.action = 'pause';
       }
     }
-    // 暂停遮罩
+    // Pause overlay
     const overlay = document.getElementById(`paused-overlay-${cssEsc(vmName)}`);
     if (overlay) {
       overlay.style.display = (view.state === 'paused') ? 'flex' : 'none';
     }
-    // 重启遮罩: state === 'starting' 时显示, 并清空画布 (旧画面与当前系统状态不符)
+    // Reboot overlay: shown while state === 'starting'; the canvas is cleared because the old frame no longer matches
     const restartingOverlay = document.getElementById(`restarting-overlay-${cssEsc(vmName)}`);
     if (restartingOverlay) {
       const showRestarting = (view.state === 'starting');
       if (showRestarting) {
-        // 清空画布, 避免旧画面误导
+        // Clear the canvas so the stale frame cannot mislead
         const ctx = view.ctx;
         if (ctx) {
           ctx.fillStyle = '#000';
@@ -609,7 +603,7 @@ const Console = (() => {
 
   async function onToolbarAction(action, vmName) {
     if (action === 'start') {
-      // 乐观 UI: 立即禁用启动按钮, 防止重复点击
+      // Optimistic UI: disable Start immediately to block double clicks
       const view = getView(vmName);
       view.state = 'running';
       updateStateBadge(vmName);
@@ -622,10 +616,10 @@ const Console = (() => {
       }
       App.wsSubscribe(vmName);
     } else if (action === 'stop') {
-      // 乐观 UI: 立即显示停止中状态, 防止重复点击
+      // Optimistic UI: show the stopping state immediately to block double clicks
       const view = getView(vmName);
       const wasRunning = view.state;
-      view.expectCleanStop = true;   // 主动停止 -> 画面走"正常关闭"(黑屏)
+      view.expectCleanStop = true;   // User-initiated stop -> render as a clean shutdown (black)
       view.state = 'stopped';
       updateStateBadge(vmName);
       try {
@@ -637,7 +631,7 @@ const Console = (() => {
         appendLog(vmName, `[error] ${I18N.t('log.stop-failed')}${e.message}`, 'error');
       }
     } else if (action === 'pause') {
-      // 乐观 UI: 立即显示暂停状态
+      // Optimistic UI: show the paused state immediately
       const view = getView(vmName);
       view.state = 'paused';
       updateStateBadge(vmName);
@@ -649,7 +643,7 @@ const Console = (() => {
         appendLog(vmName, `[error] ${I18N.t('log.pause-failed')}${e.message}`, 'error');
       }
     } else if (action === 'resume') {
-      // 乐观 UI: 立即显示运行状态
+      // Optimistic UI: show the running state immediately
       const view = getView(vmName);
       view.state = 'running';
       updateStateBadge(vmName);
@@ -661,18 +655,18 @@ const Console = (() => {
         appendLog(vmName, `[error] ${I18N.t('log.resume-failed')}${e.message}`, 'error');
       }
     } else if (action === 'restart') {
-      // 乐观 UI: 显示重启中状态 (用 'starting' 临时态, 运行/暂停按钮都会被禁用)
+      // Optimistic UI: show restarting through the temporary 'starting' state, which disables run/pause
       const view = getView(vmName);
-      view.expectCleanStop = true;   // 重启过程中的停止阶段也按"正常关闭"处理
+      view.expectCleanStop = true;   // The stop phase of a restart also counts as a clean shutdown
       view.state = 'starting';
       updateStateBadge(vmName);
       appendLog(vmName, `[info] ${I18N.t('log.restarting')}${vmName}...`);
       try {
         await App.api(`vms/${encodeURIComponent(vmName)}/restart`, { method: 'POST' });
-        // 重启由服务器推 s2c.state, 不在此处乐观设置最终态
+        // The server pushes s2c.state for a restart, so do not guess the final state here
       } catch (e) {
         appendLog(vmName, `[error] ${I18N.t('log.restart-failed')}${e.message}`, 'error');
-        // 失败: 拉取服务器真实状态
+        // On failure, fetch the real state from the server
         App.api(`vms/${encodeURIComponent(vmName)}/state`).then(s => {
           if (s) {
             view.state = s.state || 'stopped';
@@ -728,7 +722,7 @@ const Console = (() => {
     }
   }
 
-  // 软盘大小选择 modal: 返回 Promise<number|null>, 用户取消则 resolve(null)
+  // Floppy size dialog: resolves to Promise<number|null>, null when cancelled
   function askFloppySize() {
     const t = I18N.t;
     return new Promise((resolve) => {
@@ -765,7 +759,7 @@ const Console = (() => {
       const cancel = () => { Modal.close(); resolve(null); };
       okBtn.addEventListener('click', () => {
         const checked = document.querySelector('input[name="floppy-size"]:checked');
-        let size = 524288; // 默认 512KB
+        let size = 524288; // default 512 KB
         if (checked) {
           if (checked.value === 'custom') {
             const mb = parseFloat(document.querySelector('#floppy-custom-size').value);
@@ -787,7 +781,7 @@ const Console = (() => {
     });
   }
 
-  // 新建磁盘对话框: 返回 Promise<{diskName, mirrorPath}|null>
+  // New disk dialog: resolves to Promise<{diskName, mirrorPath}|null>
   function askNewDisk(vmName, slot) {
     const t = I18N.t;
     return new Promise((resolve) => {
@@ -862,7 +856,7 @@ const Console = (() => {
         `,
       });
 
-      // 模式切换
+      // Mode switch
       const modeRadios = document.querySelectorAll('input[name="disk-mode"]');
       const sizeRow = document.getElementById('row-disk-size');
       const sizeCustomRow = document.getElementById('row-disk-size-custom');
@@ -891,7 +885,18 @@ const Console = (() => {
         sizeCustomRow.style.display = sizeSelect.value === 'custom' ? 'flex' : 'none';
       });
 
-      // 浏览文件夹: 用 prompt 输入路径
+      // The tier defines the maximum capacity, so keep the custom input in range.
+      const tierSelect = document.getElementById('new-disk-tier');
+      const tierLimits = { 1: 1048576, 2: 2097152, 3: 4194304 };
+      function syncSizeLimit() {
+        const limMB = (tierLimits[parseInt(tierSelect.value, 10)] || 4194304) / 1024 / 1024;
+        sizeCustomInput.max = limMB;
+        if (parseFloat(sizeCustomInput.value) > limMB) sizeCustomInput.value = limMB;
+      }
+      tierSelect.addEventListener('change', syncSizeLimit);
+      syncSizeLimit();
+
+      // Browse folder: the path is typed through a prompt
       document.getElementById('btn-mirror-folder').addEventListener('click', () => {
         const current = document.getElementById('new-disk-mirror').value;
         const p = prompt(t('hw.disk-mirror-browse-prompt'), current);
@@ -919,10 +924,15 @@ const Console = (() => {
         if (isNaN(size)) {
           const mb = parseFloat(sizeCustomInput.value);
           size = Math.round(mb * 1024 * 1024);
-          if (!isFinite(mb) || size < 131072 || size > 16777216 || (size % 1024 !== 0)) {
+          if (!isFinite(mb) || size < 131072 || (size % 1024 !== 0)) {
             alert(t('hw.disk-size-invalid'));
             return;
           }
+        }
+        const tierMax = tierLimits[tier] || 4194304;
+        if (size > tierMax) {
+          alert(t('hw.disk-size-tier-invalid').replace('{size}', tierMax / 1024 / 1024));
+          return;
         }
 
         const result = {
@@ -948,19 +958,19 @@ const Console = (() => {
     const isStopped = view.state === 'stopped' || view.state === 'paused';
     const isRunning = view.state === 'running';
 
-    // 获取存储设备列表
+    // Fetch the storage device list
     let storage = { eeproms: [], disks: [], floppy: null };
     try {
       storage = await App.api(`vms/${encodeURIComponent(vmName)}/storage`);
-    } catch (e) { /* 忽略 */ }
+    } catch (e) { /* ignore */ }
 
-    // 获取磁盘模板列表 (disks/ 目录下的所有 .ocd 文件)
+    // Fetch disk templates (every .ocd under disks/)
     let diskTemplates = [];
     try {
       diskTemplates = await App.api('disks/templates');
     } catch (e) { /* fallback */ }
 
-    // 构建下拉选项
+    // Build dropdown options
     const opts = (arr, cur) => arr.map(o =>
       `<option value="${o.value}" ${String(o.value) === String(cur) ? 'selected' : ''}>${o.label}</option>`
     ).join('');
@@ -986,7 +996,7 @@ const Console = (() => {
       { value: 'wireless_t1', label: t('hw.option-wireless-t1') },
       { value: 'wireless_t2', label: t('hw.option-wireless-t2') },
     ];
-    // 无线信号强度: 1 = 隔离(无法发现其他虚拟机), >=2 = 可互通
+    // Signal strength: 1 = isolated (cannot see other VMs), >= 2 = networked
     const strengthOpts = (() => {
       const arr = [
         { value: '', label: t('hw.strength-auto') },
@@ -997,24 +1007,24 @@ const Console = (() => {
     })();
 
     const cur = cfg?.hardware || {};
-    // 自定义内存容量 (MB): 有值时对应下拉框显示「自定义」
+    // Custom memory size (MB): when set, that dropdown shows "custom"
     const curMemMB = Array.isArray(cur.memoryMB) ? cur.memoryMB : [null, null];
     const memSelectValue = (i) => (curMemMB[i] != null ? 'custom' : (cur.memory || [3, 3])[i]);
     const memInputValue = (i) => (curMemMB[i] != null ? curMemMB[i] : 8);
     const exp = cur.expansion || [null, null, null];
     const disabled = isStopped ? '' : 'disabled';
 
-    // 构建 EEPROM 选项列表
+    // Build the EEPROM option list
     const curEeprom = cur.eeprom || 'built-in';
     const eepromItems = [];
-    // 内置 BIOS (不可移除)
+    // Built-in BIOS (cannot be removed)
     eepromItems.push({
       value: 'built-in',
       label: t('hw.option-builtin-bios'),
       removable: false,
       selected: curEeprom === 'built-in',
     });
-    // 已保存的 EEPROM 文件
+    // Saved EEPROM files
     for (const e of (storage.eeproms || [])) {
       eepromItems.push({
         value: e.filename,
@@ -1024,10 +1034,10 @@ const Console = (() => {
       });
     }
 
-    // 构建磁盘选项列表
+    // Build the disk option lists
     const disk1Items = [];
     const disk2Items = [];
-    // 不挂载选项
+    // No-mount option
     disk1Items.push({
       value: '',
       label: t('hw.option-no-disk'),
@@ -1060,9 +1070,9 @@ const Console = (() => {
         });
       }
     }
-    // 添加磁盘模板选项 (来自 disks/ 目录)
+    // Append disk templates found under disks/
     for (const tpl of (diskTemplates || [])) {
-      // OpenOS 保持向后兼容用 'openos', 其他用 'disk_template:xxx.ocd'
+      // Keep 'openos' for backward compatibility; others use 'disk_template:xxx.ocd'
       const val = tpl.path === 'openos.ocd' ? 'openos' : 'disk_template:' + tpl.path;
       disk1Items.push({
         value: val,
@@ -1079,7 +1089,7 @@ const Console = (() => {
         isTemplate: true,
       });
     }
-    // 确保 disk1/disk2 有当前选项
+    // Make sure disk1/disk2 contain the current value as an option
     if (cur.disk1 && !disk1Items.find(d => d.value === cur.disk1)) {
       disk1Items.push({ value: cur.disk1, label: cur.disk1, removable: false, selected: true });
     }
@@ -1087,7 +1097,7 @@ const Console = (() => {
       disk2Items.push({ value: cur.disk2, label: cur.disk2, removable: true, selected: true });
     }
 
-    // 构建 EEPROM 选项 HTML
+    // EEPROM options HTML
     const eepromListHTML = eepromItems.map((item, i) => `
       <div class="storage-option ${item.selected ? 'selected' : ''}" data-value="${escapeAttr(item.value)}" data-removable="${item.removable}">
         <span class="storage-radio">${item.selected ? '◉' : '○'}</span>
@@ -1096,7 +1106,7 @@ const Console = (() => {
       </div>
     `).join('');
 
-    // 构建磁盘1选项 HTML
+    // Disk 1 options HTML
     const disk1ListHTML = disk1Items.map((item, i) => `
       <div class="storage-option ${item.selected ? 'selected' : ''} ${item.isNone ? 'storage-option-none' : ''} ${item.isTemplate ? 'storage-option-template' : ''}" data-value="${escapeAttr(item.value)}" data-slot="disk1">
         <span class="storage-radio">${item.selected ? '◉' : '○'}</span>
@@ -1104,7 +1114,7 @@ const Console = (() => {
       </div>
     `).join('');
 
-    // 构建磁盘2选项 HTML
+    // Disk 2 options HTML
     const disk2ListHTML = disk2Items.map((item, i) => `
       <div class="storage-option ${item.selected ? 'selected' : ''} ${item.isNone ? 'storage-option-none' : ''} ${item.isTemplate ? 'storage-option-template' : ''}" data-value="${escapeAttr(item.value)}" data-slot="disk2" data-removable="${item.removable}">
         <span class="storage-radio">${item.selected ? '◉' : '○'}</span>
@@ -1113,7 +1123,7 @@ const Console = (() => {
       </div>
     `).join('');
 
-    // 软盘选项（从 API 动态获取）
+    // Floppy options (loaded dynamically from the API)
     let floppyTemplates = [];
     try {
       floppyTemplates = await App.api('floppy/templates');
@@ -1190,10 +1200,10 @@ const Console = (() => {
             <select id="hw-floppy">
               ${(() => {
                 const hasFloppy = cur.floppy && cur.floppy !== '';
-                // 如果是 floppy.ocf, 用 storage 返回的标签匹配模板名
+                // For a floppy.ocf, match the template name through the label reported by storage
                 let floppyDisplay = cur.floppy;
                 let templateMatched = false;
-                // 从 storage 软盘标签查找对应模板
+                // Look up the template that matches the floppy label
                 if (hasFloppy && cur.floppy !== 'empty' && storage.floppy && storage.floppy.label) {
                   const fLabel = storage.floppy.label;
                   const matchedTpl = floppyTemplates.find(tpl => tpl.label === fLabel);
@@ -1210,7 +1220,7 @@ const Console = (() => {
                   else if (!cur.floppy && o.value === '') { sel = true; anySelected = true; }
                   return `<option value="${o.value}" ${sel ? 'selected' : ''} ${o.disabled ? 'disabled' : ''} title="${o.disabledReason || ''}">${o.label}</option>`;
                 }).join('');
-                // 如果有软盘但没匹配到任何选项，在前面加一个 "current" 选项
+                // A floppy that matches no option still needs a "current" entry at the top
                 if (hasFloppy && !anySelected) {
                   const curLabel = storage.floppy && storage.floppy.label ? storage.floppy.label : cur.floppy;
                   return `<option value="${cur.floppy}" selected>${curLabel}</option>` + html;
@@ -1250,11 +1260,11 @@ const Console = (() => {
       `,
     });
 
-    // --- EEPROM 选项交互 ---
+    // --- EEPROM option interactions ---
     const eepromList = document.querySelector('#hw-eeprom-list');
     if (eepromList) {
       eepromList.addEventListener('click', (e) => {
-        // 点击移除按钮
+        // Remove button
         const removeBtn = e.target.closest('.storage-remove');
         if (removeBtn) {
           e.stopPropagation();
@@ -1264,7 +1274,7 @@ const Console = (() => {
               method: 'POST',
               body: { filename },
             }).then(() => {
-              // 刷新配置并重新打开
+              // Refresh the config and reopen the editor
               App.api(`vms/${encodeURIComponent(vmName)}`).then(newCfg => {
                 openHardwareEditor(vmName, newCfg);
               });
@@ -1272,7 +1282,7 @@ const Console = (() => {
           }
           return;
         }
-        // 点击选项
+        // Selecting an option
         const opt = e.target.closest('.storage-option');
         if (opt) {
           eepromList.querySelectorAll('.storage-option').forEach(o => {
@@ -1285,7 +1295,7 @@ const Console = (() => {
       });
     }
 
-    // EEPROM 文件上传
+    // EEPROM file upload
     const fileInputOce = document.querySelector('#hw-eeprom-file-oce');
     const fileInputLua = document.querySelector('#hw-eeprom-file-lua');
     const addOceBtn = document.querySelector('#hw-eeprom-add-oce');
@@ -1300,7 +1310,7 @@ const Console = (() => {
           body: { vmName, content: b64, format, filename: file.name.replace(/\.(lua|oce)$/i, '') },
         });
         if (result && result.ok) {
-          // 刷新配置并重新打开
+          // Refresh the config and reopen the editor
           const newCfg = await App.api(`vms/${encodeURIComponent(vmName)}`);
           openHardwareEditor(vmName, newCfg);
         }
@@ -1318,7 +1328,7 @@ const Console = (() => {
       if (fileInputLua.files[0]) uploadEeprom(fileInputLua.files[0], 'lua');
     });
 
-    // --- 内存容量: 选择「自定义」时显示 MB 输入框 ---
+    // --- Memory size: "custom" reveals the MB input ---
     const bindMemRow = (selId, rowId) => {
       const sel = document.querySelector(selId);
       const row = document.querySelector(rowId);
@@ -1330,7 +1340,7 @@ const Console = (() => {
     bindMemRow('#hw-mem1', '#hw-mem1-mb-row');
     bindMemRow('#hw-mem2', '#hw-mem2-mb-row');
 
-    // --- 磁盘2 选项交互 ---
+    // --- Disk 2 option interactions ---
     const disk2List = document.querySelector('#hw-disk2-list');
     if (disk2List) {
       disk2List.addEventListener('click', (e) => {
@@ -1362,7 +1372,7 @@ const Console = (() => {
       });
     }
 
-    // 磁盘1 选项交互
+    // Disk 1 option interactions
     const disk1List = document.querySelector('#hw-disk1-list');
     if (disk1List) {
       disk1List.addEventListener('click', (e) => {
@@ -1378,39 +1388,38 @@ const Console = (() => {
       });
     }
 
-    // 磁盘2 新建/OpenOS
+    // Disk 2: new disk / OpenOS
     const disk2NewBtn = document.querySelector('#hw-disk2-new');
     const disk2OpenosBtn = document.querySelector('#hw-disk2-openos');
     if (disk2NewBtn) disk2NewBtn.addEventListener('click', async () => {
-      // 使用新对话框创建磁盘
+      // Create the disk through the new-disk dialog
       try {
         const result = await askNewDisk(vmName, 'disk2');
         if (!result) return;
         const diskPath = `vms/${vmName}/${result.diskName}`;
 
         if (result.mode === 'mirror' && result.mirrorPath) {
-          // 镜像模式：先创建空磁盘，再设置 mirror 路径
+          // Mirror mode: create an empty disk first, then set the mirror path
           await App.api('disks/create', {
             method: 'POST',
             body: { path: diskPath, label: result.label, size: result.size, tier: result.tier },
           });
-          // 更新配置：disk2 + disk2Mirror
+          // Update the config with disk2 + disk2Mirror
           await App.api(`vms/${encodeURIComponent(vmName)}`, {
             method: 'PUT',
-            body: { hardware: { disk2: result.diskName, disk2Mirror: result.mirrorPath } },
+            body: { hardware: { disk2: result.diskName, disk2Mirror: result.mirrorPath, disk2Size: result.size, disk2Tier: result.tier } },
           });
         } else {
-          // 普通 .ocd 模式
+          // Plain .ocd mode
           await App.api('disks/create', {
             method: 'POST',
             body: { path: diskPath, label: result.label, size: result.size, tier: result.tier },
           });
           await App.api(`vms/${encodeURIComponent(vmName)}`, {
             method: 'PUT',
-            body: { hardware: { disk2: result.diskName } },
+            body: { hardware: { disk2: result.diskName, disk2Size: result.size, disk2Tier: result.tier } },
           });
         }
-        // 刷新
         const newCfg = await App.api(`vms/${encodeURIComponent(vmName)}`);
         openHardwareEditor(vmName, newCfg);
       } catch (e) {
@@ -1418,14 +1427,13 @@ const Console = (() => {
       }
     });
     if (disk2OpenosBtn) disk2OpenosBtn.addEventListener('click', async () => {
-      // 复制 OpenOS 模板到 disk2
+      // Copy the OpenOS template to disk2
       try {
-        // 通过 PUT 设置 disk2 = 'openos' 让 server 处理
+        // Set disk2 = 'openos' through PUT and let the server do the copy
         await App.api(`vms/${encodeURIComponent(vmName)}`, {
           method: 'PUT',
           body: { hardware: { disk2: 'openos' } },
         });
-        // 刷新
         const newCfg = await App.api(`vms/${encodeURIComponent(vmName)}`);
         openHardwareEditor(vmName, newCfg);
       } catch (e) {
@@ -1433,7 +1441,7 @@ const Console = (() => {
       }
     });
 
-    // 磁盘1 新建/OpenOS/导入
+    // Disk 1: new disk / OpenOS / import
     const disk1NewBtn = document.querySelector('#hw-disk1-new');
     const disk1OpenosBtn = document.querySelector('#hw-disk1-openos');
     const disk1ImportBtn = document.querySelector('#hw-disk1-import');
@@ -1451,7 +1459,7 @@ const Console = (() => {
           });
           await App.api(`vms/${encodeURIComponent(vmName)}`, {
             method: 'PUT',
-            body: { hardware: { disk1: result.diskName, disk1Mirror: result.mirrorPath } },
+            body: { hardware: { disk1: result.diskName, disk1Mirror: result.mirrorPath, disk1Size: result.size, disk1Tier: result.tier } },
           });
         } else {
           await App.api('disks/create', {
@@ -1460,7 +1468,7 @@ const Console = (() => {
           });
           await App.api(`vms/${encodeURIComponent(vmName)}`, {
             method: 'PUT',
-            body: { hardware: { disk1: result.diskName } },
+            body: { hardware: { disk1: result.diskName, disk1Size: result.size, disk1Tier: result.tier } },
           });
         }
         const newCfg = await App.api(`vms/${encodeURIComponent(vmName)}`);
@@ -1493,7 +1501,7 @@ const Console = (() => {
           body: { vmName, content: b64, filename: file.name },
         });
         if (result && result.ok) {
-          // 设置为 disk1
+          // Assign as disk1
           await App.api(`vms/${encodeURIComponent(vmName)}`, {
             method: 'PUT',
             body: { hardware: { disk1: result.filename } },
@@ -1506,7 +1514,7 @@ const Console = (() => {
       }
     });
 
-    // 磁盘2 导入
+    // Disk 2 import
     const disk2ImportBtn = document.querySelector('#hw-disk2-import');
     const disk2ImportFile = document.querySelector('#hw-disk2-import-file');
     if (disk2ImportBtn) disk2ImportBtn.addEventListener('click', () => disk2ImportFile.click());
@@ -1533,14 +1541,14 @@ const Console = (() => {
       }
     });
 
-    // 启动顺序列表
+    // Boot order list
     const bootOrderList = document.querySelector('#hw-boot-order-list');
-    // 默认顺序
+    // Default order
     const defaultOrder = ['disk1', 'disk2', 'floppy'];
     let bootOrder = cur.bootOrder && Array.isArray(cur.bootOrder) ? [...cur.bootOrder] : [...defaultOrder];
-    // 过滤掉不在默认列表中的项
+    // Drop entries that are not bootable devices
     bootOrder = bootOrder.filter(d => defaultOrder.includes(d));
-    // 补充缺失的设备
+    // Append missing devices
     for (const d of defaultOrder) {
       if (!bootOrder.includes(d)) bootOrder.push(d);
     }
@@ -1576,22 +1584,19 @@ const Console = (() => {
         }
       });
     }
-    // 把 bootOrder 挂到 window 上供 saveHardware 读取
+    // Publish bootOrder on window so saveHardware can read it
     window._bootOrder = bootOrder;
 
-    // 保存按钮
     const saveBtn = document.querySelector('#btn-save-hw');
     if (saveBtn) {
       saveBtn.addEventListener('click', () => saveHardware(vmName, cfg));
     }
 
-    // 热插拔按钮
     const hotplugBtn = document.querySelector('#btn-hotplug');
     if (hotplugBtn) {
       hotplugBtn.addEventListener('click', () => saveHardware(vmName, cfg, true));
     }
 
-    // 关闭按钮
     document.querySelector('.modal-footer button[data-action="modal-close"]')
       .addEventListener('click', () => Modal.close());
   }
@@ -1600,13 +1605,13 @@ const Console = (() => {
     const t = I18N.t;
     const patch = { hardware: {} };
 
-    // 收集所有字段
+    // Collect every field
     const getVal = (id) => {
       const el = document.getElementById(id);
       return el ? el.value : null;
     };
 
-    // 从 storage-option 列表中获取选中的值
+    // Read the selected value from a storage-option list
     const getSelectedFromList = (listId) => {
       const list = document.getElementById(listId);
       if (!list) return null;
@@ -1615,9 +1620,9 @@ const Console = (() => {
     };
 
     if (!isHotplug) {
-      // 停机时可修改全部
+      // Everything is editable while stopped
       patch.hardware.apu = { tier: getVal('hw-apu') };
-      // 内存: 下拉框选「自定义」时读取 MB 输入框
+      // Memory: read the MB input when the dropdown is on "custom"
       const oldTiers = Array.isArray(oldCfg?.hardware?.memory) ? oldCfg.hardware.memory : [3, 3];
       const readMem = (i) => {
         const sel = getVal(i === 0 ? 'hw-mem1' : 'hw-mem2');
@@ -1634,10 +1639,10 @@ const Console = (() => {
       }
       patch.hardware.memory = [mem1.tier, mem2.tier];
       patch.hardware.memoryMB = [mem1.mb, mem2.mb];
-      // EEPROM: 从选项列表获取
+      // EEPROM from the option list
       const eepromVal = getSelectedFromList('hw-eeprom-list') || 'built-in';
       patch.hardware.eeprom = eepromVal;
-      // 如果选中的是文件, 设置 eepromLabel
+      // A file was selected, so record its label
       if (eepromVal !== 'built-in') {
         const list = document.getElementById('hw-eeprom-list');
         if (list) {
@@ -1650,32 +1655,32 @@ const Console = (() => {
       } else {
         patch.hardware.eepromLabel = null;
       }
-      // 注意: screen 在 config 外层 (config.screen), 不是 config.hardware.screen
+      // Note: screen lives at config.screen, not config.hardware.screen
       patch.screen = { tier: parseInt(getVal('hw-screen'), 10) };
     }
 
-    // 磁盘1: 从选项列表获取
+    // Disk 1 from the option list
     const d1Val = getSelectedFromList('hw-disk1-list');
     if (d1Val !== null) {
       patch.hardware.disk1 = d1Val || null;
     }
 
-    // 磁盘2: 从选项列表获取
+    // Disk 2 from the option list
     const d2Val = getSelectedFromList('hw-disk2-list');
     patch.hardware.disk2 = d2Val || null;
 
-    // 软盘: 先读取值, 再处理空软盘弹窗 (避免 Modal 替换后 DOM 丢失)
+    // Floppy: read the value before the empty-floppy dialog, since Modal replaces the DOM
     let floppyVal = getVal('hw-floppy') || null;
-    // 扩展卡: 在 askFloppySize 之前读取, 避免 Modal 替换后 DOM 丢失
+    // Expansion cards: read before askFloppySize for the same reason
     const exp1 = getVal('hw-exp1') || null;
     const exp2 = getVal('hw-exp2') || null;
     const exp3 = getVal('hw-exp3') || null;
 
-    // 选中"空软盘"时, 弹出大小选择界面; 取消则中止保存
+    // Choosing "empty floppy" opens the size picker; cancelling aborts the save
     if (floppyVal === 'empty') {
       const size = await askFloppySize();
       if (!size) {
-        // 用户取消, 重新打开硬件编辑器
+        // Cancelled: reopen the hardware editor
         const cfg = await App.api(`vms/${encodeURIComponent(vmName)}`);
         if (cfg) openHardwareEditor(vmName, cfg);
         return;
@@ -1685,33 +1690,33 @@ const Console = (() => {
     }
     patch.hardware.floppy = floppyVal;
     patch.hardware.expansion = [exp1, exp2, exp3];
-    // 无线信号强度: 空 = 自动(跟随网卡等级)
+    // Signal strength: empty = auto (follows the card tier)
     const strengthVal = getVal('hw-modem-strength');
     patch.hardware.modemStrength = strengthVal ? parseInt(strengthVal, 10) : null;
 
-    // 启动顺序
+    // Boot order
     if (!isHotplug && window._bootOrder) {
       patch.hardware.bootOrder = window._bootOrder;
     }
 
-    // 磁盘1: 如果运行中且改了, 警告崩溃
+    // Disk 1: changing it while running crashes the guest, so warn first
     if (isHotplug) {
       if (d1Val !== oldCfg.hardware.disk1) {
         if (!confirm(t('hw.confirm-disk1-remove'))) return;
         patch.hardware.disk1 = d1Val || null;
-        // 崩溃处理: 先保存配置, 再停止VM
+        // Crash handling: persist the config, then stop the VM
         await App.api(`vms/${encodeURIComponent(vmName)}`, {
           method: 'PUT',
           body: patch,
         });
         await App.api(`vms/${encodeURIComponent(vmName)}/stop`, { method: 'POST' });
-        // 显示错误弹窗
+        // Show the error dialog
         alert(t('hw.crash-msg').replace('{name}', vmName));
         Modal.close();
         return;
       }
     } else {
-      // 停机时也可改 disk1，支持不挂载
+      // While stopped disk1 can also change, including unmounting
       if ((d1Val || '') !== (oldCfg.hardware.disk1 || '')) {
         patch.hardware.disk1 = d1Val || null;
       }
@@ -1731,7 +1736,6 @@ const Console = (() => {
       return;
     }
     Modal.close();
-    // 刷新状态
     App.api(`vms/${encodeURIComponent(vmName)}/state`).then(s => {
       if (s) {
         const view = getView(vmName);
@@ -1741,7 +1745,7 @@ const Console = (() => {
     });
   }
 
-  // ---------- 屏幕渲染 ----------
+  // ---------- Screen rendering ----------
   function resizeCanvas(vmName) {
     const view = getView(vmName);
     if (!view.canvas || !view.canvasStage) return;
@@ -1750,10 +1754,10 @@ const Console = (() => {
     const sh = stage.clientHeight - 4;
     if (sw <= 0 || sh <= 0 || !view.w || !view.h) return;
 
-    // OC 标准字符宽高比: 1:2 (宽度 = 高度 / 2)
+    // Standard OC character aspect ratio: 1:2 (width = height / 2)
     const ratio = 1 / 2;
 
-    // 计算每字符的目标CSS像素 (使网格填满容器)
+    // Target CSS pixels per character, so the grid fills the container
     let targetCw = sw / view.w;
     let targetCh = targetCw / ratio;
     if (targetCh * view.h > sh) {
@@ -1761,14 +1765,14 @@ const Console = (() => {
       targetCw = targetCh * ratio;
     }
 
-    // 内部渲染分辨率: 每字符用固定的 8x16 像素 (Unifont 原生尺寸)
+    // Internal resolution: a fixed 8x16 pixels per character (Unifont's native size)
     const cw = 8;
     const ch = 16;
 
     view.charW = cw; view.charH = ch;
     const dpr = window.devicePixelRatio || 1;
 
-    // 主 Canvas: DPR 缩放, drawImage 时用最近邻插值
+    // Main canvas: DPR-scaled, nearest-neighbor when drawImage runs
     view.canvas.width = Math.round(view.w * cw * dpr);
     view.canvas.height = Math.round(view.h * ch * dpr);
     view.canvas.style.width = (view.w * targetCw) + 'px';
@@ -1782,29 +1786,29 @@ const Console = (() => {
     view.ctx.textBaseline = 'middle';
     view.ctx.textAlign = 'center';
 
-    // 离屏 Canvas: 1:1 像素, 用于位图字体渲染
+    // Offscreen canvas: 1:1 pixels, used for bitmap font rendering
     if (!view.offscreen) {
       view.offscreen = document.createElement('canvas');
       view.offCtx = view.offscreen.getContext('2d');
     }
     view.offscreen.width = view.w * cw;
     view.offscreen.height = view.h * ch;
-    // ImageData: 直接像素操作, 避免几千次 fillRect 调用
+    // ImageData: write pixels directly instead of thousands of fillRect calls
     view.imgData = view.offCtx.createImageData(view.w * cw, view.h * ch);
-    view._pixelBuf = view.imgData.data; // 缓存引用, 避免重复访问
+    view._pixelBuf = view.imgData.data; // Cached reference to avoid repeated property lookups
   }
 
-  // 兼容旧调用: 重新计算并渲染
+  // Backward-compatible alias: recompute and repaint
   function fitCanvasToContainer(vmName) {
     resizeCanvas(vmName);
   }
 
-  // ---------- 全屏 / 横屏 ----------
+  // ---------- Fullscreen / landscape ----------
   function isTouchDevice() {
     return !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
   }
 
-  // Screen Orientation API 的 lock 只在部分浏览器可用 (iOS Safari 不提供)
+  // screen.orientation.lock exists only in some browsers (not in iOS Safari)
   function orientationLockSupported() {
     return !!(window.screen && screen.orientation && typeof screen.orientation.lock === 'function');
   }
@@ -1813,8 +1817,8 @@ const Console = (() => {
     if (!orientationLockSupported()) return;
     try {
       const p = screen.orientation.lock('landscape');
-      if (p && p.catch) p.catch(() => { /* 浏览器拒绝时保持当前方向 */ });
-    } catch (e) { /* 忽略 */ }
+      if (p && p.catch) p.catch(() => { /* keep the current orientation when the browser refuses */ });
+    } catch (e) { /* ignore */ }
   }
 
   function unlockOrientation() {
@@ -1822,18 +1826,18 @@ const Console = (() => {
       if (window.screen && screen.orientation && typeof screen.orientation.unlock === 'function') {
         screen.orientation.unlock();
       }
-    } catch (e) { /* 忽略 */ }
+    } catch (e) { /* ignore */ }
   }
 
-  // 原生全屏: 锁定方向的前提是先进入全屏, 因此两步串联
+  // Native fullscreen: orientation can only be locked inside fullscreen, hence the chained steps
   function requestNativeFullscreen(el) {
     const fn = el.requestFullscreen || el.webkitRequestFullscreen;
     if (!fn) return;
     try {
       const p = fn.call(el, { navigationUI: 'hide' });
-      if (p && p.then) p.then(lockLandscape, () => { /* 不支持时忽略 */ });
+      if (p && p.then) p.then(lockLandscape, () => { /* ignore when unsupported */ });
       else lockLandscape();
-    } catch (e) { /* 忽略 */ }
+    } catch (e) { /* ignore */ }
   }
 
   function exitNativeFullscreen() {
@@ -1843,11 +1847,11 @@ const Console = (() => {
     try {
       const p = fn.call(document);
       if (p && p.catch) p.catch(() => {});
-    } catch (e) { /* 忽略 */ }
+    } catch (e) { /* ignore */ }
   }
 
-  // 无法锁定方向时 (如 iOS Safari), 在竖屏下把舞台旋转 90° 呈现横屏。
-  // 舞台是包住画布的独立容器, 按钮等控件不随之旋转。
+  // Without orientation lock (iOS Safari), portrait fullscreen rotates the stage 90° instead.
+  // The stage wraps only the canvas, so buttons and other controls stay upright.
   function syncFsRotation(vmName) {
     const view = getView(vmName);
     const wrap = view.canvasWrap;
@@ -1859,25 +1863,25 @@ const Console = (() => {
     if (rotate === !!view.fsRotated) return;
     view.fsRotated = rotate;
     wrap.classList.toggle('fs-rotate', rotate);
-    // 类名切换不触发 resize, 这里手动重新适配画布
+    // Class changes do not fire resize, so refit the canvas manually
     requestAnimationFrame(() => {
       fitCanvasToContainer(vmName);
       repaintAll(vmName);
     });
   }
 
-  // 全屏切换
+  // Fullscreen toggle
   function setFullscreen(vmName, on) {
     const view = getView(vmName);
     const wrap = view.canvasWrap;
     if (!wrap || view.isFullscreen === on) return;
     view.isFullscreen = on;
-    // 切换全屏时清掉未完成的触摸手势, 避免半途按下留在旧模式里
+    // Drop unfinished touch gestures when toggling fullscreen, so a half press does not leak into the new mode
     view._pressPoint = null;
     view._lpFired = false;
     clearLongPress(view);
     wrap.classList.toggle('fullscreen', on);
-    // ESC 退出全屏 (在 capture 阶段拦截, 防止冒泡到 canvas 的 onKey)
+    // ESC exits fullscreen (intercepted in the capture phase so it never reaches canvas onKey)
     if (on) {
       view._escHandler = (e) => {
         if (e.key === 'Escape') {
@@ -1887,7 +1891,7 @@ const Console = (() => {
         }
       };
       document.addEventListener('keydown', view._escHandler, true);
-      // 全屏区域内点击任意位置都把焦点拉回 canvas (输入法按钮/输入框除外)
+      // Refocus the canvas on any click inside fullscreen (except the IME button/input)
       view._fsFocusHandler = (e) => {
         const target = e.target;
         if (target === view.canvas) return;
@@ -1895,10 +1899,10 @@ const Console = (() => {
         view.canvas.focus();
       };
       wrap.addEventListener('mousedown', view._fsFocusHandler, true);
-      // 移动端: 进入原生全屏并锁定横屏
+      // Mobile: enter native fullscreen and lock landscape
       if (isTouchDevice()) requestNativeFullscreen(wrap);
       syncFsRotation(vmName);
-      // 进入全屏后立即聚焦 canvas, 否则 keydown 收不到
+      // Focus the canvas right after entering, otherwise keydown never arrives
       setTimeout(() => {
         view.canvas.focus();
         fitCanvasToContainer(vmName);
@@ -1917,7 +1921,7 @@ const Console = (() => {
       exitNativeFullscreen();
       view.fsRotated = false;
       wrap.classList.remove('fs-rotate');
-      // 退出全屏时收起软键盘
+      // Dismiss the soft keyboard when leaving fullscreen
       if (view.imeInput) view.imeInput.blur();
       setTimeout(() => { fitCanvasToContainer(vmName); repaintAll(vmName); }, 30);
     }
@@ -1927,7 +1931,7 @@ const Console = (() => {
     setFullscreen(vmName, !getView(vmName).isFullscreen);
   }
 
-  // 系统手势 / ESC 退出原生全屏时, 同步回退页面内的全屏状态
+  // A system gesture or ESC that leaves native fullscreen must also reset the in-page state
   document.addEventListener('fullscreenchange', () => {
     if (document.fullscreenElement) return;
     views.forEach((view, vmName) => {
@@ -1966,14 +1970,14 @@ const Console = (() => {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
-  // 将离屏 Canvas 内容刷新到主 Canvas (DPR 缩放)
+  // Copy the offscreen canvas onto the main canvas (DPR scaling)
   function flushScreen(view) {
     if (hexFont && view.offscreen) {
       view.ctx.drawImage(view.offscreen, 0, 0);
     }
   }
 
-  // 渲染节流: rAF 合并 + 脏更新 (只重绘变化的单元格)
+  // Render throttle: rAF coalescing plus dirty cells (only changed cells repaint)
   let _rafPending = false;
   let _dirtyVMs = new Map();  // vmName -> { full: bool, cells: Set }
 
@@ -1995,7 +1999,7 @@ const Console = (() => {
     });
   }
 
-  // 标记单元格为脏 (cellIdx = y * w + x, 0-based)
+  // Mark a cell dirty (cellIdx = y * w + x, 0-based)
   function _markDirtyCell(vmName, cellIdx) {
     let info = _dirtyVMs.get(vmName);
     if (!info) {
@@ -2004,7 +2008,7 @@ const Console = (() => {
     }
     if (!info.full) {
       info.cells.add(cellIdx);
-      // 脏格太多时退化为全屏重绘 (避免过多的小更新)
+      // Too many dirty cells degrade to a full repaint, avoiding many tiny updates
       if (info.cells.size > 200) {
         info.full = true;
         info.cells.clear();
@@ -2012,18 +2016,18 @@ const Console = (() => {
     }
   }
 
-  // 真正执行渲染 (两趟: 先填背景, 再画字符, 避免宽字符右半边被覆盖)
+  // Actual paint, two passes: backgrounds first, then glyphs, so wide glyphs keep their right half
   function _doPaint(vmName, info) {
     const view = getView(vmName);
     if (!view.ctx || !view.cells || !view.w || !view.h) return;
-    // 正常关闭后画面固定为黑色, 不重绘 (否则离屏缓冲会把旧画面刷回来)
+    // After a clean shutdown the screen stays black; repainting would let the offscreen buffer restore the old frame
     if (view.stoppedAppearance === 'black') return;
     const cw = view.charW, ch = view.charH;
     const cells = view.cells;
     const w = view.w, h = view.h;
     const target = (hexFont && view.offCtx) ? view.offCtx : view.ctx;
 
-    // 收集需要重绘的单元格索引 (去重)
+    // Collect the cell indices to repaint (de-duplicated)
     const repaint = new Set();
     if (info.full) {
       for (let i = 0; i < cells.length; i++) repaint.add(i);
@@ -2032,14 +2036,14 @@ const Console = (() => {
         repaint.add(idx);
         const y = Math.floor(idx / w);
         const x = idx - y * w;
-        // 若当前格是宽字符的续接格, 需要重绘前一格 (宽字符占两格)
+        // If this cell is the tail of a wide glyph, repaint the cell before it
         if (x > 0) {
           const prevCell = cells[idx - 1];
           if (prevCell && prevCell[2] && isWideGlyph(prevCell[2])) {
             repaint.add(idx - 1);
           }
         }
-        // 若当前格字符是宽字符, 下一格也要重绘背景
+        // If this cell holds a wide glyph, the next cell's background must repaint too
         if (x < w - 1) {
           const cell = cells[idx] || [0, 0xffffff, ' '];
           if (cell[2] && isWideGlyph(cell[2])) {
@@ -2049,7 +2053,7 @@ const Console = (() => {
       }
     }
 
-    // 第一趟: 填充所有背景
+    // Pass 1: fill every background
     const bgCSSCache = new Map();
     for (const idx of repaint) {
       const y = Math.floor(idx / w);
@@ -2062,7 +2066,7 @@ const Console = (() => {
       target.fillRect(x * cw, y * ch, cw, ch);
     }
 
-    // 第二趟: 绘制所有字符 (宽字符右半边不会被覆盖)
+    // Pass 2: draw every glyph (a wide glyph's right half is not overwritten)
     for (const idx of repaint) {
       const y = Math.floor(idx / w);
       const x = idx - y * w;
@@ -2073,7 +2077,7 @@ const Console = (() => {
       const fg = cell[1];
       const px = x * cw, py = y * ch;
 
-      // hex font: 用位图精确渲染
+      // Hex font: exact bitmap rendering
       if (hexFont) {
         const cp = ch_.codePointAt(0);
         const glyph = hexFont.get(cp);
@@ -2099,7 +2103,7 @@ const Console = (() => {
         }
       }
 
-      // 备用渲染: TTF fillText
+      // Fallback: TTF fillText
       target.fillStyle = colorToCSS(fg);
       target.textBaseline = 'middle';
       target.textAlign = 'center';
@@ -2107,7 +2111,7 @@ const Console = (() => {
     }
     flushScreen(view);
 
-    // 光标
+    // Cursor
     if (view.cursor) {
       const cx = (view.cursor.x || 1) - 1;
       const cy = (view.cursor.y || 1) - 1;
@@ -2118,7 +2122,7 @@ const Console = (() => {
       }
     }
 
-    // 渲染统计 (仅 full 级别输出, 每 5 秒一行)
+    // Render stats (full level only, one line every 5 seconds)
     if (showFps) view._fpsFrames = (view._fpsFrames || 0) + 1;
     _renderStats.frames++;
     _renderStats.cells += repaint.size;
@@ -2140,23 +2144,23 @@ const Console = (() => {
     const view = getView(vmName);
     if (!view.ctx) return;
 
-    // 注意: 这里刻意不根据"收到画面帧"来清除已停止的外观。
-    // 订阅一个已停止的 VM 时, 服务端会把最后一次屏幕快照发过来, 若按帧判断
-    // 会误认为系统仍在运行, 于是又显示出彩色旧画面。
-    // 画面外观只由 s2c.state 驱动 (见 onServerMessage)。
+    // Deliberately do not clear the stopped appearance when a frame arrives.
+    // Subscribing to a stopped VM replays its last snapshot, and trusting frames
+    // would mark it running again and show the stale colored screen.
+    // Appearance is driven by s2c.state only (see onServerMessage).
     if (msg.cursor) {
       view.cursor = msg.cursor;
     }
 
     if (msg.full && msg.cells) {
-      // 全屏: 标准 cells 数组格式
+      // Full frame: the standard cells array
       view.w = msg.w || view.w;
       view.h = msg.h || view.h;
       view.cells = msg.cells;
       resizeCanvas(vmName);
       _schedulePaint(vmName, true);
     } else if (msg.dirty) {
-      // 脏更新
+      // Dirty update
       const w = view.w;
       for (const [x, y, bg, fg, ch_] of msg.dirty) {
         const idx = (y - 1) * w + (x - 1);
@@ -2165,7 +2169,7 @@ const Console = (() => {
       }
       _schedulePaint(vmName, false);
     } else {
-      // 只有光标更新
+      // Cursor-only update
       _schedulePaint(vmName, false);
     }
   }
@@ -2174,12 +2178,12 @@ const Console = (() => {
     _schedulePaint(vmName, true);
   }
 
-  // 系统停止后的画面表现。
-  //   mode = 'black' 正常关闭 (guest 自己 shutdown, 或用户主动点停止/重启)
-  //          'gray'  异常停止 (进程崩溃、被意外杀掉、服务端断开、状态未知)
-  //          null    恢复正常显示
-  // 正常关闭时整个画面清黑; 异常停止时保留最后一帧并整体置灰, 这样一眼就能
-  // 分辨"系统是正常关了"还是"运行中突然没了"。
+  // Screen appearance after the system stops.
+  //   'black'  clean shutdown (guest shut itself down, or the user pressed stop/restart)
+  //   'gray'   abnormal stop (crash, killed process, server disconnect, unknown state)
+  //   null     normal display
+  // A clean shutdown clears the screen to black; an abnormal stop keeps the last frame but
+  // desaturates it, so "shut down" and "vanished while running" are distinguishable at a glance.
   function setStoppedAppearance(vmName, mode) {
     const view = getView(vmName);
     if (!view) return;
@@ -2189,22 +2193,22 @@ const Console = (() => {
     applyStoppedVisual(vmName);
   }
 
-  // 把已记录的"停止外观"画到画布上。画布可能还没创建 (标签页没打开),
-  // 这时只记录状态, 等 renderVMView 建好画布后再应用。
+  // Draw the recorded stopped appearance. The canvas may not exist yet (tab not opened),
+  // in which case only the state is stored and applied later by renderVMView.
   function applyStoppedVisual(vmName) {
     const view = getView(vmName);
     if (!view || !view.canvas) return;
     const next = view.stoppedAppearance;
 
-    // 灰屏用 CSS 滤镜实现: 不关心画布是 hex 位图逐像素绘制还是离屏合成,
-    // 直接对整块画布去色变暗即可。
+    // Gray uses a CSS filter, so it works whether the canvas is drawn per pixel or composited;
+    // the whole canvas is simply desaturated and dimmed.
     try {
       view.canvas.style.filter = (next === 'gray') ? 'grayscale(1) brightness(0.55)' : '';
     } catch (e) {}
 
     if (next === 'black') {
-      // 清空可见画布与离屏缓冲, 并丢弃单元格缓存 (否则后续 flushScreen
-      // 或光标闪烁会把旧画面重新刷回来)
+      // Clear the visible canvas and the offscreen buffer, and drop the cell cache; otherwise a later
+      // flushScreen or cursor blink would paint the old frame back.
       const clear = (c) => {
         try {
           c.fillStyle = '#000';
@@ -2216,16 +2220,16 @@ const Console = (() => {
       view.cells = [];
     }
 
-    // 停止后光标不应继续闪烁 (会让人以为系统还活着)
+    // A stopped VM must not keep blinking its cursor, which suggests it is still alive
     if (next && view.cursorTimer) {
       clearInterval(view.cursorTimer);
       view.cursorTimer = null;
     }
   }
 
-  // 统一应用一次服务器状态: 更新状态、按钮可用性, 以及停止后的画面表现。
-  // 同时被 WebSocket 的 s2c.state 与 5 秒轮询调用; 因此即使某条状态消息漏掉,
-  // 控制按钮也会在下次轮询时自动纠正, 不需要刷新整个页面。
+  // Apply one server state consistently: state, button availability and stopped appearance.
+  // Called by both s2c.state and the 5-second poll, so a lost state message
+  // is corrected on the next poll without reloading the page.
   function applyServerState(vmName, state, exitCode, cleanStop) {
     const view = getView(vmName);
     if (!view) return;
@@ -2234,12 +2238,12 @@ const Console = (() => {
 
     const st = view.state;
     if (st === 'stopped' || st === 'error') {
-      // 只有"确实异常退出"才判为灰屏:
-      //   exitCode 是数字且非 0 -> 崩溃/被杀
-      //   exitCode === 0 -> guest 自己 shutdown (正常关机)
-      //   exitCode / cleanStop 都缺失 -> 这台 VM 本次会话从未运行过 (未知),
-      //     不能当成崩溃, 否则每次刷新/首次打开都会给一台"干净停止"的机器
-      //     套上灰屏滤镜, 看起来像是状态刷新错了。
+      // Only a genuine abnormal exit counts as gray:
+      //   numeric exitCode != 0 -> crashed / killed
+      //   exitCode === 0 -> the guest shut itself down
+      //   exitCode and cleanStop both missing -> never ran this session (unknown);
+      //     treating that as a crash would gray out every freshly loaded clean state
+      //     and look like a broken refresh.
       const crashed = (typeof exitCode === 'number' && exitCode !== 0);
       const clean = !crashed || cleanStop === true || view.expectCleanStop === true;
       setStoppedAppearance(vmName, clean ? 'black' : 'gray');
@@ -2249,8 +2253,8 @@ const Console = (() => {
     }
   }
 
-  // 与服务器断开连接 (服务端关机 / 重启 / 网络中断):
-  // 正在运行或暂停中的 VM 画面转为灰色, 表示"运行中被意外中止"。
+  // Lost the server (shutdown / restart / network drop): running or paused VMs
+  // turn gray to show they were interrupted.
   function onConnectionLost() {
     for (const [vmName, view] of views) {
       const st = view.state;
@@ -2279,13 +2283,13 @@ const Console = (() => {
     const bgCSS = colorToCSS(bg);
     const fgCSS = colorToCSS(fg);
 
-    // 先填充背景
+    // Background first
     ctx.fillStyle = bgCSS;
     ctx.fillRect(px, py, cw, ch);
 
     if (!ch_ || ch_ === ' ') return;
 
-    // hex font: 用位图精确渲染 (逐像素段 fillRect)
+    // Hex font: exact bitmap rendering (one fillRect per horizontal run)
     if (hexFont) {
       const cp = ch_.codePointAt(0);
       const glyph = hexFont.get(cp);
@@ -2294,7 +2298,7 @@ const Console = (() => {
         const bytes = glyph.bytes;
         const rowBytes = gw / 8;
         ctx.fillStyle = fgCSS;
-        // 逐行绘制连续像素段 (减少 fillRect 调用)
+        // Draw contiguous runs per row to reduce fillRect calls
         for (let row = 0; row < ch; row++) {
           let segStart = -1;
           for (let col = 0; col <= gw; col++) {
@@ -2311,7 +2315,7 @@ const Console = (() => {
       }
     }
 
-    // 备用渲染: TTF fillText
+    // Fallback: TTF fillText
     ctx.fillStyle = fgCSS;
     ctx.textBaseline = 'middle';
     ctx.textAlign = 'center';
@@ -2327,10 +2331,10 @@ const Console = (() => {
     return String(c);
   }
 
-  // ---------- 输入事件 ----------
+  // ---------- Input events ----------
   function sendInput(vmName, ev) {
-    // wsSend 在连接不可用时返回 false。输入 (键盘/鼠标/滚轮) 全部走这条通道,
-    // 提示一次: 静默丢弃会让"键盘/滚轮无反应"难以定位。
+    // wsSend returns false while the connection is down. All input (keyboard/mouse/wheel)
+    // goes through it; warn once, because silent drops make "keys do nothing" hard to diagnose.
     const ok = App.wsSend({ type: 'c2s.input', ...ev });
     if (ok === false) {
       diag.inputDropped++;
@@ -2343,13 +2347,13 @@ const Console = (() => {
   }
 
   // ============================================================
-  // 滚轮兼容模式
+  // Wheel compatibility mode
   //
-  // 有些鼠标/驱动/工具会把滚轮映射成 PageUp / PageDown 按键, 而不是 wheel 事件
-  // (实测: 服务端只收到 {"event":"key_down","code":209}, 页面里根本收不到 wheel)。
-  // 这种情况下模拟器永远拿不到 scroll 信号, 客户机自然"滚不动"。
-  // 打开本开关后, 当 PageUp/PageDown 落在虚拟机屏幕上时转成 scroll 信号
-  // (与真滚轮完全一致), 不把这两个键原样发给客户机。
+  // Some mice, drivers or tools map the wheel to PageUp / PageDown instead of wheel events
+  // (observed: the server only receives {"event":"key_down","code":209}, no wheel at all).
+  // The emulator then never sees a scroll signal and the guest simply cannot scroll.
+  // With this switch on, PageUp/PageDown landing on the VM screen become scroll signals
+  // identical to a real wheel, and the keys are not forwarded to the guest.
   // ============================================================
   const WHEEL_KEY_COMPAT_KEY = 'oc-wheel-key-compat';
   function isWheelKeyCompat() {
@@ -2359,10 +2363,10 @@ const Console = (() => {
     try {
       if (on) localStorage.setItem(WHEEL_KEY_COMPAT_KEY, '1');
       else localStorage.removeItem(WHEEL_KEY_COMPAT_KEY);
-    } catch (e) { /* 忽略 */ }
+    } catch (e) { /* ignore */ }
   }
 
-  // 真 wheel 与"滚轮被映射成按键"两条路共用的发送逻辑
+  // Shared send path for real wheel events and wheel-mapped keys
   function sendScroll(vmName, x, y, px, py, delta) {
     diag.wheelSent++;
     const sent = sendInput(vmName, { event: 'scroll', x, y, px, py, delta });
@@ -2374,50 +2378,49 @@ const Console = (() => {
 
   function onKey(e, vmName) {
     const view = getView(vmName);
-    // 全屏模式下 ESC 仅用于退出全屏, 不转发给 VM
+    // In fullscreen ESC only exits fullscreen and is not forwarded
     if (view.isFullscreen && e.key === 'Escape') {
       e.preventDefault();
       return;
     }
-    // 兼容模式: 把被映射成 PageUp/PageDown 的滚轮当成真滚轮
+    // Compatibility: treat wheel-mapped PageUp/PageDown as a real wheel
     if (isWheelKeyCompat() && (e.code === 'PageUp' || e.code === 'PageDown')) {
       e.preventDefault();
       if (e.type === 'keydown' && !e.repeat) {
-        // 上 = +1, 下 = -1, 与真 wheel 约定一致
+        // Up = +1, down = -1, matching the real wheel convention
         const delta = (e.code === 'PageUp') ? 1 : -1;
         const pt = view.lastPt || { x: view.w >> 1, y: view.h >> 1, px: (view.w >> 1) * 6, py: (view.h >> 1) * 9 };
         sendScroll(vmName, pt.x, pt.y, pt.px, pt.py, delta);
       }
-      return;  // keyup 一并吞掉, 避免发出悬空的 key_up
+      return;  // Swallow keyup as well, so no dangling key_up is emitted
     }
-    // 转发为 key_down / key_up
-    // OC 信号格式: key_down(address, char:number, code:number, playerName)
+    // OC signal: key_down(address, char:number, code:number, playerName)
     const code = mapKeyCode(e);
     if (code == null) return;
     e.preventDefault();
-    // char 是字符的 Unicode 码点 (数字), 无字符则为 0
+    // char is the Unicode code point (a number), or 0 for keys without one
     const charCode = (e.key && e.key.length === 1) ? e.key.charCodeAt(0) : 0;
     sendInput(vmName, { event: e.type === 'keyup' ? 'key_up' : 'key_down', char: charCode, code });
   }
 
   function onKeyPress(e, vmName) {
-    // 浏览器 keypress 已废弃, 转为 key_down + key_up
+    // keypress is deprecated, so emit key_down + key_up
     if (!e.charCode) return;
     e.preventDefault();
     sendInput(vmName, { event: 'key_down', char: e.charCode, code: e.charCode });
     sendInput(vmName, { event: 'key_up',   char: e.charCode, code: e.charCode });
   }
 
-  // 移动端输入法 (软键盘) 桥接:
-  // 画布本身只能接收物理键盘事件, 手机软键盘需要可聚焦的输入元素。
-  // 这里用隐藏 textarea 接住输入法提交的文本/删除/回车, 再翻译成 key_down/key_up。
+  // Mobile IME (soft keyboard) bridge: the canvas only receives physical key events, while
+  // soft keyboards need a focusable element. A hidden textarea captures the committed
+  // text/delete/enter and translates them into key_down/key_up.
   const IME_SPECIAL_KEYS = {
     Enter: 0x1C, Backspace: 0x0E, Tab: 0x0F, Escape: 0x01,
     ArrowUp: 0xC8, ArrowDown: 0xD0, ArrowLeft: 0xCB, ArrowRight: 0xCD,
     Home: 0xC7, End: 0xCF, Delete: 0xD3, PageUp: 0xC9, PageDown: 0xD1,
   };
 
-  // ASCII 字符 → PS/2 扫描码; 非 ASCII 字符没有对应键位, 传 0。
+  // ASCII character -> PS/2 scan code; non-ASCII characters have no key, so 0
   function charScanCode(ch) {
     const lower = {
       ' ': 0x39,
@@ -2444,11 +2447,11 @@ const Console = (() => {
   }
 
   // ============================================================
-  // 虚拟键盘 (手机端)
+  // Virtual keyboard (mobile)
   //
-  // 手机软键盘没有 F1-F12、Insert、Delete 这类按键, 客户机程序却经常用到。
-  // 这里给出一整套键盘: 普通键按下发送一次 key_down + key_up;
-  // Ctrl / Alt / Shift 是一次性修饰键, 先点它再点目标键即可组合。
+  // Soft keyboards lack F1-F12, Insert, Delete and friends, which guest programs often need.
+  // Hence the full key set: a normal key sends one key_down + key_up;
+  // Ctrl / Alt / Shift are one-shot modifiers: tap one, then tap the target key.
   // ============================================================
   const VKBD_MODS = {
     ctrl: { char: 0, code: 0x1D },
@@ -2537,7 +2540,7 @@ const Console = (() => {
     for (const m of held.slice().reverse()) {
       sendInput(vmName, { event: 'key_up', char: VKBD_MODS[m].char, code: VKBD_MODS[m].code });
     }
-    // 修饰键只用一次, 避免下一次按键意外带着 Ctrl/Shift
+    // Modifiers are one-shot, so the next press does not carry Ctrl/Shift by accident
     if (held.length) {
       view.vkMods = { ctrl: false, alt: false, shift: false };
       updateVkbdMods(view);
@@ -2598,8 +2601,8 @@ const Console = (() => {
     const input = view.imeInput;
     if (!btn || !input) return;
 
-    // 部分输入法只触发 keydown (回车/退格), 部分只触发 input; 两条路径都接,
-    // 用 200ms 的时间窗口去重, 避免一次按键发出两条信号。
+    // Some IMEs only fire keydown (enter/backspace), others only input; listen to both and
+    // de-duplicate within a 200 ms window so one press does not send two signals.
     let lastKey = '';
     let lastKeyAt = 0;
     const markKey = (name) => {
@@ -2631,10 +2634,10 @@ const Console = (() => {
     });
 
     input.addEventListener('input', (e) => {
-      // 组词过程中不要清空/转发, 否则会打断输入法 (拼音/日文等)
+      // Never clear or forward while composing: it breaks pinyin, Japanese, etc.
       if (e.isComposing) return;
       const inputType = e.inputType || '';
-      // 退格/删除: 输入法通常只给 input 事件, 不给可用的 keydown
+      // Backspace/delete usually arrive only as input events, without a usable keydown
       if (inputType.indexOf('delete') === 0) {
         input.value = '';
         const isForward = inputType.indexOf('Forward') >= 0;
@@ -2659,7 +2662,7 @@ const Console = (() => {
           continue;
         }
         const codePoint = ch.codePointAt(0);
-        // OpenOS 的 string.char 只接受 0-255, 更高的码位会让客户机报错
+        // OpenOS string.char accepts only 0-255; higher code points make the guest throw
         if (codePoint < 32 || codePoint > 255) continue;
         const code = charScanCode(ch);
         sendInput(vmName, { event: 'key_down', char: codePoint, code });
@@ -2668,7 +2671,7 @@ const Console = (() => {
     });
 
     input.addEventListener('keydown', (e) => {
-      // 输入法组词过程中的按键不要拦截, 交给 input 事件
+      // Leave composing keys alone and let the input event handle them
       if (e.isComposing || e.keyCode === 229) return;
       const code = IME_SPECIAL_KEYS[e.key];
       if (code == null) return;
@@ -2678,11 +2681,11 @@ const Console = (() => {
     });
   }
 
-  // 把浏览器坐标换算成 OC 的字符坐标与精确像素坐标 (OC 标准: 每字符 6x9 像素)
+  // Map browser coordinates to OC cell and pixel coordinates (OC standard: 6x9 pixels per cell)
   function computePoint(view, clientX, clientY) {
     let localX, localY, boxW, boxH;
     if (view.fsRotated) {
-      // 舞台整体旋转 90°: 用实际变换矩阵做逆变换, 把屏幕坐标映射回画布布局坐标
+      // Stage rotated 90°: invert the real transform matrix to map screen coordinates back to layout space
       const stage = view.canvasStage;
       let local = null;
       try {
@@ -2692,7 +2695,7 @@ const Console = (() => {
         local = null;
       }
       if (!local) {
-        // 极老的浏览器没有 DOMMatrix: 按 rotate(90deg) translateY(-100%) 手算
+        // Very old browsers lack DOMMatrix: invert rotate(90deg) translateY(-100%) by hand
         local = { x: clientY, y: stage.offsetHeight - clientX };
       }
       localX = local.x - view.canvas.offsetLeft;
@@ -2701,7 +2704,7 @@ const Console = (() => {
       boxH = view.canvas.offsetHeight;
     } else {
       const rect = view.canvas.getBoundingClientRect();
-      // getBoundingClientRect 已反映 CSS transform 缩放后的实际渲染尺寸
+      // getBoundingClientRect already reflects CSS transform scaling
       localX = clientX - rect.left;
       localY = clientY - rect.top;
       boxW = rect.width;
@@ -2711,13 +2714,13 @@ const Console = (() => {
     const realCharH = boxH / view.h;
     const x = Math.max(1, Math.min(view.w, Math.floor(localX / realCharW) + 1));
     const y = Math.max(1, Math.min(view.h, Math.floor(localY / realCharH) + 1));
-    // 计算指针在当前字符内的相对位置 (0-1)
+    // Pointer position inside the current cell (0-1)
     const fx = localX / realCharW - (x - 1);
     const fy = localY / realCharH - (y - 1);
-    // 像素坐标: 1-based, 总像素 = 字符数 * 每字符像素数
+    // Pixel coordinates are 1-based; total = cells * pixels per cell
     const px = Math.max(1, Math.min(view.w * 6, (x - 1) * 6 + Math.floor(fx * 6) + 1));
     const py = Math.max(1, Math.min(view.h * 9, (y - 1) * 9 + Math.floor(fy * 9) + 1));
-    // 记住指针在屏幕内的最后位置: 兼容模式下 PageUp/PageDown 没有坐标, 用这个位置滚
+    // Remember the last on-screen pointer position: wheel-mapped PageUp/PageDown carry no coordinates
     view.lastPt = { x, y, px, py };
     return { x, y, px, py };
   }
@@ -2730,12 +2733,12 @@ const Console = (() => {
     sendInput(vmName, { event: evName, ...point, btn });
   }
 
-  // 触屏事件与鼠标语义一致 (touch / drag / drop), 由 touchstart/touchmove/touchend 调用
+  // Touch mirrors mouse semantics (touch / drag / drop), driven by touchstart/touchmove/touchend
   function onTouch(touch, vmName, evName, btn = 0) {
     sendTouchAt(vmName, touch.clientX, touch.clientY, evName, btn);
   }
 
-  // 按屏幕坐标发送触屏事件 (长按定时器触发时原始 touch 对象可能已失效)
+  // Send a touch event by screen coordinates (the original touch may be gone when the long-press timer fires)
   function sendTouchAt(vmName, x, y, evName, btn = 0) {
     const view = getView(vmName);
     if (!view.canvas || !view.w || !view.h) return;
@@ -2743,12 +2746,12 @@ const Console = (() => {
     sendInput(vmName, { event: evName, ...point, btn });
   }
 
-  // 右键手势的可用状态: 全屏、系统运行中 (错误/停止时长按不触发右键)
+  // Right-click gesture availability: fullscreen and running (no right click on error/stopped)
   function isRightClickGesture(view) {
     return !!view.isFullscreen && view.state === 'running';
   }
 
-  // 长按判定: 按住不动达到时长发送右键, 位移超过阈值则按拖动处理
+  // Long press: emit a right click after the delay; moving past the threshold becomes a drag
   const LONG_PRESS_MS = 500;
   const LONG_PRESS_DIST = 15;
 
@@ -2759,7 +2762,7 @@ const Console = (() => {
     }
   }
 
-  // 虚拟滚轮: 以指针最后位置为准, 没有则用屏幕中心
+  // Virtual wheel: use the last pointer position, else the screen center
   function sendScrollAtPointer(vmName, delta) {
     const view = getView(vmName);
     if (!view.canvas || !view.w || !view.h) return;
@@ -2780,16 +2783,16 @@ const Console = (() => {
       return;
     }
     const point = computePoint(view, e.clientX, e.clientY);
-    // OC scroll 信号: scroll(address, x, y, direction, playerName)
-    // 官方约定: direction 正值 = 向上滚动, 负值 = 向下滚动。
-    // 浏览器 wheel 事件的 deltaY > 0 表示"向下滚", 方向与 OC 相反, 因此取反。
-    // 注意: x/y 坐标空间与 touch 信号保持一致 (精确模式下用像素坐标)。
+    // OC scroll signal: scroll(address, x, y, direction, playerName)
+    // Convention: positive direction scrolls up, negative scrolls down.
+    // Browser wheel deltaY > 0 means "scroll down", the opposite of OC, hence the negation.
+    // x/y use the same space as touch signals (pixel coordinates in precise mode).
     const delta = e.deltaY < 0 ? 1 : -1;
     sendScroll(vmName, point.x, point.y, point.px, point.py, delta);
   }
 
   function mapKeyCode(e) {
-    // OC 键码 = PS/2 扫描码 (OpenOS keyboard.lua 使用)
+    // OC key codes are PS/2 scan codes (used by OpenOS keyboard.lua)
     const map = {
       'Escape': 0x01, 'Backspace': 0x0E, 'Enter': 0x1C, 'Tab': 0x0F,
       'Home': 0xC7, 'End': 0xCF, 'ArrowUp': 0xC8, 'ArrowDown': 0xD0,
@@ -2806,18 +2809,18 @@ const Console = (() => {
       'NumpadAdd': 0x4E, 'NumpadSubtract': 0x4A,
       'NumpadMultiply': 0x37, 'NumpadDivide': 0xB5,
       'NumpadDecimal': 0x53, 'NumpadEnter': 0x9C,
-      // 字母键 (PS/2 set 1 扫描码)
+      // Letter keys (PS/2 set 1 scan codes)
       'KeyA': 0x1E, 'KeyB': 0x30, 'KeyC': 0x2E, 'KeyD': 0x20, 'KeyE': 0x12,
       'KeyF': 0x21, 'KeyG': 0x22, 'KeyH': 0x23, 'KeyI': 0x17, 'KeyJ': 0x24,
       'KeyK': 0x25, 'KeyL': 0x26, 'KeyM': 0x32, 'KeyN': 0x31, 'KeyO': 0x18,
       'KeyP': 0x19, 'KeyQ': 0x10, 'KeyR': 0x13, 'KeyS': 0x1F, 'KeyT': 0x14,
       'KeyU': 0x16, 'KeyV': 0x2F, 'KeyW': 0x11, 'KeyX': 0x2D, 'KeyY': 0x15,
       'KeyZ': 0x2C,
-      // 数字键
+      // Digit keys
       'Digit0': 0x0B, 'Digit1': 0x02, 'Digit2': 0x03, 'Digit3': 0x04,
       'Digit4': 0x05, 'Digit5': 0x06, 'Digit6': 0x07, 'Digit7': 0x08,
       'Digit8': 0x09, 'Digit9': 0x0A,
-      // 符号键
+      // Symbol keys
       'Minus': 0x0C, 'Equal': 0x0D, 'BracketLeft': 0x1A, 'BracketRight': 0x1B,
       'Backslash': 0x2B, 'Semicolon': 0x27, 'Quote': 0x28, 'Backquote': 0x29,
       'Comma': 0x33, 'Period': 0x34, 'Slash': 0x35,
@@ -2827,23 +2830,23 @@ const Console = (() => {
       const n = parseInt(e.code.substring(1), 10);
       if (n >= 1 && n <= 12) return 0x3A + n;  // F1=0x3B, F2=0x3C, ...
     }
-    // 未知可打印字符: 用 0 作为 code, 仅靠 char 字段传递
+    // Unknown printable characters use code 0 and travel through the char field only
     if (e.key && e.key.length === 1) {
       return 0;
     }
     return null;
   }
 
-  // ---------- 服务器消息路由 ----------
+  // ---------- Server message routing ----------
   function onServerMessage(msg) {
     if (!msg.vm) return;
     const view = getView(msg.vm);
 
     if (msg.type === 's2c.state') {
       appendLog(msg.vm, `[state] ${msg.state}${msg.exitCode != null ? ' (exit=' + msg.exitCode + ')' : ''}`);
-      // 状态、按钮可用性与停止后的画面表现统一交由 applyServerState 处理。
-      // 注意 expectCleanStop 在停止过程中不会被重置 (一次停止可能先后推送多条
-      // "stopped", 重置会让后一条把黑屏翻回灰屏), 只在重新运行/启动时清除。
+      // State, button availability and stopped appearance all go through applyServerState.
+      // expectCleanStop is deliberately not reset during a stop (one stop can push several
+      // "stopped" messages, and resetting would flip the black screen back to gray); only run/start clears it.
       applyServerState(msg.vm, msg.state, msg.exitCode, msg.cleanStop);
     } else if (msg.type === 's2c.screen') {
       paintScreen(msg.vm, msg);
@@ -2859,12 +2862,12 @@ const Console = (() => {
     div.className = 'log-line ' + level;
     div.textContent = text;
     view.logPanel.appendChild(div);
-    // 存入数组供导出使用
+    // Keep a copy for log export
     if (!view.logLines) view.logLines = [];
     view.logLines.push({ text, level, time: Date.now() });
-    // 滚动到底部
+    // Scroll to the bottom
     view.logPanel.scrollTop = view.logPanel.scrollHeight;
-    // 限制 1000 行
+    // Cap at 1000 lines
     while (view.logPanel.children.length > 1000) {
       view.logPanel.removeChild(view.logPanel.firstChild);
       view.logLines.shift();
@@ -2890,7 +2893,7 @@ const Console = (() => {
     return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
 
-  // 文档级滚轮统计 (仅 full 级别输出): 区分"浏览器没投递事件"与"落点不在虚拟机区域"
+  // Document-level wheel diagnostics (full level only): turns "no event delivered" apart from "hit outside the VM"
   document.addEventListener('wheel', (e) => {
     diag.wheelSeen++;
     const tgt = e.target;
@@ -2900,10 +2903,10 @@ const Console = (() => {
     }
   }, { capture: true, passive: true });
 
-  // 页面加载时异步加载 hexfont, 加载完成后自动重绘
+  // Load the hex font asynchronously at page load; the view repaints once it arrives
   loadHexFont();
 
-  // 每秒刷新一次帧率读数
+  // Refresh the FPS readout once per second
   setInterval(() => {
     if (!showFps) return;
     views.forEach((view) => {

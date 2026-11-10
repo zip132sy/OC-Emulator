@@ -1,5 +1,5 @@
 // ============================================================
-// app.js - 主应用: VM 列表 / WebSocket / 标签页管理
+// app.js - main app: VM list / WebSocket / tab management
 // ============================================================
 
 const App = (() => {
@@ -12,15 +12,15 @@ const App = (() => {
     wsReconnectTimer: null,
     wsSubscribedVm: null,
     wsSubscribedMod: null,
-    logLevel: 'error',   // full | error | off, 与服务端设置同步
+    logLevel: 'error',   // full | error | off, kept in sync with the server setting
     sidebarMode: 'vm',  // 'vm' | 'mod'
-    connText: 'disconnected', // 最近一次连接状态 key, 语言切换后重绘
+    connText: 'disconnected', // last connection-state key, re-rendered after a language switch
     connKind: 'err',
-    _modsSig: '',       // Mods 列表签名, 避免轮询时无意义重建 DOM
-    tabPanes: new Map(), // tabId -> HTMLElement (缓存 pane 避免切换时重建)
+    _modsSig: '',       // Mods list signature, so polling does not rebuild the DOM needlessly
+    tabPanes: new Map(), // tabId -> HTMLElement (cached panes avoid rebuilding on switch)
   };
 
-  // ---------- 工具 ----------
+  // ---------- Utilities ----------
   const $  = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
@@ -42,7 +42,7 @@ const App = (() => {
     el.className = 'conn-status ' + kind;
   }
 
-  // ---------- HTTP 请求 ----------
+  // ---------- HTTP requests ----------
   async function api(path, opts = {}) {
     const res = await fetch('/api/' + path, {
       method: opts.method || 'GET',
@@ -56,7 +56,7 @@ const App = (() => {
     catch { return txt; }
   }
 
-  // 流式请求: 服务端按 NDJSON 逐行推送 { stage, percent, line } … { done, result }
+  // Streaming request: the server pushes NDJSON lines { stage, percent, line } ... { done, result }
   async function apiStream(path, onEvent, opts = {}) {
     const res = await fetch('/api/' + path, {
       method: opts.method || 'POST',
@@ -70,7 +70,7 @@ const App = (() => {
     });
     if (!res.ok) throw new Error('HTTP ' + res.status);
 
-    // 极老的浏览器没有 ReadableStream: 退化成整包读取
+    // Very old browsers lack ReadableStream; fall back to reading the whole body
     if (!res.body || typeof res.body.getReader !== 'function') {
       const txt = await res.text();
       let final = null;
@@ -109,7 +109,7 @@ const App = (() => {
     return final;
   }
 
-  // ---------- Lua 检测 ----------
+  // ---------- Lua detection ----------
   async function checkLua() {
     const badge = $('#lua-badge');
     badge.textContent = I18N.t('lua.checking');
@@ -117,7 +117,7 @@ const App = (() => {
     try {
       const r = await api('lua/check', { method: 'POST' });
       if (r && r.ok) {
-        // r.version 形如 "Lua 5.3", 只有缺少前缀时才补
+        // r.version looks like "Lua 5.3"; only add the prefix when it is missing
         const ver = String(r.version || '');
         badge.textContent = (/^lua/i.test(ver) ? ver : 'Lua ' + ver) + (r.cached ? I18N.t('lua.cached') : '');
         badge.className = 'brand-sub ok';
@@ -134,18 +134,18 @@ const App = (() => {
     }
   }
 
-  // ---------- 日志级别 ----------
-  // 前端日志与虚拟机日志共用同一个设置: full / error / off
+  // ---------- Log level ----------
+  // Frontend and VM logs share one setting: full / error / off
   async function loadLogLevel() {
     try {
       const s = await api('settings');
       if (s && s.logLevel) state.logLevel = s.logLevel;
     } catch {
-      /* 读取失败时保持默认 error */
+      /* keep the default "error" when reading fails */
     }
   }
 
-  // ---------- 设置对话框 ----------
+  // ---------- Settings dialog ----------
   async function openSettings() {
     try {
       const cur = await api('settings') || {};
@@ -268,7 +268,7 @@ const App = (() => {
           const input = body.querySelector('#settings-luaexe');
           const langSelect = body.querySelector('#settings-lang');
           const logLevelSelect = body.querySelector('#settings-loglevel');
-          // 命令行窗口显示开关: 切换即时生效 (立即隐藏 / 显示服务器控制台窗口)
+          // Console-window toggle: applies immediately (hides / shows the server console window)
           const showConsoleBox = body.querySelector('#settings-showconsole');
           const consoleStateEl = body.querySelector('#settings-console-state');
           if (showConsoleBox) {
@@ -277,7 +277,7 @@ const App = (() => {
               try {
                 const r = await api('settings', { method: 'PUT', body: { showConsole: want } });
                 const res = r && r.consoleResult;
-                // 平台相关的失败原因给更具体的中文提示, 其余回落到通用文案
+                // Map platform-specific failures to a precise message; anything else falls back to the generic one
                 const reasonKey = (res && res.reason) ? ({
                   'wayland': 'settings.console-reason-wayland',
                   'missing-xdotool': 'settings.console-reason-xdotool',
@@ -296,7 +296,7 @@ const App = (() => {
               }
             });
           }
-          // 滚轮兼容模式 (前端本地开关, 即时生效, 无需保存)
+          // Wheel compatibility mode (frontend-only switch, applies immediately, not persisted)
           const wheelKeysBox = body.querySelector('#settings-wheelkeys');
           const wheelKeysState = body.querySelector('#settings-wheelkeys-state');
           if (wheelKeysBox) {
@@ -308,7 +308,7 @@ const App = (() => {
               }
             });
           }
-          // 显示帧率 (前端本地开关, 即时生效)
+          // Show FPS (frontend-only switch, applies immediately)
           const fpsBox = body.querySelector('#settings-showfps');
           const fpsState = body.querySelector('#settings-showfps-state');
           if (fpsBox) {
@@ -320,7 +320,7 @@ const App = (() => {
               }
             });
           }
-          // 自动更新开关 (写入 settings.json, 下次启动脚本启动时生效)
+          // Auto-update toggle (stored in settings.json, applied on the next launcher start)
           const autoUpdateBox = body.querySelector('#settings-autoupdate');
           const autoUpdateState = body.querySelector('#settings-autoupdate-state');
           if (autoUpdateBox) {
@@ -336,7 +336,7 @@ const App = (() => {
               }
             });
           }
-          // 跳过完整性检测 (写入 settings.json, 下次启动脚本启动时生效)
+          // Skip integrity check (stored in settings.json, applied on the next launcher start)
           const skipIntegrityBox = body.querySelector('#settings-skipintegrity');
           const skipIntegrityState = body.querySelector('#settings-skipintegrity-state');
           if (skipIntegrityBox) {
@@ -352,10 +352,10 @@ const App = (() => {
               }
             });
           }
-          // 版本回退
+          // Version rollback
           const rollbackBtn = body.querySelector('#settings-rollback');
           if (rollbackBtn) rollbackBtn.addEventListener('click', () => openRollbackDialog());
-          // 浏览按钮: 展开服务端目录列表, 点击文件夹进入, 点击文件选中完整路径
+          // Browse: expand the server directory list; folders navigate, files fill in the full path
           const browseBtn = body.querySelector('#settings-browse');
           const browsePanel = body.querySelector('#settings-lua-browse');
           const browseList = body.querySelector('#settings-lua-list');
@@ -368,7 +368,7 @@ const App = (() => {
             let r = null;
             try {
               r = await api('fs/list?path=' + encodeURIComponent(target || ''));
-            } catch { /* 请求失败按读取错误处理 */ }
+            } catch { /* a failed request is treated as a read error */ }
             if (!r || !r.ok) {
               browseParent = (r && r.parent) || null;
               browsePathText.textContent = (r && r.path) || target || '';
@@ -414,21 +414,18 @@ const App = (() => {
           browseUpBtn.addEventListener('click', () => {
             if (browseParent) loadDir(browseParent);
           });
-          // 保存
           document.querySelector('#settings-save').addEventListener('click', async () => {
             const newPath = input.value.trim();
             if (!newPath) { alert(I18N.t('settings.lua-empty')); return; }
-            // 保存语言
             const newLang = langSelect.value;
             const langChanged = newLang !== I18N.getLang();
-            // 日志级别
             const newLogLevel = logLevelSelect.value;
             try {
               const r = await api('settings', { method: 'PUT', body: { luaExe: newPath, logLevel: newLogLevel } });
               if (r && r.ok) {
                 state.logLevel = newLogLevel;
                 if (langChanged) {
-                  // 语言切换后整页重载, 保证已经渲染的视图/徽章/弹窗全部换用新语言
+                  // A language change reloads the page so every rendered view, badge and dialog is retranslated
                   I18N.setLang(newLang);
                   location.reload();
                   return;
@@ -455,8 +452,8 @@ const App = (() => {
     return String(s).replace(/"/g, '&quot;');
   }
 
-  // ---------- 手机端侧边栏抽屉 ----------
-  // 抽屉开关只在窄屏出现; 宽屏调用也没有副作用 (class 不会被任何样式命中)。
+  // ---------- Mobile sidebar drawer ----------
+  // The toggle only renders on narrow screens; calling it on desktop is harmless (no styles match the class).
   function toggleNav(force) {
     const open = (force === undefined)
       ? !document.body.classList.contains('nav-open')
@@ -464,32 +461,32 @@ const App = (() => {
     document.body.classList.toggle('nav-open', open);
   }
 
-  // ---------- 服务级控制 ----------
-  // 重启服务: 服务器先停掉所有 VM, 再以退出码 5 退出, 由 run.bat / run.sh 立即拉起。
+  // ---------- Service-level control ----------
+  // Restart: the server stops all VMs, exits with code 5, and run.bat / run.sh immediately starts it again.
   async function restartServer(skipConfirm) {
     if (!skipConfirm && !confirm(I18N.t('confirm.restart-server'))) return;
     try {
       await api('server/restart', { method: 'POST' });
     } catch (e) {
-      // 服务器可能已经开始退出, 请求被中断属于正常现象
+      // The server may already be exiting, so an aborted request is expected
     }
     setStatus(I18N.t('server.restarting'));
   }
 
-  // 停止服务: 服务器停掉所有 VM 后以退出码 4 退出, 守护脚本不再拉起。
+  // Stop: the server stops all VMs and exits with code 4, which the watchdog does not restart.
   async function stopServer() {
     if (!confirm(I18N.t('confirm.stop-server'))) return;
     try {
       await api('server/stop', { method: 'POST' });
     } catch (e) {
-      // 同上
+      // same as above
     }
     setStatus(I18N.t('server.stopped'));
   }
 
-  // ---------- 检查更新 / 版本回退 ----------
-  // 结果统一在弹窗里展示 (含更新日志); 更新或回退后由用户决定是否重启后端,
-  // 不自动重启, 避免正在运行虚拟机时被迫中断。
+  // ---------- Update check / rollback ----------
+  // Results always appear in a dialog (changelog included); restarting afterwards is the user's call,
+  // never automatic, so running VMs are not interrupted against their will.
   let updateBusy = false;
 
   function trLang(zh, en) { return I18N.getLang() === 'zh' ? zh : en; }
@@ -498,7 +495,7 @@ const App = (() => {
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
 
-  // "处理中"弹窗: 让用户知道操作已开始, 同时按钮被禁用防止重复点击
+  // Busy dialog: shows that the action started while disabled buttons prevent double clicks
   function openBusyModal(titleKey, hintKey) {
     Modal.open({
       title: I18N.t(titleKey),
@@ -516,7 +513,7 @@ const App = (() => {
     }
   }
 
-  // 重启提醒: 有虚拟机在运行时额外提示会被中断
+  // Restart warning: mention running VMs that would be interrupted
   function restartWarn() {
     const n = runningVmCount();
     return n > 0
@@ -534,7 +531,7 @@ const App = (() => {
     return items || `<li style="list-style:disc;color:var(--fg-muted);">${escapeHtml(trLang('（无提交记录）', '(no commits)'))}</li>`;
   }
 
-  // 更新结果窗口 (mode: available / uptodate / error / info)
+  // Update result dialog (mode: available / uptodate / error / info)
   function showUpdateModal(mode, opts) {
     const o = opts || {};
     let title, body, footer;
@@ -579,7 +576,7 @@ const App = (() => {
     });
   }
 
-  // 检查更新 (结果在弹窗中展示)
+  // Check for updates (result shown in a dialog)
   async function checkUpdate() {
     if (updateBusy) return;
     updateBusy = true;
@@ -624,7 +621,7 @@ const App = (() => {
     }
   }
 
-  // 更新进度弹窗: 显示真实百分比、当前阶段和 git 的原始进度行
+  // Progress dialog: real percentage, current stage, and git's raw progress line
   function openUpdateProgressModal() {
     Modal.open({
       title: I18N.t('update.progress-title'),
@@ -660,7 +657,7 @@ const App = (() => {
         }
         if (detailEl && typeof evt.line === 'string') detailEl.textContent = evt.line;
       },
-      // 流结束但没有进度事件时, 手动补到 100%
+      // If the stream ends without a progress event, force the bar to 100%
       complete(text) {
         if (rootEl) rootEl.classList.add('done');
         if (fillEl) fillEl.style.width = '100%';
@@ -672,24 +669,24 @@ const App = (() => {
     };
   }
 
-  // 后端重启期间会短暂无法访问; 等它重新可用后再刷新页面。
+  // The backend is briefly unreachable during a restart; reload once it is back.
   async function waitForServerAndReload(maxMs = 90000) {
     setStatus(I18N.t('update.restart-wait'));
     const start = Date.now();
-    // 先等一会儿, 让旧进程真正退出, 避免请求打到尚未关闭的旧实例
+    // Wait first so the old process really exits and requests do not hit the closing instance
     await new Promise((r) => setTimeout(r, 2500));
     while (Date.now() - start < maxMs) {
       try {
         const r = await fetch('/api/version', { cache: 'no-store' });
         if (r && r.ok) { location.reload(); return; }
-      } catch (e) { /* 服务器还没起来 */ }
+      } catch (e) { /* server not up yet */ }
       await new Promise((r) => setTimeout(r, 1200));
     }
-    // 超时也刷新一次, 至少让用户看到最新页面
+    // On timeout reload anyway so the user at least sees the newest page
     location.reload();
   }
 
-  // 执行更新; 进度条实时显示, 完成后自动刷新页面
+  // Run the update with live progress; reload the page when done
   async function applyUpdateFlow() {
     if (updateBusy) return;
     updateBusy = true;
@@ -740,12 +737,12 @@ const App = (() => {
       await restartServer(true);
       await waitForServerAndReload();
     } else {
-      // 新前端文件已经落盘, 直接刷新即可加载新界面
+      // The new frontend files are already on disk, so a reload picks them up
       setTimeout(() => location.reload(), 600);
     }
   }
 
-  // 设置里的"版本回退": 列出历史版本供选择
+  // Settings "rollback": list historical versions to pick from
   async function openRollbackDialog() {
     if (updateBusy) return;
     updateBusy = true;
@@ -825,23 +822,23 @@ const App = (() => {
     if (confirm(ask)) await restartServer(true);
   }
 
-  // ---------- VM 列表 ----------
-  // manual = true 时表示用户点了"刷新"按钮: 除了拉列表, 还会强制重新同步
-  // 当前打开标签页的虚拟机状态与画面 (用于 WebSocket 掉线/丢消息后的手动纠正)。
+  // ---------- VM list ----------
+  // manual = true means the user pressed Refresh: besides fetching the list, force a resync of
+  // the open tab's VM state and screen (manual correction after a WebSocket drop or lost message).
   async function refreshVMs(manual) {
     try {
       const vms = await api('vms');
       state.vms = vms || [];
       renderVMList();
-      // 把服务器状态同步到各 VM 视图: 按钮可用性 + "已停止"的画面表现。
-      // 这是 5 秒一次的兜底轮询, 保证某条 WebSocket 状态消息漏掉时,
-      // 控制菜单也能自动纠正, 而不需要刷新整个页面。
+      // Push server state into each VM view: button availability and the "stopped" screen look.
+      // This is the 5-second safety poll, so when a WebSocket state message is lost
+      // the controls still self-correct without reloading the whole page.
       if (window.Console && Console.applyServerState) {
         for (const vm of state.vms) {
           Console.applyServerState(vm.name, vm.state, vm.exitCode, vm.cleanStop);
         }
       }
-      // 手动刷新: 重新订阅 WebSocket 并重新拉取当前 VM 的权威状态与画面
+      // Manual refresh: re-subscribe over WebSocket and re-fetch the active VM state and screen
       if (manual) {
         const tab = state.tabs.find(t => t.id === state.activeTabId);
         if (tab && tab.type === 'vm') {
@@ -864,8 +861,8 @@ const App = (() => {
     ul.innerHTML = '';
     updateSidebarCount();
 
-    // 重建列表会丢掉选中高亮, 这里根据当前激活标签页重新应用,
-    // 否则每 5 秒自动刷新一次就会把"正在查看的虚拟机"的高亮抹掉。
+    // Rebuilding the list loses the selection highlight, so re-apply it from the active tab,
+    // otherwise the 5-second auto refresh would clear the highlight of the VM being viewed.
     const activeTab = state.tabs.find(t => t.id === state.activeTabId);
     const activeVm = (activeTab && activeTab.type === 'vm') ? activeTab.vm : null;
 
@@ -909,7 +906,7 @@ const App = (() => {
       metaParts.push(I18N.t(stateKey));
       li.querySelector('.vm-meta').textContent = metaParts.join(' · ');
       li.addEventListener('click', () => openVMTab(vm.name));
-      // 触屏长按不再弹出菜单, 统一用右侧的 ⋮ 按钮
+      // Touch long-press no longer opens a menu; use the ⋮ button on the right instead
       let lastTouchAt = 0;
       li.addEventListener('touchstart', () => { lastTouchAt = Date.now(); }, { passive: true });
       li.addEventListener('contextmenu', (e) => {
@@ -929,7 +926,7 @@ const App = (() => {
     }
   }
 
-  // ---------- Mods 列表 ----------
+  // ---------- Mods list ----------
   function modTypeInfo(type) {
     if (type === 'drone') return { icon: '🛸', label: I18N.t('mods.type.drone') };
     if (type === 'reactor') return { icon: '☢️', label: I18N.t('mods.type.reactor') };
@@ -989,7 +986,7 @@ const App = (() => {
       const changed = sig !== state._modsSig;
       state._modsSig = sig;
       state.mods = list;
-      // 只在数据变化或用户手动刷新时重建列表, 避免每 5 秒替换 DOM 导致点击丢失
+      // Rebuild only when data changes or the user refreshes, so the 5-second poll does not swallow clicks
       if (changed || manual) renderModList();
       updateSidebarCount();
       if (manual) {
@@ -1104,7 +1101,7 @@ const App = (() => {
     }
   }
 
-  // 导出 Mod: 拉取服务端打包好的 zip 并触发浏览器下载
+  // Export a mod: fetch the zip built by the server and start the browser download
   async function exportMod(modName) {
     try {
       const res = await fetch(`/api/mods/${encodeURIComponent(modName)}/export`);
@@ -1126,7 +1123,7 @@ const App = (() => {
     }
   }
 
-  // 导入 Mod: 本地 zip 上传, 或从网络地址 (直链 / GitHub / Gitee 仓库) 下载
+  // Import a mod: upload a local zip or download from a URL (direct link / GitHub / Gitee repo)
   function openImportModDialog() {
     Modal.open({
       title: I18N.t('mods.import.title'),
@@ -1286,7 +1283,7 @@ const App = (() => {
     });
   }
 
-  // ---------- 标签页管理 ----------
+  // ---------- Tab management ----------
   function openVMTab(vmName) {
     const id = 'vm-' + vmName;
     let tab = state.tabs.find(t => t.id === id);
@@ -1295,14 +1292,13 @@ const App = (() => {
       state.tabs.push(tab);
     }
     activateTab(id);
-    // 高亮 VM 列表项
     $$('.vm-item').forEach(li => {
       li.classList.toggle('active', li.dataset.vmName === vmName);
     });
   }
 
   function openTab(tab) {
-    // 不重复创建相同 id 的 tab, 除非调用方明确要求
+    // Never duplicate a tab with the same id; merge into the existing one
     const existing = state.tabs.find(t => t.id === tab.id);
     if (existing) {
       Object.assign(existing, tab);
@@ -1320,7 +1316,7 @@ const App = (() => {
     const tab = state.tabs[idx];
     if (tab.onClose) tab.onClose();
     state.tabs.splice(idx, 1);
-    // 清理缓存的 pane
+    // Drop the cached pane
     const cachedPane = state.tabPanes.get(id);
     if (cachedPane) {
       cachedPane.remove();
@@ -1339,14 +1335,14 @@ const App = (() => {
     state.activeTabId = id;
     renderTabs();
     renderTabContent();
-    // 处理 WS 订阅切换
+    // Handle the WebSocket subscription switch
     const tab = state.tabs.find(t => t.id === id);
     const targetVm = (tab && tab.type === 'vm') ? tab.vm : null;
     const targetMod = (tab && tab.type === 'mod') ? tab.mod : null;
     if (targetVm !== state.wsSubscribedVm || targetMod !== state.wsSubscribedMod) {
       wsSubscribe(targetVm, targetMod);
     }
-    // 切换后触发一次 resize, 确保 canvas 尺寸正确 (从隐藏→显示时)
+    // Fire a resize after switching so canvases get correct sizes (hidden -> visible)
     if (tab && (tab.type === 'vm' || tab.type === 'mod')) {
       requestAnimationFrame(() => {
         window.dispatchEvent(new Event('resize'));
@@ -1377,11 +1373,10 @@ const App = (() => {
 
   function renderTabContent() {
     const container = $('#tab-content');
-    // 隐藏所有已缓存的 pane
+    // Hide every cached pane
     state.tabPanes.forEach(pane => { pane.style.display = 'none'; });
 
     if (!state.activeTabId) {
-      // 显示欢迎页
       let welcome = container.querySelector('.welcome');
       if (!welcome) {
         welcome = document.createElement('div');
@@ -1396,14 +1391,13 @@ const App = (() => {
       welcome.style.display = '';
       return;
     }
-    // 隐藏欢迎页
     const welcome = container.querySelector('.welcome');
     if (welcome) welcome.style.display = 'none';
 
     const tab = state.tabs.find(t => t.id === state.activeTabId);
     if (!tab) return;
 
-    // 检查是否已有缓存的 pane
+    // Reuse the cached pane when there is one
     let pane = state.tabPanes.get(tab.id);
     if (!pane) {
       pane = document.createElement('div');
@@ -1437,7 +1431,7 @@ const App = (() => {
     }
     state.ws.onopen = () => {
       setConnStatus('connected', 'ok');
-      // 重新订阅
+      // Re-subscribe after reconnecting
       if (state.wsSubscribedVm) {
         wsSend({ type: 'c2s.subscribe', vm: state.wsSubscribedVm });
       }
@@ -1447,7 +1441,7 @@ const App = (() => {
     };
     state.ws.onclose = () => {
       setConnStatus('disconnected', 'err');
-      // 与服务器断开 (服务端关机 / 重启 / 网络中断): 正在运行的 VM 画面转为灰色
+      // Lost the server (shutdown / restart / network drop): running VMs turn gray
       try { if (window.Console && Console.onConnectionLost) Console.onConnectionLost(); } catch (e) {}
       scheduleReconnect();
     };
@@ -1459,7 +1453,7 @@ const App = (() => {
         const msg = JSON.parse(ev.data);
         onServerMessage(msg);
       } catch (e) {
-        // 非 JSON, 忽略
+        // Not JSON; ignore
       }
     };
   }
@@ -1472,7 +1466,7 @@ const App = (() => {
     }, 2000);
   }
 
-  // 返回 true = 已送出; false = 连接不可用 (调用方应据此提示用户, 而不是静默丢弃)
+  // true = sent, false = connection unavailable (callers must warn the user instead of dropping input)
   function wsSend(msg) {
     if (state.ws && state.ws.readyState === 1) {
       state.ws.send(JSON.stringify(msg));
@@ -1498,22 +1492,22 @@ const App = (() => {
     }
   }
 
-  // ---------- 处理服务器消息 ----------
+  // ---------- Server message handling ----------
   function onServerMessage(msg) {
-    // 消息类型 s2c.* 由 Console / DiskEditor / ModView 等处理
+    // s2c.* payloads are handled by Console / DiskEditor / ModView
     if (!msg.type) return;
 
-    // 路由到对应 VM 的 console 控制器
+    // Route to the console controller of that VM
     if (msg.vm) {
       Console.onServerMessage(msg);
     }
-    // 路由到对应 Mod 的视图
+    // Route to the matching Mod view
     if (msg.mod && window.ModView) {
       ModView.onServerMessage(msg);
     }
 
     if (msg.type === 's2c.state') {
-      // VM 状态变化, 刷新侧边栏对应项
+      // VM state changed; refresh its sidebar entry
       const vm = state.vms.find(v => v.name === msg.vm);
       if (vm) {
         vm.state = msg.state;
@@ -1526,13 +1520,13 @@ const App = (() => {
         type: msg.deviceType || undefined,
       });
     } else if (msg.type === 's2c.screen') {
-      // 屏幕更新, Console.onServerMessage 已处理
+      // Screen frame, already handled by Console.onServerMessage
     } else if (msg.type === 's2c.log') {
-      // 日志, Console 已处理
+      // Log line, already handled by Console
     }
   }
 
-  // ---------- 上下文菜单 ----------
+  // ---------- Context menu ----------
   let vmMenuEl = null;
   let vmMenuClose = null;
 
@@ -1548,7 +1542,7 @@ const App = (() => {
     }
   }
 
-  // ---------- 编辑磁盘: 两个磁盘时询问编辑哪个 ----------
+  // ---------- Edit disk: ask which disk when the VM has two ----------
   const DISK_CHOICE_PREFIX = 'oc-disk-choice-';
 
   function getDiskChoice(vmName) {
@@ -1564,7 +1558,7 @@ const App = (() => {
     try {
       if (slot) localStorage.setItem(DISK_CHOICE_PREFIX + vmName, slot);
       else localStorage.removeItem(DISK_CHOICE_PREFIX + vmName);
-    } catch (e) { /* 存储不可用时不影响本次操作 */ }
+    } catch (e) { /* storage failures must not break this operation */ }
   }
 
   function openDiskEditorTab(vmName, slot, diskFile) {
@@ -1585,7 +1579,7 @@ const App = (() => {
         alert(I18N.t('ctx.edit-disk.none'));
         return;
       }
-      // 记住过且该磁盘仍在: 直接打开
+      // A remembered disk that still exists opens directly
       const remembered = getDiskChoice(vmName);
       if (remembered && hw[remembered]) {
         openDiskEditorTab(vmName, remembered, hw[remembered]);
@@ -1652,7 +1646,6 @@ const App = (() => {
       { label: I18N.t('ctx.delete'), danger: true, action: async () => {
         if (confirm(I18N.t('ctx.confirm-delete-vm').replace('{name}', vmName))) {
           await api(`vms/${encodeURIComponent(vmName)}`, { method: 'DELETE' });
-          // 关闭相关 tab
           const related = state.tabs.filter(t => t.vm === vmName);
           for (const t of related) closeTab(t.id);
           refreshVMs();
@@ -1688,13 +1681,13 @@ const App = (() => {
     const openedAt = Date.now();
     vmMenuClose = (ev) => {
       if (ev && ev.type === 'keydown' && ev.key !== 'Escape') return;
-      // 只关心窗口失焦; 元素失焦会冒到 window 的捕获阶段, 会在点菜单项时误关菜单
+      // Care only about window blur: element blur bubbles to window's capture phase and would close the menu on click
       if (ev && ev.type === 'blur' && ev.target !== window) return;
       if (ev && ev.type === 'click') {
-        // 菜单内部的点击交给菜单项自己处理: 在捕获阶段移除节点会让移动端
-        // 收不到这次 click, 表现为"菜单能打开, 点菜单项没反应"
+        // Let the items handle clicks inside the menu: removing the node during capture makes mobile
+        // miss this click, which looks like "the menu opens but its items do nothing"
         if (menu.contains(ev.target)) return;
-        // 打开菜单的同一次点击 (含触屏合成点击) 不应立刻把它关掉
+        // The click that opened the menu (including the synthesized touch click) must not close it immediately
         if (Date.now() - openedAt < 250) return;
       }
       closeVMContextMenu();
@@ -1707,7 +1700,7 @@ const App = (() => {
     }, 0);
   }
 
-  // 重命名虚拟机: 目录与显示名一起改, 已打开的标签页跟随
+  // Rename a VM: the folder and display name change together, and open tabs follow
   function openRenameVM(vmName) {
     Modal.open({
       title: I18N.t('ctx.rename.title'),
@@ -1754,7 +1747,7 @@ const App = (() => {
           for (const t of related) closeTab(t.id);
           Modal.close();
           await refreshVMs();
-          // 原先打开的是虚拟机标签页时, 用新名字重新打开
+          // If a VM tab was open, reopen it under the new name
           if (related.some(t => t.type === 'vm')) openVMTab(newName);
         };
         if (saveBtn) saveBtn.addEventListener('click', submit);
@@ -1769,9 +1762,9 @@ const App = (() => {
     });
   }
 
-  // ---------- 菜单事件 ----------
+  // ---------- Menu events ----------
   function bindMenu() {
-    // 手机端 "⋮" 菜单: 点击展开/收起, 选中任意一项或点击菜单外部都会收起
+    // Mobile "⋮" menu: toggles on click and closes on any item or outside click
     function closeMenu() { document.body.classList.remove('menu-open'); }
     const menuToggle = $('.menu-toggle');
     if (menuToggle) {
@@ -1800,32 +1793,31 @@ const App = (() => {
         else if (action === 'restart-server') restartServer();
         else if (action === 'stop-server') stopServer();
         else if (action === 'toggle-nav') toggleNav();
-        // ⋮ 开关自身不收起菜单, 其余操作完成后收起
+        // The "⋮" toggle itself keeps the menu open; every other action closes it
         if (action !== 'toggle-nav' && action !== 'toggle-menu') closeMenu();
       });
     });
 
-    // 侧边栏: 虚拟机 / Mods 切换
+    // Sidebar: VMs / Mods switch
     $$('.side-tab').forEach(btn => {
       btn.addEventListener('click', () => setSidebarMode(btn.dataset.side));
     });
 
-    // 手机端抽屉遮罩: 点击关闭抽屉
+    // Mobile drawer scrim: click to close the drawer
     $$('.nav-scrim').forEach(el => {
       el.addEventListener('click', () => toggleNav(false));
     });
-    // 手机上选中某个 VM / Mod 后自动收起抽屉
+    // Picking a VM / Mod on mobile closes the drawer
     const vmListEl = document.getElementById('vm-list');
     if (vmListEl) vmListEl.addEventListener('click', () => toggleNav(false));
     const modListEl = document.getElementById('mod-list');
     if (modListEl) modListEl.addEventListener('click', () => toggleNav(false));
 
-    // 模态关闭
     $$('.modal-close, .modal-backdrop').forEach(el => {
       el.addEventListener('click', () => Modal.close());
     });
-    // 弹窗内容每次 Modal.open 都会重建, 逐个绑定容易漏。这里统一做事件委托,
-    // 覆盖所有 data-action="modal-close"。
+    // Modal contents are rebuilt on every Modal.open, so per-button binding is error-prone. Delegate instead,
+    // which covers everything with data-action="modal-close".
     const modalContainer = document.getElementById('modal-container');
     if (modalContainer) {
       modalContainer.addEventListener('click', (e) => {
@@ -1837,9 +1829,9 @@ const App = (() => {
     }
   }
 
-  // ---------- 启动 ----------
+  // ---------- Startup ----------
   function init() {
-    // 首次使用: 弹出语言选择
+    // First run: ask for a language
     if (I18N.isFirstTime()) {
       showLanguageSelector(true);
     } else {
@@ -1851,11 +1843,11 @@ const App = (() => {
     refreshVMs();
     refreshMods();
     wsConnect();
-    // 周期刷新 VM / Mods 状态 (轻量兜底轮询; 手动刷新走 refreshXC(true))
+    // Periodic VM / Mods refresh (light safety polling; manual refresh uses refreshX(true))
     setInterval(() => { refreshVMs(false); refreshMods(false); }, 5000);
   }
 
-  // ---------- 语言 ----------
+  // ---------- Language ----------
   function showLanguageSelector(isFirstTime = false) {
     Modal.open({
       title: I18N.t('lang.select.title'),
@@ -1897,13 +1889,13 @@ const App = (() => {
     document.documentElement.lang = I18N.getLang() === 'en' ? 'en' : 'zh-CN';
     const luaBadge = $('#lua-badge');
     if (luaBadge) luaBadge.title = t('lua.badge-title');
-    // 连接状态与无障碍标签
+    // Connection status and ARIA labels
     setConnStatus(state.connText, state.connKind);
     const navToggle = $('.nav-toggle');
     if (navToggle) navToggle.setAttribute('aria-label', t('sidebar.vm-library'));
     const modalClose = $('.modal-close');
     if (modalClose) modalClose.setAttribute('aria-label', t('tab.close'));
-    // 顶部菜单
+    // Top menu
     const set = (id, key) => { const el = document.getElementById(id); if (el) el.textContent = t(key); };
     set('menu-new-vm', 'menu.new-vm');
     set('menu-new-mod', 'menu.new-mod');
@@ -1915,17 +1907,17 @@ const App = (() => {
     set('menu-settings', 'menu.settings');
     set('menu-restart-server', 'menu.restart-server');
     set('menu-stop-server', 'menu.stop-server');
-    // 侧边栏
+    // Sidebar
     set('side-tab-vm', 'sidebar.vm-tab');
     set('side-tab-mod', 'sidebar.mod-tab');
     updateSidebarCount();
-    // 欢迎页
+    // Welcome page
     set('welcome-title', 'welcome.title');
     set('welcome-subtitle', 'welcome.subtitle');
     set('welcome-hint', 'welcome.hint');
-    // 标签页关闭按钮提示
+    // Tab close button tooltip
     renderTabs();
-    // 刷新列表文字
+    // Refresh list text
     renderVMList();
     renderModList();
   }
@@ -1939,7 +1931,7 @@ const App = (() => {
   };
 })();
 
-// ---------- 模态对话框 ----------
+// ---------- Modal dialog ----------
 const Modal = (() => {
   function open({ title, bodyHTML, footerHTML, onMount, onClose, size }) {
     const container = document.getElementById('modal-container');
@@ -1953,7 +1945,7 @@ const Modal = (() => {
       dlg.style.minWidth = 'min(720px, calc(100vw - 24px))';
       dlg.style.maxWidth = 'min(900px, calc(100vw - 24px))';
     } else {
-      // 用 min() 跟随视口宽度: 手机上弹窗不能比屏幕宽, 否则右侧按钮会落在屏幕外
+      // Use min() to follow the viewport: on phones a dialog must not exceed the screen or right-side buttons fall off
       const dlg = container.querySelector('.modal-dialog');
       dlg.style.minWidth = 'min(480px, calc(100vw - 24px))';
       dlg.style.maxWidth = 'min(800px, calc(100vw - 24px))';
@@ -1976,5 +1968,5 @@ const Modal = (() => {
 window.App = App;
 window.Modal = Modal;
 
-// 启动
+// Boot the app
 document.addEventListener('DOMContentLoaded', () => App.init());

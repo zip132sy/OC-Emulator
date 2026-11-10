@@ -1,8 +1,8 @@
 // ============================================================
-// wizard.js - 创建虚拟机向导 (VMware 风格)
+// wizard.js - VM creation wizard (VMware style)
 //
-// 步骤: 名称 → 硬件配置 → 确认 → 创建
-// 硬件: 磁盘1/磁盘2/软盘/EEPROM/APU/内存1+2/扩展卡1+2+3
+// Steps: name → hardware → confirm → create
+// Hardware: disk1/disk2/floppy/EEPROM/APU/memory1+2/expansion1+2+3
 // ============================================================
 
 const Wizard = (() => {
@@ -15,8 +15,8 @@ const Wizard = (() => {
     }
   };
 
-  // 选项定义 (与 server.js / vmManager.js 配置兼容)
-  // 磁盘选项会从 API 动态加载，这里仅定义固定选项
+  // Option definitions (must stay compatible with the server.js / vmManager.js config)
+  // Disk options are fetched from the API at open time; only fixed options live here
   let diskTemplates = [];
   const OPTIONS = {
     disk: [
@@ -34,7 +34,7 @@ const Wizard = (() => {
       2: 2 * 1024 * 1024,
       3: 4 * 1024 * 1024,
     },
-    diskMinSize: 128 * 1024,  // 最小 128KB
+    diskMinSize: 128 * 1024,  // minimum 128 KB
     apu: [
       { value: 1,          labelKey: 'hw.option-apu-t1' },
       { value: 2,          labelKey: 'hw.option-apu-t2' },
@@ -80,7 +80,7 @@ const Wizard = (() => {
     ],
   };
 
-  // 无线信号强度: 1 = 隔离, >=2 = 可与其他虚拟机互通
+  // Wireless signal strength: 1 = isolated, >= 2 = can reach other VMs
   function modemStrengthOptions() {
     const arr = [
       { value: '',  label: T('hw.strength-auto', '自动 (跟随网卡等级)') },
@@ -353,7 +353,6 @@ const Wizard = (() => {
       disk1Sel.addEventListener('change', () => {
         hw.disk1 = disk1Sel.value;
         if (hw.disk1 === 'new') {
-          // 打开磁盘配置弹窗
           openDiskConfig('disk1');
         } else {
           rerender();
@@ -402,7 +401,7 @@ const Wizard = (() => {
       const v = apuSel.value;
       hw.apu.tier = (v === 'creative') ? 'creative' : parseInt(v, 10);
     });
-    // 内存: 选择「自定义」时显示 MB 输入框, 容量存到 memoryMB
+    // Memory: the "custom" option reveals the MB input and stores the value in memoryMB
     const bindMemory = (idx) => {
       const sel = body.querySelector(idx === 0 ? '#wz-mem1' : '#wz-mem2');
       if (!sel) return;
@@ -455,22 +454,20 @@ const Wizard = (() => {
     if (action === 'cancel') Modal.close();
     else if (action === 'next') {
       if (currentStep === 0) {
-        // 验证名称
         if (!spec.name || !spec.name.match(/^[A-Za-z0-9_-]{1,32}$/)) {
           alert(T('wizard.name-invalid', '名称只能包含字母、数字、下划线、连字符,最多 32 字符'));
           return;
         }
-        // 检查重名
         try {
           const exists = await App.api(`vms/${encodeURIComponent(spec.name)}`);
           if (exists && !exists.error) {
             alert(I18N.t('wizard.name-exists', { name: spec.name }));
             return;
           }
-        } catch { /* ignore - 不存在正常 */ }
+        } catch { /* ignore - a 404 here simply means the name is free */ }
       }
       if (currentStep === 1) {
-        // 校验自定义内存容量
+        // Validate custom memory capacity
         for (let i = 0; i < 2; i++) {
           const v = spec.hardware.memoryMB[i];
           if (v != null && (!Number.isFinite(Number(v)) || Number(v) < 1 || Number(v) > 16384)) {
@@ -493,14 +490,14 @@ const Wizard = (() => {
   }
 
   async function createVM() {
-    // 暂存 EEPROM 导入意图, 在 VM 创建之后再上传文件
+    // Capture the EEPROM import intent now; the file is uploaded after the VM exists
     let eepromImportFile = null;
     let eepromFormat = 'oce';
     if (spec.hardware.eeprom === 'import' || spec.hardware.eeprom === 'import-lua') {
       const fileInput = document.getElementById('wz-eeprom-file');
       if (fileInput && fileInput.files[0]) {
         eepromImportFile = fileInput.files[0];
-        // 根据选项或文件扩展名确定格式
+        // Pick the format from the selected option or the file extension
         if (spec.hardware.eeprom === 'import-lua' || fileInput.files[0].name.endsWith('.lua')) {
           eepromFormat = 'lua';
           spec.hardware.eeprom = 'eeprom.lua';
@@ -513,7 +510,7 @@ const Wizard = (() => {
       }
     }
 
-    // 1. 调用 POST /api/vms 创建 VM (会自动创建磁盘/软盘)
+    // 1. Create the VM via POST /api/vms (disks and floppy are created server-side)
     try {
       const result = await App.api('vms', { method: 'POST', body: spec });
       if (result && result.error) {
@@ -525,7 +522,7 @@ const Wizard = (() => {
       return;
     }
 
-    // 2. 创建后再上传 EEPROM 文件
+    // 2. Upload the EEPROM file only after the VM exists
     if (eepromImportFile) {
       try {
         const buf = await eepromImportFile.arrayBuffer();
@@ -548,15 +545,15 @@ const Wizard = (() => {
     spec = defaults();
     onDone = doneCallback;
 
-    // 从 API 加载磁盘模板
+    // Load disk templates from the API
     try {
       const templates = await App.api('disks/templates');
       if (Array.isArray(templates) && templates.length > 0) {
         diskTemplates = templates;
-        // 重建磁盘选项: 新建 + 每个模板 + 不挂载
+        // Rebuild disk options: new disk + one per template + no mount
         const diskOpts = [{ value: 'new', labelKey: 'wizard.new-disk-option' }];
         for (const tpl of templates) {
-          // 保留 'openos' 作为向后兼容的 value
+          // Keep 'openos' as the value for backward compatibility
           const val = tpl.path === 'openos.ocd' ? 'openos' : 'disk_template:' + tpl.path;
           diskOpts.push({ value: val, label: tpl.name + T('wizard.template-suffix', ' (预装系统)') });
         }
@@ -574,7 +571,7 @@ const Wizard = (() => {
     });
   }
 
-  // ---------- 工具 ----------
+  // ---------- Utilities ----------
   function formatSize(bytes) {
     if (!bytes) return '0';
     if (bytes < 1024) return bytes + ' B';
@@ -589,7 +586,7 @@ const Wizard = (() => {
       .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
 
-  // ---------- 磁盘配置弹窗 ----------
+  // ---------- Disk configuration dialog ----------
   function openDiskConfig(diskKey) {
     // diskKey = 'disk1' or 'disk2'
     const hw = spec.hardware;
@@ -645,7 +642,6 @@ const Wizard = (() => {
       <button class="btn btn-primary" data-action="dc-ok">${T('wizard.ok', '确定')}</button>
     `;
 
-    // 打开二级弹窗
     Modal.open({
       title: diskKey === 'disk1'
         ? T('wizard.disk-config-title1', '配置磁盘 1 (主盘)')
@@ -661,20 +657,19 @@ const Wizard = (() => {
         const sizeInput = modalBody.querySelector('#dc-size-mb');
         const sizeHint = modalBody.querySelector('#dc-size-hint');
 
-        // 等级变化时自动调整大小和范围
+        // Keep size and range in sync with the selected tier
         tierSel.addEventListener('change', () => {
           const newTier = parseInt(tierSel.value, 10);
           const newMax = OPTIONS.diskSize[newTier];
           sizeInput.max = newMax / 1024 / 1024;
           sizeHint.textContent = I18N.t('wizard.disk-range', { min: formatSize(OPTIONS.diskMinSize), max: formatSize(newMax) });
-          // 如果当前大小超过新上限, 调整为最大
+          // Clamp the current size when the new tier lowers the cap
           const currentMB = parseFloat(sizeInput.value);
           if (currentMB > newMax / 1024 / 1024) {
             sizeInput.value = newMax / 1024 / 1024;
           }
         });
 
-        // 文件夹选择按钮
         const folderBtn = modalBody.querySelector('#dc-folder-btn');
         const folderInput = modalBody.querySelector('#dc-folder');
         const folderHint = modalBody.querySelector('#dc-folder-hint');
@@ -702,19 +697,26 @@ const Wizard = (() => {
               const sizeMB = parseFloat(sizeInput.value);
               const maxMB = OPTIONS.diskSize[newTier] / 1024 / 1024;
               const minMB = OPTIONS.diskMinSize / 1024 / 1024;
-              const finalSizeMB = Math.max(minMB, Math.min(maxMB, isFinite(sizeMB) ? sizeMB : maxMB));
+              if (!isFinite(sizeMB) || sizeMB < minMB) {
+                alert(T('wizard.disk-range', { min: formatSize(OPTIONS.diskMinSize), max: formatSize(OPTIONS.diskSize[newTier]) }));
+                return;
+              }
+              if (sizeMB > maxMB) {
+                alert(T('hw.disk-size-tier-invalid', 'Capacity exceeds the selected tier limit').replace('{size}', maxMB));
+                return;
+              }
+              const finalSizeMB = sizeMB;
 
               hw[diskKey] = 'new';
               hw[diskKey + 'Tier'] = newTier;
               hw[diskKey + 'Size'] = Math.round(finalSizeMB * 1024 * 1024);
               hw[diskKey + 'Label'] = newLabel;
 
-              // 检查是否有文件夹导入
               const files = folderInput ? folderInput.files : [];
               const isMirror = modalBody.querySelector('#dc-mirror')?.checked;
 
               if (files.length > 0) {
-                // 读取所有文件并 base64 编码
+                // Read every file and base64-encode it for the API
                 const fileEntries = [];
                 let topFolder = '';
                 for (const f of files) {
@@ -734,14 +736,14 @@ const Wizard = (() => {
                 }
 
                 if (isMirror) {
-                  // 镜像模式: 存储相对路径, 服务端在 VM 启动时同步
-                  // 浏览器无法获取绝对路径, 所以用户需要手动输入
-                  // 这里我们存储 topFolder 作为提示, 实际路径在服务端解析
-                  hw[diskKey + 'Mirror'] = topFolder; // 相对项目目录
-                  hw[diskKey + 'MirrorFiles'] = fileEntries; // 同时打包初始文件
+                  // Mirror mode: store a relative path; the server syncs it when the VM starts
+                  // Browsers never expose absolute paths, so only the hint folder name is stored
+                  // and the server resolves the real location from it
+                  hw[diskKey + 'Mirror'] = topFolder; // relative to the project directory
+                  hw[diskKey + 'MirrorFiles'] = fileEntries; // also bundle the initial files
                 }
 
-                // 无论是否镜像, 都打包初始文件到磁盘
+                // Always bundle the initial files into the disk image
                 hw[diskKey + 'ImportFiles'] = fileEntries;
               }
 
