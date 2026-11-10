@@ -1609,6 +1609,8 @@ html, body {
 }
 /* 悬浮内容窗口的关闭按钮 (仅手机端显示) */
 .disk-viewer-close { display: none; }
+/* 文件树头部的锁定 / 解锁按钮 (仅手机端显示, 桌面端在内容区工具栏里) */
+.disk-tree-lock-btn { display: none; }
 .disk-mirror-status {
   background: var(--bg-sidebar);
   padding: 4px 12px;
@@ -1881,6 +1883,8 @@ html, body {
   }
   .disk-editor.viewer-open .disk-file-viewer { display: flex; }
   .disk-viewer-close { display: inline-flex; }
+  /* 手机端内容区是悬浮窗口, 锁定 / 解锁入口放在文件树头部, 始终可见 */
+  .disk-tree-lock-btn { display: inline-flex; }
 
   /* 日志: 独立成底部抽屉, 不参与画布列布局, 展开后有足够高度看完整内容 */
   .log-panel {

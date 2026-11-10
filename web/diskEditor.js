@@ -54,6 +54,8 @@ const DiskEditor = (() => {
               <button class="btn btn-icon" title="${I18N.t('disk.new-file')}" data-action="new-file" id="disk-newfile-${cssEsc(diskPath)}">📄</button>
               <button class="btn btn-icon" title="${I18N.t('disk.upload-file')}" data-action="upload" id="disk-upload-${cssEsc(diskPath)}">⬆</button>
               <div class="disk-tree-divider"></div>
+              <button class="btn disk-tree-lock-btn" data-action="unlock" id="disk-tree-unlock-${cssEsc(diskPath)}" title="${I18N.t('disk.unlock')}">🔓 ${I18N.t('disk.unlock')}</button>
+              <button class="btn disk-tree-lock-btn" data-action="lock" id="disk-tree-lock-${cssEsc(diskPath)}" title="${I18N.t('disk.lock')}">🔒 ${I18N.t('disk.lock')}</button>
               <button class="btn btn-icon" title="${I18N.t('disk.expand-all')}" data-action="expand-all" id="disk-expand-all-${cssEsc(diskPath)}">⊞</button>
               <button class="btn btn-icon" title="${I18N.t('disk.collapse-all')}" data-action="collapse-all" id="disk-collapse-all-${cssEsc(diskPath)}">⊟</button>
             </div>
@@ -113,6 +115,9 @@ const DiskEditor = (() => {
     pane.querySelector(`#disk-format-${cssEsc(diskPath)}`).addEventListener('click', () => format(diskPath));
     const closeViewerBtn = pane.querySelector(`#disk-close-viewer-${cssEsc(diskPath)}`);
     if (closeViewerBtn) closeViewerBtn.addEventListener('click', () => closeViewer(diskPath));
+    // 手机端内容区是悬浮窗口, 文件树头部同样提供锁定 / 解锁入口
+    pane.querySelector(`#disk-tree-unlock-${cssEsc(diskPath)}`).addEventListener('click', () => unlock(diskPath));
+    pane.querySelector(`#disk-tree-lock-${cssEsc(diskPath)}`).addEventListener('click', () => lock(diskPath));
 
     const actionsBar = pane.querySelector(`#disk-file-actions-${cssEsc(diskPath)}`);
     actionsBar.querySelector('button[data-action="save"]').addEventListener('click', () => saveCurrent(diskPath));
@@ -204,15 +209,27 @@ const DiskEditor = (() => {
         <span style="color: var(--fg-dim)">${I18N.t('disk.locked-hint')}</span>
       </div>
     `;
-    document.getElementById(`disk-unlock-${cssEsc(diskPath)}`).disabled = false;
-    document.getElementById(`disk-lock-${cssEsc(diskPath)}`).disabled = true;
-    document.getElementById(`disk-format-${cssEsc(diskPath)}`).disabled = false;
+    syncLockButtons(diskPath, true);
   }
 
   function renderUnlocked(diskPath) {
-    document.getElementById(`disk-unlock-${cssEsc(diskPath)}`).disabled = true;
-    document.getElementById(`disk-lock-${cssEsc(diskPath)}`).disabled = false;
-    document.getElementById(`disk-format-${cssEsc(diskPath)}`).disabled = false;
+    syncLockButtons(diskPath, false);
+  }
+
+  // 同步「内容区工具栏」与「文件树头部」两处锁定按钮的可用状态
+  function syncLockButtons(diskPath, locked) {
+    const states = [
+      [`disk-unlock-${cssEsc(diskPath)}`, locked],
+      [`disk-lock-${cssEsc(diskPath)}`, !locked],
+      [`disk-tree-unlock-${cssEsc(diskPath)}`, locked],
+      [`disk-tree-lock-${cssEsc(diskPath)}`, !locked],
+    ];
+    for (const [id, enabled] of states) {
+      const el = document.getElementById(id);
+      if (el) el.disabled = !enabled;
+    }
+    const formatEl = document.getElementById(`disk-format-${cssEsc(diskPath)}`);
+    if (formatEl) formatEl.disabled = false;
   }
 
   async function loadTree(diskPath) {
