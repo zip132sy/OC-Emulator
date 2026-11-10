@@ -47,6 +47,7 @@ const Wizard = (() => {
       { value: 2.5, labelKey: 'hw.option-mem-t25' },
       { value: 3,   labelKey: 'hw.option-mem-t3' },
       { value: 3.5, labelKey: 'hw.option-mem-t35' },
+      { value: 'custom', labelKey: 'hw.option-mem-custom' },
     ],
     eeprom: [
       { value: 'built-in',   labelKey: 'wizard.eeprom-default' },
@@ -109,6 +110,7 @@ const Wizard = (() => {
         eepromImportPath: '',
         apu: { tier: 2 },
         memory: [3, 3],
+        memoryMB: [null, null],
         expansion: ['', '', ''],
         modemStrength: null,
       },
@@ -197,11 +199,19 @@ const Wizard = (() => {
         </div>
         <div class="form-row">
           <label>${T('wizard.mem1', '内存 1 等级')}</label>
-          <select id="wz-mem1">${renderSelect(OPTIONS.memory, hw.memory[0])}</select>
+          <select id="wz-mem1">${renderSelect(OPTIONS.memory, hw.memoryMB[0] != null ? 'custom' : hw.memory[0])}</select>
+        </div>
+        <div class="form-row" id="wz-mem1-mb-row" style="display:none">
+          <label>${T('wizard.mem1-mb', '内存 1 容量')}</label>
+          <div><input type="number" id="wz-mem1-mb" min="1" max="16384" step="1" value="${hw.memoryMB[0] != null ? hw.memoryMB[0] : 8}" style="width:120px;"> <span class="hint">MB</span></div>
         </div>
         <div class="form-row">
           <label>${T('wizard.mem2', '内存 2 等级')}</label>
-          <select id="wz-mem2">${renderSelect(OPTIONS.memory, hw.memory[1])}</select>
+          <select id="wz-mem2">${renderSelect(OPTIONS.memory, hw.memoryMB[1] != null ? 'custom' : hw.memory[1])}</select>
+        </div>
+        <div class="form-row" id="wz-mem2-mb-row" style="display:none">
+          <label>${T('wizard.mem2-mb', '内存 2 容量')}</label>
+          <div><input type="number" id="wz-mem2-mb" min="1" max="16384" step="1" value="${hw.memoryMB[1] != null ? hw.memoryMB[1] : 8}" style="width:120px;"> <span class="hint">MB</span></div>
         </div>
 
         <div class="section-title">${T('wizard.expansion', '扩展卡 (3 个插槽)')}</div>
@@ -244,7 +254,10 @@ const Wizard = (() => {
       return o.labelKey ? T(o.labelKey, String(v)) : o.label;
     };
     const fmtTier = t => (t === 'creative' ? T('wizard.creative', '创造') : 'T' + t);
-    const fmtMem = t => optLabel(OPTIONS.memory, t);
+    const fmtMem = (idx) => {
+      if (hw.memoryMB && hw.memoryMB[idx] != null) return `${hw.memoryMB[idx]} MB`;
+      return optLabel(OPTIONS.memory, hw.memory[idx]);
+    };
     const fmtExp = v => optLabel(OPTIONS.expansion, v);
     const fmtFloppy = v => optLabel(OPTIONS.floppy, v);
     const fmtDisk = v => {
@@ -269,8 +282,8 @@ const Wizard = (() => {
         <div class="form-row"><label>${T('hw.eeprom', 'EEPROM')}</label><span>${hw.eeprom === 'built-in' ? T('hw.option-builtin-bios', '内置 BIOS') : T('wizard.import-prefix', '导入: ') + escapeHTML(hw.eepromImportPath || T('wizard.not-selected', '(未选择)'))}</span></div>
         <div class="section-title">${T('wizard.cpu-mem', '处理器与内存')}</div>
         <div class="form-row"><label>${T('hw.apu-tier', 'APU 等级')}</label><span>${fmtTier(hw.apu.tier)}</span></div>
-        <div class="form-row"><label>${T('hw.mem1', '内存 1')}</label><span>${fmtMem(hw.memory[0])}</span></div>
-        <div class="form-row"><label>${T('hw.mem2', '内存 2')}</label><span>${fmtMem(hw.memory[1])}</span></div>
+        <div class="form-row"><label>${T('hw.mem1', '内存 1')}</label><span>${fmtMem(0)}</span></div>
+        <div class="form-row"><label>${T('hw.mem2', '内存 2')}</label><span>${fmtMem(1)}</span></div>
         <div class="section-title">${T('wizard.expansion', '扩展卡 (3 个插槽)')}</div>
         <div class="form-row"><label>${T('wizard.exp1', '扩展卡 1')}</label><span>${fmtExp(hw.expansion[0])}</span></div>
         <div class="form-row"><label>${T('wizard.exp2', '扩展卡 2')}</label><span>${fmtExp(hw.expansion[1])}</span></div>
@@ -389,10 +402,36 @@ const Wizard = (() => {
       const v = apuSel.value;
       hw.apu.tier = (v === 'creative') ? 'creative' : parseInt(v, 10);
     });
-    const mem1Sel = body.querySelector('#wz-mem1');
-    if (mem1Sel) mem1Sel.addEventListener('change', () => { hw.memory[0] = parseFloat(mem1Sel.value); });
-    const mem2Sel = body.querySelector('#wz-mem2');
-    if (mem2Sel) mem2Sel.addEventListener('change', () => { hw.memory[1] = parseFloat(mem2Sel.value); });
+    // 内存: 选择「自定义」时显示 MB 输入框, 容量存到 memoryMB
+    const bindMemory = (idx) => {
+      const sel = body.querySelector(idx === 0 ? '#wz-mem1' : '#wz-mem2');
+      if (!sel) return;
+      const row = body.querySelector(idx === 0 ? '#wz-mem1-mb-row' : '#wz-mem2-mb-row');
+      const input = body.querySelector(idx === 0 ? '#wz-mem1-mb' : '#wz-mem2-mb');
+      const syncRow = () => {
+        const custom = sel.value === 'custom';
+        if (row) row.style.display = custom ? '' : 'none';
+        if (custom && input && hw.memoryMB[idx] != null) input.value = hw.memoryMB[idx];
+      };
+      syncRow();
+      sel.addEventListener('change', () => {
+        if (sel.value === 'custom') {
+          const v = input ? Number(input.value) : NaN;
+          hw.memoryMB[idx] = Number.isFinite(v) && v > 0 ? v : 8;
+          if (input) input.value = hw.memoryMB[idx];
+        } else {
+          hw.memory[idx] = parseFloat(sel.value);
+          hw.memoryMB[idx] = null;
+        }
+        syncRow();
+      });
+      if (input) input.addEventListener('input', () => {
+        const v = Number(input.value);
+        hw.memoryMB[idx] = Number.isFinite(v) && v > 0 ? v : null;
+      });
+    };
+    bindMemory(0);
+    bindMemory(1);
     const exp1 = body.querySelector('#wz-exp1');
     if (exp1) exp1.addEventListener('change', () => { hw.expansion[0] = exp1.value; });
     const exp2 = body.querySelector('#wz-exp2');
@@ -429,6 +468,16 @@ const Wizard = (() => {
             return;
           }
         } catch { /* ignore - 不存在正常 */ }
+      }
+      if (currentStep === 1) {
+        // 校验自定义内存容量
+        for (let i = 0; i < 2; i++) {
+          const v = spec.hardware.memoryMB[i];
+          if (v != null && (!Number.isFinite(Number(v)) || Number(v) < 1 || Number(v) > 16384)) {
+            alert(T('wizard.mem-invalid', '自定义内存容量必须是 1 ~ 16384 MB 的数值'));
+            return;
+          }
+        }
       }
       currentStep++;
       rerender();

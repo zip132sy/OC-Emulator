@@ -1454,6 +1454,8 @@ const ModView = (() => {
     const exp = Array.isArray(hw.expansion) ? hw.expansion : [null, null, null];
     const curApu = (hw.apu && hw.apu.tier) || 1;
     const curMem = (Array.isArray(hw.memory) && hw.memory.length ? hw.memory[0] : 1);
+    // 自定义内存容量 (MB): 有值时下拉框显示「自定义」
+    const curMemMB = Array.isArray(hw.memoryMB) && hw.memoryMB[0] != null ? Number(hw.memoryMB[0]) : null;
     const curScreen = (cfg.screen && cfg.screen.tier) || 1;
     const curStrength = hw.modemStrength == null ? '' : String(hw.modemStrength);
     const isRunning = mod.state === 'running' || mod.state === 'starting';
@@ -1505,7 +1507,8 @@ const ModView = (() => {
 
     const memOpts = [
       [1, '1'], [1.5, '1.5'], [2, '2'], [2.5, '2.5'], [3, '3'], [3.5, '3.5'],
-    ].map(([v, l]) => opt(v, l, curMem)).join('');
+    ].map(([v, l]) => opt(v, l, curMemMB != null ? 'custom' : curMem)).join('')
+      + opt('custom', T('hw.option-mem-custom', '自定义…'), curMemMB != null ? 'custom' : curMem);
 
     const screenOpts = [
       opt(1, I18N.t('hw.option-screen-t1'), curScreen),
@@ -1549,6 +1552,10 @@ const ModView = (() => {
         <div class="mod-config-pane" data-mcpane="hardware">
           <div class="form-row"><label>${T('mods.config.apu', 'APU 等级')}</label><select id="mod-hw-apu">${apuOpts}</select></div>
           <div class="form-row"><label>${T('mods.config.memory', '内存')}</label><select id="mod-hw-memory">${memOpts}</select></div>
+          <div class="form-row" id="mod-hw-memory-mb-row" style="display:none">
+            <label>${T('mods.config.memory-mb', '内存容量')}</label>
+            <div><input type="number" id="mod-hw-memory-mb" min="1" max="16384" step="1" value="${curMemMB != null ? curMemMB : 8}" style="width:120px;"> <span class="hint">MB</span></div>
+          </div>
           <div class="form-row"><label>${T('mods.config.screen', '屏幕等级')}</label><select id="mod-hw-screen">${screenOpts}</select></div>
           <div class="form-row"><label>${I18N.t('hw.exp1')}</label><select id="mod-hw-exp1">${expOpts(exp[0])}</select></div>
           <div class="form-row"><label>${I18N.t('hw.exp2')}</label><select id="mod-hw-exp2">${expOpts(exp[1])}</select></div>
@@ -1631,6 +1638,15 @@ const ModView = (() => {
           });
         });
 
+        // 内存容量: 选择「自定义」时显示 MB 输入框
+        const memSel = body.querySelector('#mod-hw-memory');
+        const memMbRow = body.querySelector('#mod-hw-memory-mb-row');
+        if (memSel && memMbRow) {
+          const syncMemRow = () => { memMbRow.style.display = memSel.value === 'custom' ? '' : 'none'; };
+          memSel.addEventListener('change', syncMemRow);
+          syncMemRow();
+        }
+
         saveBtn.addEventListener('click', async () => {
           const content = editor.value;
           if (content.trim() === '') {
@@ -1640,6 +1656,21 @@ const ModView = (() => {
           if (byteLength(content) > maxSize) {
             alert(T('mods.config.efi-too-large', 'EFI 超过 4096 字节限制'));
             return;
+          }
+
+          // 内存: 下拉框选「自定义」时按 MB 提交, 否则按等级提交
+          const memSelect = body.querySelector('#mod-hw-memory').value;
+          let memPatch;
+          if (memSelect === 'custom') {
+            const mb = Number(body.querySelector('#mod-hw-memory-mb').value);
+            if (!Number.isFinite(mb) || mb < 1 || mb > 16384) {
+              alert(T('hw.mem-invalid', '自定义内存容量必须是 1 ~ 16384 MB 的数值'));
+              return;
+            }
+            memPatch = { memoryMB: mb };
+          } else {
+            const memVal = Number(memSelect);
+            memPatch = { memory: [memVal, memVal] };
           }
 
           const oldText = saveBtn.textContent;
@@ -1653,7 +1684,6 @@ const ModView = (() => {
             if (r1 && r1.error) throw new Error(r1.error);
 
             const apuVal = body.querySelector('#mod-hw-apu').value;
-            const memVal = Number(body.querySelector('#mod-hw-memory').value);
             const screenVal = Number(body.querySelector('#mod-hw-screen').value);
             const expVal = [
               body.querySelector('#mod-hw-exp1').value || null,
@@ -1663,7 +1693,7 @@ const ModView = (() => {
             const strengthVal = body.querySelector('#mod-hw-strength').value;
             const patch = {
               apu: { tier: apuVal === 'creative' ? 'creative' : Number(apuVal) },
-              memory: [memVal, memVal],
+              ...memPatch,
               expansion: expVal,
               modemStrength: strengthVal === '' ? null : Number(strengthVal),
               screenTier: screenVal,

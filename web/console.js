@@ -975,6 +975,7 @@ const Console = (() => {
       { value: 1, label: t('hw.option-mem-t1') }, { value: 1.5, label: t('hw.option-mem-t15') },
       { value: 2, label: t('hw.option-mem-t2') }, { value: 2.5, label: t('hw.option-mem-t25') },
       { value: 3, label: t('hw.option-mem-t3') }, { value: 3.5, label: t('hw.option-mem-t35') },
+      { value: 'custom', label: t('hw.option-mem-custom') },
     ];
     const expOpts = [
       { value: '', label: t('hw.option-empty-slot') },
@@ -996,6 +997,10 @@ const Console = (() => {
     })();
 
     const cur = cfg?.hardware || {};
+    // 自定义内存容量 (MB): 有值时对应下拉框显示「自定义」
+    const curMemMB = Array.isArray(cur.memoryMB) ? cur.memoryMB : [null, null];
+    const memSelectValue = (i) => (curMemMB[i] != null ? 'custom' : (cur.memory || [3, 3])[i]);
+    const memInputValue = (i) => (curMemMB[i] != null ? curMemMB[i] : 8);
     const exp = cur.expansion || [null, null, null];
     const disabled = isStopped ? '' : 'disabled';
 
@@ -1135,9 +1140,21 @@ const Console = (() => {
           <label>${t('hw.apu-tier')}</label>
           <div class="hw-value"><select id="hw-apu" ${disabled}>${opts(apuOpts, cur.apu?.tier ?? 2)}</select></div>
           <label>${t('hw.mem1')}</label>
-          <div class="hw-value"><select id="hw-mem1" ${disabled}>${opts(memOpts, (cur.memory || [3,3])[0])}</select></div>
+          <div class="hw-value">
+            <select id="hw-mem1" ${disabled}>${opts(memOpts, memSelectValue(0))}</select>
+            <div id="hw-mem1-mb-row" style="display:${curMemMB[0] != null ? 'flex' : 'none'}; align-items:center; gap:6px; margin-top:6px;">
+              <input type="number" id="hw-mem1-mb" min="1" max="16384" step="1" value="${memInputValue(0)}" style="width:120px;" ${disabled}>
+              <span class="hint">MB</span>
+            </div>
+          </div>
           <label>${t('hw.mem2')}</label>
-          <div class="hw-value"><select id="hw-mem2" ${disabled}>${opts(memOpts, (cur.memory || [3,3])[1])}</select></div>
+          <div class="hw-value">
+            <select id="hw-mem2" ${disabled}>${opts(memOpts, memSelectValue(1))}</select>
+            <div id="hw-mem2-mb-row" style="display:${curMemMB[1] != null ? 'flex' : 'none'}; align-items:center; gap:6px; margin-top:6px;">
+              <input type="number" id="hw-mem2-mb" min="1" max="16384" step="1" value="${memInputValue(1)}" style="width:120px;" ${disabled}>
+              <span class="hint">MB</span>
+            </div>
+          </div>
           <label>${t('hw.eeprom')}</label>
           <div class="hw-value">
             <div class="storage-list" id="hw-eeprom-list">${eepromListHTML}</div>
@@ -1300,6 +1317,18 @@ const Console = (() => {
     if (fileInputLua) fileInputLua.addEventListener('change', () => {
       if (fileInputLua.files[0]) uploadEeprom(fileInputLua.files[0], 'lua');
     });
+
+    // --- 内存容量: 选择「自定义」时显示 MB 输入框 ---
+    const bindMemRow = (selId, rowId) => {
+      const sel = document.querySelector(selId);
+      const row = document.querySelector(rowId);
+      if (!sel || !row) return;
+      const sync = () => { row.style.display = sel.value === 'custom' ? 'flex' : 'none'; };
+      sel.addEventListener('change', sync);
+      sync();
+    };
+    bindMemRow('#hw-mem1', '#hw-mem1-mb-row');
+    bindMemRow('#hw-mem2', '#hw-mem2-mb-row');
 
     // --- 磁盘2 选项交互 ---
     const disk2List = document.querySelector('#hw-disk2-list');
@@ -1588,9 +1617,23 @@ const Console = (() => {
     if (!isHotplug) {
       // 停机时可修改全部
       patch.hardware.apu = { tier: getVal('hw-apu') };
-      const m1 = parseFloat(getVal('hw-mem1'));
-      const m2 = parseFloat(getVal('hw-mem2'));
-      patch.hardware.memory = [m1, m2];
+      // 内存: 下拉框选「自定义」时读取 MB 输入框
+      const oldTiers = Array.isArray(oldCfg?.hardware?.memory) ? oldCfg.hardware.memory : [3, 3];
+      const readMem = (i) => {
+        const sel = getVal(i === 0 ? 'hw-mem1' : 'hw-mem2');
+        if (sel !== 'custom') return { tier: parseFloat(sel), mb: null };
+        const mb = Number(getVal(i === 0 ? 'hw-mem1-mb' : 'hw-mem2-mb'));
+        if (!Number.isFinite(mb) || mb < 1 || mb > 16384) return null;
+        return { tier: oldTiers[i] != null ? oldTiers[i] : 3, mb };
+      };
+      const mem1 = readMem(0);
+      const mem2 = readMem(1);
+      if (!mem1 || !mem2) {
+        alert(t('hw.mem-invalid'));
+        return;
+      }
+      patch.hardware.memory = [mem1.tier, mem2.tier];
+      patch.hardware.memoryMB = [mem1.mb, mem2.mb];
       // EEPROM: 从选项列表获取
       const eepromVal = getSelectedFromList('hw-eeprom-list') || 'built-in';
       patch.hardware.eeprom = eepromVal;

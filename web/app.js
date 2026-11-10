@@ -898,7 +898,12 @@ const App = (() => {
             : 'T' + vm.config.apu.tier;
           metaParts.push(I18N.t('vm.meta.apu') + ' ' + tierLabel);
         }
-        if (Array.isArray(vm.config.memory)) metaParts.push(I18N.t('vm.meta.ram') + ' T' + vm.config.memory.join('/'));
+        if (Array.isArray(vm.config.memory)) {
+          const mbArr = Array.isArray(vm.config.memoryMB) ? vm.config.memoryMB : null;
+          const sticks = [0, 1].map((i) =>
+            (mbArr && mbArr[i] != null ? mbArr[i] + 'MB' : 'T' + vm.config.memory[i]));
+          metaParts.push(I18N.t('vm.meta.ram') + ' ' + sticks.join('/'));
+        }
       }
       const stateKey = 'vm.state.' + (vm.state || 'unknown');
       metaParts.push(I18N.t(stateKey));

@@ -782,7 +782,19 @@ local apuTier = (hw.apu or {}).tier or 2
 local screenTier = (vmConfig.screen or {}).tier or 3
 
 local config = {
-  ramSize = memTierToSize(memSizes[1] or 3) + memTierToSize(memSizes[2] or 3),
+  -- 内存: hardware.memoryMB 有值时按 MB 直接换算 (0 表示空槽), 否则按等级换算
+  ramSize = (function()
+    local mbList = hw.memoryMB
+    if type(mbList) ~= "table" then
+      return memTierToSize(memSizes[1] or 3) + memTierToSize(memSizes[2] or 3)
+    end
+    local function stick(i)
+      local mb = tonumber(mbList[i])
+      if mb and mb >= 0 then return math.floor(mb * 1024 * 1024) end
+      return memTierToSize(memSizes[i] or 3)
+    end
+    return stick(1) + stick(2)
+  end)(),
   screenWidth = screenTier == 1 and 50 or screenTier == 2 and 80 or 160,
   screenHeight = screenTier == 1 and 16 or screenTier == 2 and 25 or 50,
   gpuTier = apuTierToGpuTier(apuTier),
