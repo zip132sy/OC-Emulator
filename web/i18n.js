@@ -91,7 +91,7 @@ const I18N = (() => {
       'vkbd.hint': '先点 Ctrl / Alt / Shift, 再点目标键',
       'vkbd.close.title': '收起虚拟键盘',
       'vmouse.btn': '🖱',
-      'vmouse.btn.title': '虚拟鼠标 (拖动移动指针, 轻点点击, 长按右键; 拖动本按钮可换位置)',
+      'vmouse.btn.title': '虚拟鼠标 (开启后按住拖动即拖拽; 拖动本按钮可换位置)',
       'scroll.up.title': '向上滚动',
       'scroll.down.title': '向下滚动',
 
@@ -982,7 +982,7 @@ const I18N = (() => {
       'vkbd.hint': 'Tap Ctrl / Alt / Shift, then the target key',
       'vkbd.close.title': 'Hide virtual keyboard',
       'vmouse.btn': '🖱',
-      'vmouse.btn.title': 'Virtual mouse (drag to move the pointer, tap to click, long press for right click; drag this button to reposition it)',
+      'vmouse.btn.title': 'Virtual mouse (while on, pressing and moving drags in the guest; drag this button to reposition it)',
       'scroll.up.title': 'Scroll up',
       'scroll.down.title': 'Scroll down',
 

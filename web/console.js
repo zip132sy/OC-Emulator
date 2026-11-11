@@ -459,9 +459,8 @@ const Console = (() => {
       if (!touch) return;
       e.preventDefault();
       if (view.vmouseOn) {
+        // endVirtualMouse clears the pending move itself and flushes it as a drag
         view._touchId = null;
-        view._touchPending = false;
-        view._touchMoveEvent = null;
         view._pressPoint = null;
         view._lpFired = false;
         endVirtualMouse(view, vmName, touch);
@@ -2812,10 +2811,12 @@ const Console = (() => {
   }
 
   // ---------- Virtual mouse (touch only) ----------
-  // Floating toggle for phones/tablets. While it is on, dragging a finger only moves a
-  // crosshair and a tap sends the click, so a drag never presses the guest by accident.
-  // The toggle itself can be dragged and snaps to the closest canvas edge to keep the
-  // screen readable; the coarse-pointer media query keeps it hidden on desktops.
+  // Floating toggle for phones/tablets. While it is on, a finger press sends the left
+  // button down immediately and every move is forwarded as a drag, so dragging works
+  // like a mouse drag (window titles, sliders, text selection). A crosshair shows where
+  // the press landed. The toggle itself can be dragged and snaps to the closest canvas
+  // edge to keep the screen readable; the coarse-pointer media query keeps it hidden on
+  // desktops.
   const VMOUSE_EDGE = 4;   // minimum distance from the console edge
   const VMOUSE_GAP = 6;    // distance kept between the toggle and the canvas
   const VMOUSE_SLOP = 6;   // movement that turns a tap into a drag
@@ -2854,30 +2855,17 @@ const Console = (() => {
   }
 
   function cancelVirtualMouse(view) {
-    if (view._vmLpTimer) {
-      clearTimeout(view._vmLpTimer);
-      view._vmLpTimer = null;
-    }
     view._vmGesture = null;
-    view._vmRightFired = false;
+    view._touchPending = false;
+    view._touchMoveEvent = null;
   }
 
   function startVirtualMouse(view, vmName, touch) {
     cancelVirtualMouse(view);
-    view._vmGesture = {
-      startX: touch.clientX, startY: touch.clientY,
-      x: touch.clientX, y: touch.clientY,
-    };
+    view._vmGesture = { x: touch.clientX, y: touch.clientY };
     placeVirtualPointer(view, touch.clientX, touch.clientY);
-    // Long press = right click at the crosshair
-    view._vmLpTimer = setTimeout(() => {
-      view._vmLpTimer = null;
-      const g = view._vmGesture;
-      if (!g) return;
-      view._vmRightFired = true;
-      sendTouchAt(vmName, g.x, g.y, 'touch', 1);
-      sendTouchAt(vmName, g.x, g.y, 'drop', 1);
-    }, LONG_PRESS_MS);
+    // Drag style: the left button goes down on press, so any move becomes a real drag
+    sendTouchAt(vmName, touch.clientX, touch.clientY, 'touch');
   }
 
   function moveVirtualMouse(view, vmName, touch) {
@@ -2885,17 +2873,22 @@ const Console = (() => {
     if (!g) return;
     g.x = touch.clientX;
     g.y = touch.clientY;
-    if (view._vmRightFired) return;
-    if (view._vmLpTimer) {
-      const dx = g.x - g.startX;
-      const dy = g.y - g.startY;
-      // Moving cancels the right click: this gesture is a pointer move, not a click
-      if (dx * dx + dy * dy > LONG_PRESS_DIST * LONG_PRESS_DIST) {
-        clearTimeout(view._vmLpTimer);
-        view._vmLpTimer = null;
-      }
+    placeVirtualPointer(view, touch.clientX, touch.clientY);
+    // Coalesce per frame like mouse drags, so fast moves do not flood the socket
+    if (view._touchPending) {
+      view._touchMoveEvent = touch;
+      return;
     }
-    placeVirtualPointer(view, g.x, g.y);
+    view._touchPending = true;
+    view._touchMoveEvent = touch;
+    requestAnimationFrame(() => {
+      view._touchPending = false;
+      if (view._touchMoveEvent && view._vmGesture) {
+        const pending = view._touchMoveEvent;
+        sendTouchAt(vmName, pending.clientX, pending.clientY, 'drag');
+      }
+      view._touchMoveEvent = null;
+    });
   }
 
   function endVirtualMouse(view, vmName, touch) {
@@ -2903,20 +2896,13 @@ const Console = (() => {
     if (!g) return;
     const x = touch ? touch.clientX : g.x;
     const y = touch ? touch.clientY : g.y;
-    if (view._vmLpTimer) {
-      clearTimeout(view._vmLpTimer);
-      view._vmLpTimer = null;
-    }
-    const rightFired = view._vmRightFired;
-    const dx = x - g.startX;
-    const dy = y - g.startY;
-    const moved = dx * dx + dy * dy > LONG_PRESS_DIST * LONG_PRESS_DIST;
+    const hadPendingMove = view._touchPending;
     view._vmGesture = null;
-    view._vmRightFired = false;
+    view._touchPending = false;
+    view._touchMoveEvent = null;
     placeVirtualPointer(view, x, y);
-    // The long press already clicked; a drag only moved the pointer
-    if (rightFired || moved) return;
-    sendTouchAt(vmName, x, y, 'touch');
+    // A move that never reached the next frame still has to reach the guest
+    if (hadPendingMove) sendTouchAt(vmName, x, y, 'drag');
     sendTouchAt(vmName, x, y, 'drop');
   }
 
