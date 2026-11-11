@@ -1758,7 +1758,10 @@ end
 -- ============================================================
 -- computer API
 -- ============================================================
-local computer = {
+-- Assign the forward-declared local (see "local computer" above dispatchServerMessage)
+-- instead of declaring a new one: a second "local computer" would shadow it, leaving the
+-- message dispatcher with a nil upvalue, so battery sync (computer.energy) was dropped.
+computer = {
   _address = genAddr(),
   _tmpAddr = nil,
   _bootAddr = nil,
