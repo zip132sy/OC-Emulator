@@ -745,7 +745,7 @@ const Console = (() => {
             <label style="display:flex; align-items:center; gap:6px;">
               <input type="radio" name="floppy-size" value="custom">
               <span>${t('hw.floppy-size-custom')}</span>
-              <input type="number" id="floppy-custom-size" min="0.125" max="4" step="0.125" placeholder="0.125 ~ 4" style="width:140px;">
+              <input type="number" id="floppy-custom-size" min="0.001" step="0.001" placeholder="MB" style="width:140px;">
               <span style="color:var(--muted); font-size:12px;">${t('hw.floppy-size-custom-hint')}</span>
             </label>
           </div>
@@ -763,12 +763,11 @@ const Console = (() => {
         if (checked) {
           if (checked.value === 'custom') {
             const mb = parseFloat(document.querySelector('#floppy-custom-size').value);
-            const v = Math.round(mb * 1024 * 1024);
-            if (!isFinite(mb) || v < 131072 || v > 4194304 || (v % 1024 !== 0)) {
+            if (!isFinite(mb) || mb <= 0) {
               alert(t('hw.floppy-size-invalid'));
               return;
             }
-            size = v;
+            size = Math.max(1, Math.round(mb * 1024 * 1024));
           } else {
             size = parseInt(checked.value, 10);
           }
@@ -824,7 +823,7 @@ const Console = (() => {
           </div>
           <div class="form-row" id="row-disk-size-custom" style="display:none;">
             <label></label>
-            <input type="number" id="new-disk-size-custom" min="0.125" max="16" step="0.125" value="4" style="flex:1;">
+            <input type="number" id="new-disk-size-custom" min="0.001" step="0.001" value="4" style="flex:1;">
             <span style="color:var(--muted); font-size:12px; margin-left:6px;">MB</span>
           </div>
           <div class="form-row" id="row-disk-tier">
@@ -885,17 +884,6 @@ const Console = (() => {
         sizeCustomRow.style.display = sizeSelect.value === 'custom' ? 'flex' : 'none';
       });
 
-      // The tier defines the maximum capacity, so keep the custom input in range.
-      const tierSelect = document.getElementById('new-disk-tier');
-      const tierLimits = { 1: 1048576, 2: 2097152, 3: 4194304 };
-      function syncSizeLimit() {
-        const limMB = (tierLimits[parseInt(tierSelect.value, 10)] || 4194304) / 1024 / 1024;
-        sizeCustomInput.max = limMB;
-        if (parseFloat(sizeCustomInput.value) > limMB) sizeCustomInput.value = limMB;
-      }
-      tierSelect.addEventListener('change', syncSizeLimit);
-      syncSizeLimit();
-
       // Browse folder: the path is typed through a prompt
       document.getElementById('btn-mirror-folder').addEventListener('click', () => {
         const current = document.getElementById('new-disk-mirror').value;
@@ -923,16 +911,11 @@ const Console = (() => {
         let size = parseInt(sizeSelect.value, 10);
         if (isNaN(size)) {
           const mb = parseFloat(sizeCustomInput.value);
-          size = Math.round(mb * 1024 * 1024);
-          if (!isFinite(mb) || size < 131072 || (size % 1024 !== 0)) {
+          if (!isFinite(mb) || mb <= 0) {
             alert(t('hw.disk-size-invalid'));
             return;
           }
-        }
-        const tierMax = tierLimits[tier] || 4194304;
-        if (size > tierMax) {
-          alert(t('hw.disk-size-tier-invalid').replace('{size}', tierMax / 1024 / 1024));
-          return;
+          size = Math.max(1, Math.round(mb * 1024 * 1024));
         }
 
         const result = {
@@ -1153,7 +1136,7 @@ const Console = (() => {
           <div class="hw-value">
             <select id="hw-mem1" ${disabled}>${opts(memOpts, memSelectValue(0))}</select>
             <div id="hw-mem1-mb-row" style="display:${curMemMB[0] != null ? 'flex' : 'none'}; align-items:center; gap:6px; margin-top:6px;">
-              <input type="number" id="hw-mem1-mb" min="1" max="16384" step="1" value="${memInputValue(0)}" style="width:120px;" ${disabled}>
+              <input type="number" id="hw-mem1-mb" min="0.001" step="0.001" value="${memInputValue(0)}" style="width:120px;" ${disabled}>
               <span class="hint">MB</span>
             </div>
           </div>
@@ -1161,7 +1144,7 @@ const Console = (() => {
           <div class="hw-value">
             <select id="hw-mem2" ${disabled}>${opts(memOpts, memSelectValue(1))}</select>
             <div id="hw-mem2-mb-row" style="display:${curMemMB[1] != null ? 'flex' : 'none'}; align-items:center; gap:6px; margin-top:6px;">
-              <input type="number" id="hw-mem2-mb" min="1" max="16384" step="1" value="${memInputValue(1)}" style="width:120px;" ${disabled}>
+              <input type="number" id="hw-mem2-mb" min="0.001" step="0.001" value="${memInputValue(1)}" style="width:120px;" ${disabled}>
               <span class="hint">MB</span>
             </div>
           </div>
@@ -1628,7 +1611,7 @@ const Console = (() => {
         const sel = getVal(i === 0 ? 'hw-mem1' : 'hw-mem2');
         if (sel !== 'custom') return { tier: parseFloat(sel), mb: null };
         const mb = Number(getVal(i === 0 ? 'hw-mem1-mb' : 'hw-mem2-mb'));
-        if (!Number.isFinite(mb) || mb < 1 || mb > 16384) return null;
+        if (!Number.isFinite(mb) || mb <= 0) return null;
         return { tier: oldTiers[i] != null ? oldTiers[i] : 3, mb };
       };
       const mem1 = readMem(0);

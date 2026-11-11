@@ -63,7 +63,9 @@ for k, v in pairs(io) do real_io[k] = v end
 for k, v in pairs(os) do real_os[k] = v end
 local io, os = real_io, real_os
 
--- Tier capacity limits (standard OpenComputers values)
+-- Tier capacity limits (standard OpenComputers values).
+-- Kept for reference only: the emulator does not enforce them, so a disk may
+-- use any capacity regardless of its tier.
 local TIER_LIMITS = {
   [1] = 1 * 1024 * 1024,   -- T1: 1MB
   [2] = 2 * 1024 * 1024,   -- T2: 2MB
@@ -481,12 +483,6 @@ function disk.save(path, label, files, size, tier, locked)
   tier = tier or 3
   locked = locked or false
 
-  -- Validate capacity against the tier limit
-  local maxTier = TIER_LIMITS[tier] or TIER_LIMITS[3]
-  if size > maxTier then
-    return false, string.format("size %d exceeds tier %d limit %d", size, tier, maxTier)
-  end
-
   if #label > 16 then label = label:sub(1, 16) end
   local labelPadded = label .. string.rep("\0", 16 - #label)
 
@@ -806,11 +802,6 @@ function disk.saveFloppy(path, label, files, size, locked)
   size = size or FLOPPY_DEFAULT_SIZE
   files = files or {}
   locked = locked or false
-
-  -- Clamp to the floppy capacity limit
-  if size > FLOPPY_DEFAULT_SIZE then
-    size = FLOPPY_DEFAULT_SIZE
-  end
 
   if #label > 16 then label = label:sub(1, 16) end
   local labelPadded = label .. string.rep("\0", 16 - #label)

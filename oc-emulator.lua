@@ -1010,17 +1010,6 @@ local function saveDisk(path)
   -- to 4MB and force tier 3, contradicting what the disk declares.
   local ok, err = disk.save(path, vdisk.label, vdisk.files, size, tier, false)
   if not ok then
-    -- Fallback: if the declared tier is too small for the actual capacity (possible with hand-made images),
-    -- raise the tier and retry so installs are not silently dropped by the capacity check.
-    local limits = disk.TIER_LIMITS or { [1] = 1048576, [2] = 2097152, [3] = 4194304 }
-    local needTier = 3
-    if size <= (limits[1] or 1048576) then needTier = 1
-    elseif size <= (limits[2] or 2097152) then needTier = 2 end
-    if needTier > tier then
-      ok, err = disk.save(path, vdisk.label, vdisk.files, size, needTier, false)
-    end
-  end
-  if not ok then
     _stderr:write("[emulator] WARNING: save disk1 failed: " .. tostring(err) .. "\n")
   end
   return ok, err
@@ -1042,16 +1031,6 @@ local function saveAllDisks()
       local size2 = fs2Size or (4 * 1024 * 1024)
       local tier2 = fs2Tier or 3
       local ok2, err2 = disk.save(config.disk2File, fs2Label, fs2Files, size2, tier2, false)
-      if not ok2 then
-        -- As with disk1: raise the tier on mismatch instead of dropping the write
-        local limits = disk.TIER_LIMITS or { [1] = 1048576, [2] = 2097152, [3] = 4194304 }
-        local needTier = 3
-        if size2 <= (limits[1] or 1048576) then needTier = 1
-        elseif size2 <= (limits[2] or 2097152) then needTier = 2 end
-        if needTier > tier2 then
-          ok2, err2 = disk.save(config.disk2File, fs2Label, fs2Files, size2, needTier, false)
-        end
-      end
       if not ok2 then error(err2 or "disk2 save failed") end
     end)
     if not ok then _stderr:write("[emulator] WARNING: save disk2 failed: " .. tostring(err) .. "\n") end

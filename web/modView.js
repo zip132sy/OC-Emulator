@@ -1554,7 +1554,7 @@ const ModView = (() => {
           <div class="form-row"><label>${T('mods.config.memory', '内存')}</label><select id="mod-hw-memory">${memOpts}</select></div>
           <div class="form-row" id="mod-hw-memory-mb-row" style="display:none">
             <label>${T('mods.config.memory-mb', '内存容量')}</label>
-            <div><input type="number" id="mod-hw-memory-mb" min="1" max="16384" step="1" value="${curMemMB != null ? curMemMB : 8}" style="width:120px;"> <span class="hint">MB</span></div>
+            <div><input type="number" id="mod-hw-memory-mb" min="0.001" step="0.001" value="${curMemMB != null ? curMemMB : 8}" style="width:120px;"> <span class="hint">MB</span></div>
           </div>
           <div class="form-row"><label>${T('mods.config.screen', '屏幕等级')}</label><select id="mod-hw-screen">${screenOpts}</select></div>
           <div class="form-row"><label>${I18N.t('hw.exp1')}</label><select id="mod-hw-exp1">${expOpts(exp[0])}</select></div>
@@ -1663,8 +1663,8 @@ const ModView = (() => {
           let memPatch;
           if (memSelect === 'custom') {
             const mb = Number(body.querySelector('#mod-hw-memory-mb').value);
-            if (!Number.isFinite(mb) || mb < 1 || mb > 16384) {
-              alert(T('hw.mem-invalid', '自定义内存容量必须是 1 ~ 16384 MB 的数值'));
+            if (!Number.isFinite(mb) || mb <= 0) {
+              alert(T('hw.mem-invalid', '自定义内存容量必须是大于 0 的数值 (单位 MB)'));
               return;
             }
             memPatch = { memoryMB: mb };

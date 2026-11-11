@@ -24,17 +24,12 @@ const Wizard = (() => {
       { value: 'openos', labelKey: 'hw.option-openos' },
       { value: '',       labelKey: 'wizard.no-mount' },
     ],
-    diskTier: [
-      { value: 1, label: 'T1 (≤1MB)' },
-      { value: 2, label: 'T2 (≤2MB)' },
-      { value: 3, label: 'T3 (≤4MB)' },
-    ],
+    // Default capacity per tier; the user can override it with any value.
     diskSize: {
       1: 1 * 1024 * 1024,
       2: 2 * 1024 * 1024,
       3: 4 * 1024 * 1024,
     },
-    diskMinSize: 128 * 1024,  // minimum 128 KB
     apu: [
       { value: 1,          labelKey: 'hw.option-apu-t1' },
       { value: 2,          labelKey: 'hw.option-apu-t2' },
@@ -203,7 +198,7 @@ const Wizard = (() => {
         </div>
         <div class="form-row" id="wz-mem1-mb-row" style="display:none">
           <label>${T('wizard.mem1-mb', '内存 1 容量')}</label>
-          <div><input type="number" id="wz-mem1-mb" min="1" max="16384" step="1" value="${hw.memoryMB[0] != null ? hw.memoryMB[0] : 8}" style="width:120px;"> <span class="hint">MB</span></div>
+          <div><input type="number" id="wz-mem1-mb" min="0.001" step="0.001" value="${hw.memoryMB[0] != null ? hw.memoryMB[0] : 8}" style="width:120px;"> <span class="hint">MB</span></div>
         </div>
         <div class="form-row">
           <label>${T('wizard.mem2', '内存 2 等级')}</label>
@@ -211,7 +206,7 @@ const Wizard = (() => {
         </div>
         <div class="form-row" id="wz-mem2-mb-row" style="display:none">
           <label>${T('wizard.mem2-mb', '内存 2 容量')}</label>
-          <div><input type="number" id="wz-mem2-mb" min="1" max="16384" step="1" value="${hw.memoryMB[1] != null ? hw.memoryMB[1] : 8}" style="width:120px;"> <span class="hint">MB</span></div>
+          <div><input type="number" id="wz-mem2-mb" min="0.001" step="0.001" value="${hw.memoryMB[1] != null ? hw.memoryMB[1] : 8}" style="width:120px;"> <span class="hint">MB</span></div>
         </div>
 
         <div class="section-title">${T('wizard.expansion', '扩展卡 (3 个插槽)')}</div>
@@ -470,8 +465,8 @@ const Wizard = (() => {
         // Validate custom memory capacity
         for (let i = 0; i < 2; i++) {
           const v = spec.hardware.memoryMB[i];
-          if (v != null && (!Number.isFinite(Number(v)) || Number(v) < 1 || Number(v) > 16384)) {
-            alert(T('wizard.mem-invalid', '自定义内存容量必须是 1 ~ 16384 MB 的数值'));
+          if (v != null && (!Number.isFinite(Number(v)) || Number(v) <= 0)) {
+            alert(T('wizard.mem-invalid', '自定义内存容量必须是大于 0 的数值 (单位 MB)'));
             return;
           }
         }
@@ -592,8 +587,8 @@ const Wizard = (() => {
     const hw = spec.hardware;
     const tier = hw[diskKey + 'Tier'] || 3;
     const label = hw[diskKey + 'Label'] || (spec.name ? (spec.name + '-' + diskKey) : 'NewDisk');
-    const maxSize = OPTIONS.diskSize[tier];
-    const currentSize = hw[diskKey + 'Size'] || maxSize;
+    const defaultSize = OPTIONS.diskSize[tier] || 4 * 1024 * 1024;
+    const currentSize = hw[diskKey + 'Size'] || defaultSize;
 
     const bodyHTML = `
       <div class="wizard-step active">
@@ -609,19 +604,19 @@ const Wizard = (() => {
         <div class="form-row">
           <label>${T('wizard.disk-tier', '磁盘等级')}</label>
           <select id="dc-tier">
-            <option value="1" ${tier===1?'selected':''}>T1 (≤ 1MB)</option>
-            <option value="2" ${tier===2?'selected':''}>T2 (≤ 2MB)</option>
-            <option value="3" ${tier===3?'selected':''}>T3 (≤ 4MB)</option>
+            <option value="1" ${tier===1?'selected':''}>T1</option>
+            <option value="2" ${tier===2?'selected':''}>T2</option>
+            <option value="3" ${tier===3?'selected':''}>T3</option>
           </select>
         </div>
         <div class="form-row">
           <label>${T('wizard.disk-size', '磁盘大小')}</label>
-          <input type="number" id="dc-size-mb" value="${(currentSize / 1024 / 1024).toFixed(3).replace(/\.?0+$/, '')}" min="${OPTIONS.diskMinSize / 1024 / 1024}" max="${maxSize / 1024 / 1024}" step="0.125" style="width:100px;"> MB
-          <span class="hint" id="dc-size-hint">${I18N.t('wizard.disk-range', { min: formatSize(OPTIONS.diskMinSize), max: formatSize(maxSize) })}</span>
+          <input type="number" id="dc-size-mb" value="${(currentSize / 1024 / 1024).toFixed(3).replace(/\.?0+$/, '')}" min="0.001" step="0.001" style="width:100px;"> MB
+          <span class="hint" id="dc-size-hint">${I18N.t('wizard.disk-size-hint', '单位 MB, 可填任意正数')}</span>
         </div>
         <div class="form-row">
           <div></div>
-          <div class="hint">${T('wizard.disk-tier-hint', '不同等级的磁盘在 OC 中容量上限不同: T1=1MB, T2=2MB, T3=4MB')}</div>
+          <div class="hint">${T('wizard.disk-tier-hint', '等级仅作为磁盘元数据记录, 不限制容量 (原版 OC 中 T1=1MB, T2=2MB, T3=4MB)')}</div>
         </div>
         <div class="section-title" style="margin-top:15px;">${T('wizard.import-folder', '从文件夹导入 (可选)')}</div>
         <div class="form-row">
@@ -655,20 +650,6 @@ const Wizard = (() => {
 
         const tierSel = modalBody.querySelector('#dc-tier');
         const sizeInput = modalBody.querySelector('#dc-size-mb');
-        const sizeHint = modalBody.querySelector('#dc-size-hint');
-
-        // Keep size and range in sync with the selected tier
-        tierSel.addEventListener('change', () => {
-          const newTier = parseInt(tierSel.value, 10);
-          const newMax = OPTIONS.diskSize[newTier];
-          sizeInput.max = newMax / 1024 / 1024;
-          sizeHint.textContent = I18N.t('wizard.disk-range', { min: formatSize(OPTIONS.diskMinSize), max: formatSize(newMax) });
-          // Clamp the current size when the new tier lowers the cap
-          const currentMB = parseFloat(sizeInput.value);
-          if (currentMB > newMax / 1024 / 1024) {
-            sizeInput.value = newMax / 1024 / 1024;
-          }
-        });
 
         const folderBtn = modalBody.querySelector('#dc-folder-btn');
         const folderInput = modalBody.querySelector('#dc-folder');
@@ -695,21 +676,13 @@ const Wizard = (() => {
               const newTier = parseInt(tierSel.value, 10);
               const newLabel = modalBody.querySelector('#dc-label').value.trim() || (spec.name + '-' + diskKey);
               const sizeMB = parseFloat(sizeInput.value);
-              const maxMB = OPTIONS.diskSize[newTier] / 1024 / 1024;
-              const minMB = OPTIONS.diskMinSize / 1024 / 1024;
-              if (!isFinite(sizeMB) || sizeMB < minMB) {
-                alert(T('wizard.disk-range', { min: formatSize(OPTIONS.diskMinSize), max: formatSize(OPTIONS.diskSize[newTier]) }));
+              if (!isFinite(sizeMB) || sizeMB <= 0) {
+                alert(T('hw.disk-size-invalid', '磁盘容量必须是正数 (单位 MB)'));
                 return;
               }
-              if (sizeMB > maxMB) {
-                alert(T('hw.disk-size-tier-invalid', 'Capacity exceeds the selected tier limit').replace('{size}', maxMB));
-                return;
-              }
-              const finalSizeMB = sizeMB;
-
               hw[diskKey] = 'new';
               hw[diskKey + 'Tier'] = newTier;
-              hw[diskKey + 'Size'] = Math.round(finalSizeMB * 1024 * 1024);
+              hw[diskKey + 'Size'] = Math.max(1, Math.round(sizeMB * 1024 * 1024));
               hw[diskKey + 'Label'] = newLabel;
 
               const files = folderInput ? folderInput.files : [];
