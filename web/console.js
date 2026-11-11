@@ -2841,18 +2841,11 @@ const Console = (() => {
     if (view.vmousePointer) view.vmousePointer.style.display = 'none';
   }
 
-  // Store the pointer as a ratio of the canvas box, so it survives resizes and rotation
-  function setVirtualCursorAt(view, clientX, clientY) {
-    if (!view.canvas || !view.vmousePointer) return false;
+  // Canvas-local point of a client position (kept as a ratio so resizes are handled)
+  function virtualLocalAt(view, clientX, clientY) {
+    if (!view.canvas) return null;
     computePoint(view, clientX, clientY);
-    const local = view.lastLocal;
-    if (!local || !local.boxW || !local.boxH) return false;
-    view._vmCursor = {
-      nx: Math.max(0, Math.min(1, local.lx / local.boxW)),
-      ny: Math.max(0, Math.min(1, local.ly / local.boxH)),
-    };
-    paintVirtualCursor(view);
-    return true;
+    return view.lastLocal || null;
   }
 
   function paintVirtualCursor(view) {
@@ -2912,12 +2905,23 @@ const Console = (() => {
 
   function startVirtualMouse(view, vmName, touch) {
     cancelVirtualMouse(view);
+    const local = virtualLocalAt(view, touch.clientX, touch.clientY);
+    // First use only: park the pointer where the finger landed
+    if (!view._vmCursor && local && local.boxW && local.boxH) {
+      view._vmCursor = {
+        nx: Math.max(0, Math.min(1, local.lx / local.boxW)),
+        ny: Math.max(0, Math.min(1, local.ly / local.boxH)),
+      };
+      paintVirtualCursor(view);
+    }
     view._vmGesture = {
       startX: touch.clientX, startY: touch.clientY,
+      startLx: local ? local.lx : 0,
+      startLy: local ? local.ly : 0,
+      startNx: view._vmCursor ? view._vmCursor.nx : 0.5,
+      startNy: view._vmCursor ? view._vmCursor.ny : 0.5,
       moved: false, rightFired: false,
     };
-    // First use: park the pointer where the finger landed
-    if (!view._vmCursor) setVirtualCursorAt(view, touch.clientX, touch.clientY);
     // Long press = right click at the pointer
     view._vmLpTimer = setTimeout(() => {
       view._vmLpTimer = null;
@@ -2942,7 +2946,15 @@ const Console = (() => {
     }
     // Small jitter while tapping must not move the pointer
     if (!g.moved) return;
-    setVirtualCursorAt(view, touch.clientX, touch.clientY);
+    const local = virtualLocalAt(view, touch.clientX, touch.clientY);
+    if (!local || !local.boxW || !local.boxH) return;
+    // Relative movement: the pointer follows the finger delta instead of jumping to the finger,
+    // so touching far away never teleports it and it stays where it was released
+    view._vmCursor = {
+      nx: Math.max(0, Math.min(1, g.startNx + (local.lx - g.startLx) / local.boxW)),
+      ny: Math.max(0, Math.min(1, g.startNy + (local.ly - g.startLy) / local.boxH)),
+    };
+    paintVirtualCursor(view);
   }
 
   function endVirtualMouse(view, vmName, touch) {
