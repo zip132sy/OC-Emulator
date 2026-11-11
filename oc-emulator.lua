@@ -1419,6 +1419,8 @@ local function dispatchServerMessage(msg)
   -- The server sends a tick every 50 ms to 10 s, carrying wall-clock time for Mods drones and state
   if msg.wall then
     mods._wallMs = tonumber(msg.wall) or mods._wallMs
+    -- Stamp the host clock so uptime can extrapolate between server ticks
+    mods._wallCpu = _os_clock()
   end
   local t = msg.type
   -- External devices: list and state snapshot
@@ -1765,7 +1767,6 @@ local computer = {
   _totalMemory = config.ramSize,
   _runlevel = "S",
 }
-computer._startWall = socket and socket.gettime() or os.clock()
 local showScreenMessage  -- Forward declaration used by computer.shutdown and others
 function computer.address() return computer._address end
 function computer.tmpAddress() return computer._tmpAddr end
@@ -1784,9 +1785,43 @@ end
 function computer.totalMemory() return computer._totalMemory end
 function computer.energy() return computer._energy end
 function computer.maxEnergy() return computer._maxEnergy end
+-- Uptime must follow wall-clock time. On Linux/Android os.clock() reports CPU time,
+-- which barely advances while the guest waits for events; the MineOS boot screen paces
+-- itself with computer.uptime(), so on phones it stayed forever on "MineOS EFI" while it
+-- booted on Windows (there clock() already returns wall time).
+-- The server stamps every tick with Date.now(); the host clock only fills the gaps
+-- between those stamps, so uptime keeps advancing even without incoming messages.
+function computer._wallSeconds()
+  local ms = tonumber(mods._wallMs) or 0
+  if ms > 0 then
+    local stamp = tonumber(mods._wallCpu) or _os_clock()
+    local drift = _os_clock() - stamp
+    if drift < 0 or drift > 10 then drift = 0 end
+    return ms / 1000 + drift, "server"
+  end
+  if socket then return socket.gettime(), "socket" end
+  return _os_clock(), "cpu"
+end
 function computer.uptime()
-  if socket then return socket.gettime() - computer._startWall end
-  return os.clock() - computer._startWall
+  local now, src = computer._wallSeconds()
+  local anchor = computer._uptimeAnchor
+  if not anchor then
+    computer._uptimeAnchor = { src = src, base = now, elapsed = 0 }
+    return 0
+  end
+  -- The first server tick replaces the CPU-clock fallback: keep the elapsed time continuous
+  if anchor.src ~= src then
+    anchor.src = src
+    anchor.base = now - anchor.elapsed
+  end
+  local d = now - anchor.base
+  if d < 0 then
+    -- The clock source stepped backwards: hold the last value instead of going back
+    d = anchor.elapsed
+    anchor.base = now - d
+  end
+  anchor.elapsed = d
+  return d
 end
 function computer.shutdown(reboot)
   -- Save all disks and the EEPROM
@@ -4925,7 +4960,9 @@ _G.os.date = function(fmt, t)
   end
   return _os_date(normalizeDateFormat(fmt, t or _os_time()), t)
 end
-_G.os.clock = function() return _os_clock() end
+-- Guest timing must be wall-clock based as well: the host clock() measures CPU time on
+-- Linux/Android, so any guest timing loop (MineOS' boot splash) stalled while it waited.
+_G.os.clock = function() return computer.uptime() end
 _G.os.difftime = function(t2, t1) return t2 - t1 end
 _G.os.execute = function(cmd)
   if not cmd then return true end
