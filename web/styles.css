@@ -596,20 +596,18 @@ html, body {
   background: var(--accent);
   border-color: var(--accent);
 }
-/* 虚拟鼠标准星: 只做位置提示, 不拦截触摸 */
+/* 虚拟鼠标指针: 箭头形状, 只做位置提示, 不拦截触摸 */
 .vmouse-pointer {
   position: absolute;
   left: 0;
   top: 0;
   display: none;
-  width: 20px;
-  height: 20px;
+  width: 16px;
+  height: 24px;
   margin: 0;
-  border: 1px solid rgba(255, 255, 255, 0.9);
-  border-radius: 50%;
-  background: radial-gradient(circle, rgba(255, 255, 255, 0.95) 0 1.5px, rgba(255, 255, 255, 0.12) 2px 100%);
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6);
-  transform: translate(-50%, -50%);
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 24'%3E%3Cpath d='M1 1v18l5-5 3 8 3-1.4-3-7.6h6z' fill='%23fff' stroke='%23000' stroke-width='1.2' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat center / contain;
+  filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.85));
+  transform: translate(-2px, -2px);
   pointer-events: none;
   z-index: 3;
 }
