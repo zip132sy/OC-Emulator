@@ -1165,7 +1165,9 @@ async function handleApi(req, res, body) {
             const diskName = 'disk1.ocd';
             const diskPath = path.join(VMS_DIR, spec.name, diskName);
             const tier = spec.hardware.disk1Tier || 3;
-            const size = spec.hardware.disk1Size || (tier === 1 ? 1048576 : tier === 2 ? 2097152 : 4194304);
+            // T1 / T2 have a fixed capacity; only T3 is configurable.
+            const size = tier === 1 ? 1048576 : tier === 2 ? 2097152
+              : (spec.hardware.disk1Size || 4194304);
             const label = spec.hardware.disk1Label || `${spec.name}-disk1`;
             // Create the VM directory first
             fs.mkdirSync(path.join(VMS_DIR, spec.name), { recursive: true });
@@ -1210,7 +1212,9 @@ async function handleApi(req, res, body) {
             const diskName = 'disk2.ocd';
             const diskPath = path.join(VMS_DIR, spec.name, diskName);
             const tier = spec.hardware.disk2Tier || 3;
-            const size = spec.hardware.disk2Size || (tier === 1 ? 1048576 : tier === 2 ? 2097152 : 4194304);
+            // T1 / T2 have a fixed capacity; only T3 is configurable.
+            const size = tier === 1 ? 1048576 : tier === 2 ? 2097152
+              : (spec.hardware.disk2Size || 4194304);
             const label = spec.hardware.disk2Label || `${spec.name}-disk2`;
 
             if (spec.hardware.disk2ImportFiles && spec.hardware.disk2ImportFiles.length > 0) {
@@ -1500,11 +1504,14 @@ async function handleApi(req, res, body) {
       if (parts[2] === 'create' && method === 'POST') {
         const spec = JSON.parse(body || '{}');
         const diskPath = spec.path;
+        const tier = Number(spec.tier) || 3;
+        // T1 / T2 have a fixed capacity; only T3 is configurable.
+        const size = tier === 1 ? 1048576 : tier === 2 ? 2097152 : (Number(spec.size) || 4194304);
         diskIO.create({
           path: diskPath,
           label: spec.label || 'Untitled',
-          size: spec.size || 4194304,
-          tier: spec.tier || 3,
+          size,
+          tier,
         });
         return json(res, { ok: true });
       }

@@ -612,11 +612,11 @@ const Wizard = (() => {
         <div class="form-row">
           <label>${T('wizard.disk-size', '磁盘大小')}</label>
           <input type="number" id="dc-size-mb" value="${(currentSize / 1024 / 1024).toFixed(3).replace(/\.?0+$/, '')}" min="0.001" step="0.001" style="width:100px;"> MB
-          <span class="hint" id="dc-size-hint">${I18N.t('wizard.disk-size-hint', '单位 MB, 可填任意正数')}</span>
+          <span class="hint" id="dc-size-hint">${I18N.t('wizard.disk-size-hint', 'T3 默认 4 MB, 可填任意正数; T1 / T2 容量固定')}</span>
         </div>
         <div class="form-row">
           <div></div>
-          <div class="hint">${T('wizard.disk-tier-hint', '等级仅作为磁盘元数据记录, 不限制容量 (原版 OC 中 T1=1MB, T2=2MB, T3=4MB)')}</div>
+          <div class="hint">${T('wizard.disk-tier-hint', 'T1 固定 1 MB, T2 固定 2 MB, T3 默认 4 MB 且可自定义容量')}</div>
         </div>
         <div class="section-title" style="margin-top:15px;">${T('wizard.import-folder', '从文件夹导入 (可选)')}</div>
         <div class="form-row">
@@ -650,6 +650,25 @@ const Wizard = (() => {
 
         const tierSel = modalBody.querySelector('#dc-tier');
         const sizeInput = modalBody.querySelector('#dc-size-mb');
+        const sizeHint = modalBody.querySelector('#dc-size-hint');
+
+        // T1 / T2 have a fixed capacity; only T3 accepts a custom size (default 4 MB).
+        const FIXED_TIER_MB = { 1: 1, 2: 2 };
+        const DEFAULT_T3_MB = 4;
+        function applyTier(t) {
+          const fixed = FIXED_TIER_MB[t];
+          if (fixed) {
+            sizeInput.value = fixed;
+            sizeInput.disabled = true;
+            sizeHint.textContent = I18N.t('wizard.disk-size-fixed', '该等级容量固定');
+          } else {
+            if (sizeInput.disabled) sizeInput.value = DEFAULT_T3_MB;
+            sizeInput.disabled = false;
+            sizeHint.textContent = I18N.t('wizard.disk-size-hint', 'T3 默认 4 MB, 可填任意正数; T1 / T2 容量固定');
+          }
+        }
+        tierSel.addEventListener('change', () => applyTier(parseInt(tierSel.value, 10)));
+        applyTier(tier);
 
         const folderBtn = modalBody.querySelector('#dc-folder-btn');
         const folderInput = modalBody.querySelector('#dc-folder');
@@ -675,7 +694,7 @@ const Wizard = (() => {
             } else if (action === 'dc-ok') {
               const newTier = parseInt(tierSel.value, 10);
               const newLabel = modalBody.querySelector('#dc-label').value.trim() || (spec.name + '-' + diskKey);
-              const sizeMB = parseFloat(sizeInput.value);
+              const sizeMB = newTier === 3 ? parseFloat(sizeInput.value) : (newTier === 2 ? 2 : 1);
               if (!isFinite(sizeMB) || sizeMB <= 0) {
                 alert(T('hw.disk-size-invalid', '磁盘容量必须是正数 (单位 MB)'));
                 return;

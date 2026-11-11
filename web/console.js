@@ -829,9 +829,9 @@ const Console = (() => {
           <div class="form-row" id="row-disk-tier">
             <label>${t('hw.disk-tier')}</label>
             <select id="new-disk-tier" style="flex:1;">
-              <option value="1">Tier 1</option>
-              <option value="2">Tier 2</option>
-              <option value="3" selected>Tier 3</option>
+              <option value="1">Tier 1 (1 MB)</option>
+              <option value="2">Tier 2 (2 MB)</option>
+              <option value="3" selected>Tier 3 (4 MB+)</option>
             </select>
           </div>
           <div class="form-row" id="row-disk-mirror" style="display:none;">
@@ -880,9 +880,37 @@ const Console = (() => {
       }
       modeRadios.forEach(r => r.addEventListener('change', updateMode));
 
+      // T1 / T2 have a fixed capacity; only T3 accepts a custom size (default 4 MB).
+      const tierSelect = document.getElementById('new-disk-tier');
+      const FIXED_TIER_SIZE = { 1: '1048576', 2: '2097152' };
+      const SIZE_TO_TIER = { 1048576: '1', 2097152: '2', 4194304: '3' };
+      function syncFromTier() {
+        const fixed = FIXED_TIER_SIZE[tierSelect.value];
+        if (fixed) {
+          sizeSelect.value = fixed;
+          sizeSelect.disabled = true;
+          sizeCustomRow.style.display = 'none';
+        } else {
+          sizeSelect.disabled = false;
+          if (sizeSelect.value === '1048576' || sizeSelect.value === '2097152') {
+            sizeSelect.value = '4194304';
+          }
+        }
+      }
       sizeSelect.addEventListener('change', () => {
-        sizeCustomRow.style.display = sizeSelect.value === 'custom' ? 'flex' : 'none';
+        const custom = sizeSelect.value === 'custom';
+        sizeCustomRow.style.display = custom ? 'flex' : 'none';
+        // A custom capacity always belongs to a T3 disk.
+        if (custom) {
+          tierSelect.value = '3';
+          tierSelect.disabled = true;
+        } else {
+          tierSelect.disabled = false;
+          if (SIZE_TO_TIER[sizeSelect.value]) tierSelect.value = SIZE_TO_TIER[sizeSelect.value];
+        }
       });
+      tierSelect.addEventListener('change', syncFromTier);
+      syncFromTier();
 
       // Browse folder: the path is typed through a prompt
       document.getElementById('btn-mirror-folder').addEventListener('click', () => {
@@ -908,14 +936,21 @@ const Console = (() => {
           return;
         }
 
-        let size = parseInt(sizeSelect.value, 10);
-        if (isNaN(size)) {
-          const mb = parseFloat(sizeCustomInput.value);
-          if (!isFinite(mb) || mb <= 0) {
-            alert(t('hw.disk-size-invalid'));
-            return;
+        let size;
+        if (tier === 1) {
+          size = 1048576;
+        } else if (tier === 2) {
+          size = 2097152;
+        } else {
+          size = parseInt(sizeSelect.value, 10);
+          if (isNaN(size)) {
+            const mb = parseFloat(sizeCustomInput.value);
+            if (!isFinite(mb) || mb <= 0) {
+              alert(t('hw.disk-size-invalid'));
+              return;
+            }
+            size = Math.max(1, Math.round(mb * 1024 * 1024));
           }
-          size = Math.max(1, Math.round(mb * 1024 * 1024));
         }
 
         const result = {
