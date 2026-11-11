@@ -200,6 +200,7 @@ const Console = (() => {
         <div class="console-canvas-wrap" id="canvas-wrap-${cssEsc(vmName)}">
           <div class="canvas-stage" id="canvas-stage-${cssEsc(vmName)}">
             <canvas id="console-canvas-${cssEsc(vmName)}" width="720" height="400"></canvas>
+            <div class="vmouse-pointer" id="vmouse-pointer-${cssEsc(vmName)}" aria-hidden="true"></div>
             <div class="paused-overlay" id="paused-overlay-${cssEsc(vmName)}" style="display:none;">
               <div class="paused-text">${t('paused.overlay')}</div>
               <div class="paused-hint">${t('paused.overlay.hint')}</div>
@@ -219,6 +220,7 @@ const Console = (() => {
             <button class="scroll-btn" id="scroll-down-${cssEsc(vmName)}" title="${t('scroll.down.title')}" aria-label="${t('scroll.down.title')}">▼</button>
           </div>
           <button class="vkbd-btn" id="vkbd-btn-${cssEsc(vmName)}" title="${t('vkbd.btn.title')}">${t('vkbd.btn')}</button>
+          <button class="vmouse-btn" id="vmouse-btn-${cssEsc(vmName)}" title="${t('vmouse.btn.title')}" aria-label="${t('vmouse.btn.title')}" aria-pressed="false">${t('vmouse.btn')}</button>
           <div class="vkbd" id="vkbd-${cssEsc(vmName)}" aria-hidden="true">
             <div class="vkbd-head">
               <span class="vkbd-title">${t('vkbd.title')}</span>
@@ -258,6 +260,8 @@ const Console = (() => {
     view.vkbdPanel = pane.querySelector(`#vkbd-${cssEsc(vmName)}`);
     view.vkbdRows = pane.querySelector(`#vkbd-rows-${cssEsc(vmName)}`);
     view.vkbdClose = pane.querySelector(`#vkbd-close-${cssEsc(vmName)}`);
+    view.vmouseBtn = pane.querySelector(`#vmouse-btn-${cssEsc(vmName)}`);
+    view.vmousePointer = pane.querySelector(`#vmouse-pointer-${cssEsc(vmName)}`);
     view.fpsEl = pane.querySelector(`#fps-${cssEsc(vmName)}`);
     if (view.fpsEl) view.fpsEl.style.display = showFps ? '' : 'none';
 
@@ -388,6 +392,13 @@ const Console = (() => {
       view._touchId = touch.identifier;
       // Focus the canvas on tap (which also dismisses the soft keyboard if it is open)
       try { view.canvas.focus({ preventScroll: true }); } catch (err) { view.canvas.focus(); }
+      // Virtual mouse: the finger only moves the crosshair, the click is sent on release
+      if (view.vmouseOn) {
+        view._pressPoint = null;
+        view._lpFired = false;
+        startVirtualMouse(view, vmName, touch);
+        return;
+      }
       // Fullscreen + running: defer the press; holding long enough emits right click, a quick release emits left
       if (isRightClickGesture(view)) {
         view._pressPoint = { x: touch.clientX, y: touch.clientY };
@@ -414,6 +425,10 @@ const Console = (() => {
       const touch = findTouch(e.changedTouches, view._touchId) || e.touches[0];
       if (!touch) return;
       e.preventDefault();
+      if (view.vmouseOn) {
+        moveVirtualMouse(view, vmName, touch);
+        return;
+      }
       // Press not sent yet: past the threshold it becomes a drag, so send the left press first
       if (view._pressPoint) {
         const dx = touch.clientX - view._pressPoint.x;
@@ -443,6 +458,15 @@ const Console = (() => {
       const touch = findTouch(e.changedTouches, view._touchId);
       if (!touch) return;
       e.preventDefault();
+      if (view.vmouseOn) {
+        view._touchId = null;
+        view._touchPending = false;
+        view._touchMoveEvent = null;
+        view._pressPoint = null;
+        view._lpFired = false;
+        endVirtualMouse(view, vmName, touch);
+        return;
+      }
       view._touchId = null;
       view._touchPending = false;
       view._touchMoveEvent = null;
@@ -468,6 +492,7 @@ const Console = (() => {
       view._pressPoint = null;
       view._lpFired = false;
       clearLongPress(view);
+      cancelVirtualMouse(view);
     });
     // Double click:
     // - not fullscreen: enter fullscreen
@@ -495,6 +520,7 @@ const Console = (() => {
 
     bindImeInput(view, vmName);
     bindVirtualKeyboard(view, vmName);
+    bindVirtualMouse(view, vmName);
 
     // Virtual wheel: shown in touch fullscreen, scrolls at the pointer's last position
     const scrollUpBtn = pane.querySelector(`#scroll-up-${cssEsc(vmName)}`);
@@ -1814,6 +1840,9 @@ const Console = (() => {
     // ImageData: write pixels directly instead of thousands of fillRect calls
     view.imgData = view.offCtx.createImageData(view.w * cw, view.h * ch);
     view._pixelBuf = view.imgData.data; // Cached reference to avoid repeated property lookups
+
+    // Re-snap the virtual mouse toggle to the resized canvas
+    layoutVirtualMouse(vmName);
   }
 
   // Backward-compatible alias: recompute and repaint
@@ -2728,6 +2757,8 @@ const Console = (() => {
       boxW = rect.width;
       boxH = rect.height;
     }
+    // Canvas-local position, used by the virtual mouse crosshair
+    view.lastLocal = { lx: localX, ly: localY, boxW: boxW, boxH: boxH };
     const realCharW = boxW / view.w;
     const realCharH = boxH / view.h;
     const x = Math.max(1, Math.min(view.w, Math.floor(localX / realCharW) + 1));
@@ -2778,6 +2809,245 @@ const Console = (() => {
       clearTimeout(view._lpTimer);
       view._lpTimer = null;
     }
+  }
+
+  // ---------- Virtual mouse (touch only) ----------
+  // Floating toggle for phones/tablets. While it is on, dragging a finger only moves a
+  // crosshair and a tap sends the click, so a drag never presses the guest by accident.
+  // The toggle itself can be dragged and snaps to the closest canvas edge to keep the
+  // screen readable; the coarse-pointer media query keeps it hidden on desktops.
+  const VMOUSE_EDGE = 4;   // minimum distance from the console edge
+  const VMOUSE_GAP = 6;    // distance kept between the toggle and the canvas
+  const VMOUSE_SLOP = 6;   // movement that turns a tap into a drag
+
+  function setVirtualMouse(vmName, on) {
+    const view = getView(vmName);
+    view.vmouseOn = !!on;
+    if (view.vmouseBtn) {
+      view.vmouseBtn.classList.toggle('active', view.vmouseOn);
+      view.vmouseBtn.setAttribute('aria-pressed', view.vmouseOn ? 'true' : 'false');
+    }
+    if (!view.vmouseOn) {
+      hideVirtualPointer(view);
+      cancelVirtualMouse(view);
+    }
+  }
+
+  function hideVirtualPointer(view) {
+    if (view.vmousePointer) view.vmousePointer.style.display = 'none';
+  }
+
+  // Move the crosshair to a client position; returns the OC point for that spot
+  function placeVirtualPointer(view, clientX, clientY) {
+    const canvas = view.canvas;
+    const ptr = view.vmousePointer;
+    if (!canvas || !ptr || !view.w || !view.h) return null;
+    const point = computePoint(view, clientX, clientY);
+    const local = view.lastLocal;
+    if (!local) return point;
+    const lx = Math.max(0, Math.min(local.boxW, local.lx));
+    const ly = Math.max(0, Math.min(local.boxH, local.ly));
+    ptr.style.left = (canvas.offsetLeft + lx) + 'px';
+    ptr.style.top = (canvas.offsetTop + ly) + 'px';
+    ptr.style.display = 'block';
+    return point;
+  }
+
+  function cancelVirtualMouse(view) {
+    if (view._vmLpTimer) {
+      clearTimeout(view._vmLpTimer);
+      view._vmLpTimer = null;
+    }
+    view._vmGesture = null;
+    view._vmRightFired = false;
+  }
+
+  function startVirtualMouse(view, vmName, touch) {
+    cancelVirtualMouse(view);
+    view._vmGesture = {
+      startX: touch.clientX, startY: touch.clientY,
+      x: touch.clientX, y: touch.clientY,
+    };
+    placeVirtualPointer(view, touch.clientX, touch.clientY);
+    // Long press = right click at the crosshair
+    view._vmLpTimer = setTimeout(() => {
+      view._vmLpTimer = null;
+      const g = view._vmGesture;
+      if (!g) return;
+      view._vmRightFired = true;
+      sendTouchAt(vmName, g.x, g.y, 'touch', 1);
+      sendTouchAt(vmName, g.x, g.y, 'drop', 1);
+    }, LONG_PRESS_MS);
+  }
+
+  function moveVirtualMouse(view, vmName, touch) {
+    const g = view._vmGesture;
+    if (!g) return;
+    g.x = touch.clientX;
+    g.y = touch.clientY;
+    if (view._vmRightFired) return;
+    if (view._vmLpTimer) {
+      const dx = g.x - g.startX;
+      const dy = g.y - g.startY;
+      // Moving cancels the right click: this gesture is a pointer move, not a click
+      if (dx * dx + dy * dy > LONG_PRESS_DIST * LONG_PRESS_DIST) {
+        clearTimeout(view._vmLpTimer);
+        view._vmLpTimer = null;
+      }
+    }
+    placeVirtualPointer(view, g.x, g.y);
+  }
+
+  function endVirtualMouse(view, vmName, touch) {
+    const g = view._vmGesture;
+    if (!g) return;
+    const x = touch ? touch.clientX : g.x;
+    const y = touch ? touch.clientY : g.y;
+    if (view._vmLpTimer) {
+      clearTimeout(view._vmLpTimer);
+      view._vmLpTimer = null;
+    }
+    const rightFired = view._vmRightFired;
+    const dx = x - g.startX;
+    const dy = y - g.startY;
+    const moved = dx * dx + dy * dy > LONG_PRESS_DIST * LONG_PRESS_DIST;
+    view._vmGesture = null;
+    view._vmRightFired = false;
+    placeVirtualPointer(view, x, y);
+    // The long press already clicked; a drag only moved the pointer
+    if (rightFired || moved) return;
+    sendTouchAt(vmName, x, y, 'touch');
+    sendTouchAt(vmName, x, y, 'drop');
+  }
+
+  // Clamp a candidate position so the toggle stays fully inside the console area
+  function clampVirtualMouseButton(view, left, top) {
+    const wrap = view.canvasWrap;
+    const btn = view.vmouseBtn;
+    if (!wrap || !btn) return null;
+    const bw = btn.offsetWidth || 44;
+    const bh = btn.offsetHeight || 44;
+    const maxLeft = Math.max(VMOUSE_EDGE, wrap.clientWidth - bw - VMOUSE_EDGE);
+    const maxTop = Math.max(VMOUSE_EDGE, wrap.clientHeight - bh - VMOUSE_EDGE);
+    return {
+      left: Math.max(VMOUSE_EDGE, Math.min(maxLeft, left)),
+      top: Math.max(VMOUSE_EDGE, Math.min(maxTop, top)),
+    };
+  }
+
+  function applyVirtualMouseButton(view, pos) {
+    const btn = view.vmouseBtn;
+    if (!btn || !pos) return;
+    btn.style.left = pos.left + 'px';
+    btn.style.top = pos.top + 'px';
+    btn.style.right = 'auto';
+    btn.style.bottom = 'auto';
+    view._vmPos = pos;
+  }
+
+  // Snap the toggle just outside the closest canvas edge; anchor is a console-local point
+  function layoutVirtualMouse(vmName, anchor) {
+    const view = getView(vmName);
+    const wrap = view.canvasWrap;
+    const canvas = view.canvas;
+    const btn = view.vmouseBtn;
+    if (!wrap || !canvas || !btn) return;
+    if (wrap.clientWidth < 80 || wrap.clientHeight < 80) return;
+    const bw = btn.offsetWidth || 44;
+    const bh = btn.offsetHeight || 44;
+    const prev = view._vmPos || {
+      left: wrap.clientWidth - bw - 8,
+      top: wrap.clientHeight - bh - 8,
+    };
+    const ax = anchor ? anchor.left : prev.left + bw / 2;
+    const ay = anchor ? anchor.top : prev.top + bh / 2;
+    const wr = wrap.getBoundingClientRect();
+    const cr = canvas.getBoundingClientRect();
+    const cl = cr.left - wr.left;
+    const ct = cr.top - wr.top;
+    const cw = cr.width;
+    const ch = cr.height;
+    const spots = [
+      { left: cl - bw - VMOUSE_GAP, top: ay - bh / 2 },
+      { left: cl + cw + VMOUSE_GAP, top: ay - bh / 2 },
+      { left: ax - bw / 2, top: ct - bh - VMOUSE_GAP },
+      { left: ax - bw / 2, top: ct + ch + VMOUSE_GAP },
+    ];
+    let best = null;
+    for (const spot of spots) {
+      const pos = clampVirtualMouseButton(view, spot.left, spot.top);
+      if (!pos) continue;
+      const dx = pos.left + bw / 2 - ax;
+      const dy = pos.top + bh / 2 - ay;
+      const d = dx * dx + dy * dy;
+      if (!best || d < best.d) best = { pos: pos, d: d };
+    }
+    if (best) applyVirtualMouseButton(view, best.pos);
+  }
+
+  function moveVirtualMouseButton(view, clientX, clientY) {
+    const wrap = view.canvasWrap;
+    const btn = view.vmouseBtn;
+    if (!wrap || !btn) return;
+    const wr = wrap.getBoundingClientRect();
+    const bw = btn.offsetWidth || 44;
+    const bh = btn.offsetHeight || 44;
+    applyVirtualMouseButton(view, clampVirtualMouseButton(view, clientX - wr.left - bw / 2, clientY - wr.top - bh / 2));
+  }
+
+  function bindVirtualMouse(view, vmName) {
+    const btn = view.vmouseBtn;
+    if (!btn) return;
+    // Restore the state and position after a tab rebuild
+    setVirtualMouse(vmName, !!view.vmouseOn);
+    layoutVirtualMouse(vmName);
+
+    let dragId = null;
+    let startX = 0;
+    let startY = 0;
+    let moved = false;
+
+    btn.addEventListener('pointerdown', (e) => {
+      if (dragId !== null) return;
+      e.preventDefault();
+      e.stopPropagation();
+      dragId = e.pointerId;
+      startX = e.clientX;
+      startY = e.clientY;
+      moved = false;
+      try { btn.setPointerCapture(e.pointerId); } catch (err) { /* ignore when unsupported */ }
+    });
+    btn.addEventListener('pointermove', (e) => {
+      if (dragId === null || e.pointerId !== dragId) return;
+      e.preventDefault();
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+      if (!moved && dx * dx + dy * dy <= VMOUSE_SLOP * VMOUSE_SLOP) return;
+      moved = true;
+      moveVirtualMouseButton(view, e.clientX, e.clientY);
+    });
+    const finishDrag = (e) => {
+      if (dragId === null || e.pointerId !== dragId) return;
+      dragId = null;
+      try { btn.releasePointerCapture(e.pointerId); } catch (err) { /* ignore when unsupported */ }
+      if (!moved) {
+        setVirtualMouse(vmName, !view.vmouseOn);
+        return;
+      }
+      moved = false;
+      const wrap = view.canvasWrap;
+      const wr = wrap ? wrap.getBoundingClientRect() : { left: 0, top: 0 };
+      layoutVirtualMouse(vmName, { left: e.clientX - wr.left, top: e.clientY - wr.top });
+    };
+    btn.addEventListener('pointerup', finishDrag);
+    btn.addEventListener('pointercancel', (e) => {
+      if (dragId === null || e.pointerId !== dragId) return;
+      dragId = null;
+      moved = false;
+    });
+    // Keep the console-level handlers from treating button presses as screen input
+    btn.addEventListener('mousedown', (e) => e.stopPropagation());
+    btn.addEventListener('click', (e) => e.stopPropagation());
   }
 
   // Virtual wheel: use the last pointer position, else the screen center

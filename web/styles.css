@@ -562,6 +562,57 @@ html, body {
   background: var(--accent);
   border-color: var(--accent);
 }
+/* 虚拟鼠标开关: 仅触屏显示 (电脑端不显示), 可拖动并自动吸附到画布外边缘 */
+.vmouse-btn {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.6);
+  color: var(--fg-primary);
+  font-size: 18px;
+  line-height: 1;
+  z-index: 6;
+  opacity: 0.7;
+  cursor: pointer;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: opacity 0.15s, background 0.15s;
+}
+@media (pointer: coarse) {
+  .vmouse-btn { display: flex; }
+}
+.vmouse-btn.active {
+  opacity: 1;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+/* 虚拟鼠标准星: 只做位置提示, 不拦截触摸 */
+.vmouse-pointer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: none;
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.95) 0 1.5px, rgba(255, 255, 255, 0.12) 2px 100%);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  z-index: 3;
+}
 /* 虚拟键盘: 触屏设备的完整键盘 (手机软键盘缺少 F1-F12 等按键) */
 .vkbd-btn {
   position: absolute;
