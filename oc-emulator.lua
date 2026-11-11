@@ -1370,7 +1370,6 @@ local handleCount = 0
 -- Signal queue
 -- ============================================================
 local signalQueue = {}
-local lastPollTime = 0  -- throttle for pullSignal(0) to avoid a polling storm
 -- Component addresses used by dispatchServerMessage/pushSignal but defined later
 local gpuAddr = nil
 local screenAddr = nil
@@ -1622,16 +1621,13 @@ local function pullSignal(timeout)
       flushRender()
       return nil
     end
-    -- Throttle pullSignal(0) polling to 50 Hz (20 ms)
-    -- to avoid thousands of stdin round trips per second while MineOS idles
-    local now = os.clock()
-    if now - lastPollTime < 0.02 then  -- 20ms = 50Hz
-      return nil
-    end
-    lastPollTime = now
-    -- JSON mode: send pull_signal(0); the server replies with a tick or input plus a tick
-    -- so new messages are read without blocking for long
-    timeout = 0  -- 0 ms; the server answers with an immediate tick
+    -- Non-blocking poll: always ask the server and block on stdin. The server
+    -- answers after a short delay, which caps the poll rate and keeps this
+    -- process idle. Throttling here with os.clock() instead was wrong: on
+    -- Linux/Android that clock measures CPU time, so the check never passed
+    -- in a sleeping loop, the request was skipped and the guest spun forever
+    -- (MineOS froze on its boot animation).
+    timeout = 0  -- 0 ms; the server answers with a tick or input plus a tick
   end
 
   if jsonIO then
