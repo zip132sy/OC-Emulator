@@ -36,19 +36,31 @@ if [ -n "$TERMUX_VERSION" ]; then IS_TERMUX=true; fi
 run_install() {
     local label="$1"
     shift
+    local code=0
     echo "[INFO] $label"
-    echo "       \$ $*"
-    if "$@"; then
+    if [ "$IS_TERMUX" = true ]; then
+        # apt silently waits for its lock and for unseen conffile prompts, which
+        # looks exactly like a hang. Say what to expect, warn about a busy apt,
+        # and run non-interactively so no prompt can block the install.
+        echo "       (downloads can take several minutes; if it never moves, check the network)"
+        if command -v pgrep >/dev/null 2>&1 && pgrep -f 'apt|dpkg' >/dev/null 2>&1; then
+            echo "[WARNING] Another apt/dpkg process is running; this step may wait for its lock."
+        fi
+        echo "       \$ DEBIAN_FRONTEND=noninteractive $*"
+        DEBIAN_FRONTEND=noninteractive "$@" || code=$?
+    else
+        echo "       \$ $*"
+        "$@" || code=$?
+    fi
+    if [ "$code" -eq 0 ]; then
         echo "[OK] $label"
         return 0
-    else
-        local code=$?
-        echo "[FAIL] $label (exit code ${code})"
-        if [ "$IS_TERMUX" = true ]; then
-            echo "       If the network is slow or the mirror is stale, run 'pkg update' once and retry."
-        fi
-        return "$code"
     fi
+    echo "[FAIL] $label (exit code ${code})"
+    if [ "$IS_TERMUX" = true ]; then
+        echo "       If the network is slow or the mirror is stale, run 'pkg update' once and retry."
+    fi
+    return "$code"
 }
 
 install_node() {
@@ -63,8 +75,17 @@ install_node() {
         Linux*)
             if [ "$IS_TERMUX" = true ]; then
                 # Termux: pkg wraps apt, "nodejs" already ships npm
-                run_install "Installing Node.js via pkg (Termux)" pkg install -y nodejs \
-                    && INSTALL_SUCCESS=true
+                if run_install "Installing Node.js via pkg (Termux)" pkg install -y nodejs; then
+                    INSTALL_SUCCESS=true
+                else
+                    # Empty or stale package lists make pkg answer "Unable to locate
+                    # package"; refresh once and retry before falling back to nvm.
+                    echo "[INFO] Retrying after refreshing the package lists..."
+                    if run_install "Refreshing package lists" pkg update -y \
+                        && run_install "Installing Node.js via pkg (Termux)" pkg install -y nodejs; then
+                        INSTALL_SUCCESS=true
+                    fi
+                fi
             # Try package managers
             elif command -v apt-get >/dev/null 2>&1; then
                 run_install "Updating apt package lists" sudo apt-get update \
