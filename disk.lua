@@ -451,8 +451,19 @@ end
 -- The temp file guarantees the disk holds either the old or the new content, never a mix.
 local function writeFileAtomic(path, data)
   local tmp = path .. ".tmp"
-  local f = io.open(tmp, "wb")
-  if not f then return false, "cannot open temp file for writing" end
+  local f, openErr = io.open(tmp, "wb")
+  if not f then
+    -- Some Android / FUSE locations refuse the extra ".tmp" file even though the real
+    -- image is writable: fall back to writing in place instead of failing the save.
+    local direct, directErr = io.open(path, "wb")
+    if not direct then
+      return false, "cannot open temp file for writing: " .. tostring(openErr or directErr)
+    end
+    local wrote = direct:write(data)
+    direct:close()
+    if not wrote then return false, "write failed" end
+    return true
+  end
   local ok = f:write(data)
   f:close()
   if not ok then
