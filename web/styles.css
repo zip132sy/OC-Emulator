@@ -1142,8 +1142,20 @@ html, body {
   color: var(--fg-muted);
   font-size: 12px;
 }
-/* 主界面「关于工具」按钮 */
-.welcome-about-btn { margin-top: 14px; }
+/* 主界面标题行: 标题与「关于工具」按钮作为整体居中, 标题因此自然略偏左 */
+.welcome-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.welcome-title-row h1 { margin: 0; }
+.welcome-about-btn {
+  margin-top: 0;
+  padding: 4px 10px;
+  font-size: 12px;
+}
 
 /* ---------- 更新进度条 ---------- */
 .update-progress { padding: 4px 2px 2px; }
