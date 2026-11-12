@@ -22,6 +22,14 @@ glog() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$GUARD_LOG" 2>/dev/null ||
 # ============================================================
 REQUIRED_NODE_MAJOR=18
 
+# Termux / Android detection, reused by the Node, Git and battery steps.
+# Termux has its own pkg manager: no sudo, and packages are "nodejs" / "git".
+IS_TERMUX=false
+case "$PREFIX" in
+    *com.termux*) IS_TERMUX=true ;;
+esac
+if [ -n "$TERMUX_VERSION" ]; then IS_TERMUX=true; fi
+
 install_node() {
     echo ""
     echo "Attempting to install Node.js..."
@@ -32,8 +40,13 @@ install_node() {
 
     case "$OS_TYPE" in
         Linux*)
+            if [ "$IS_TERMUX" = true ]; then
+                # Termux: pkg wraps apt, "nodejs" already ships npm
+                echo "Installing via pkg (Termux)..."
+                pkg install -y nodejs
+                INSTALL_SUCCESS=true
             # Try package managers
-            if command -v apt-get >/dev/null 2>&1; then
+            elif command -v apt-get >/dev/null 2>&1; then
                 echo "Installing via apt-get (requires sudo)..."
                 sudo apt-get update -qq && sudo apt-get install -y nodejs npm
                 INSTALL_SUCCESS=true
@@ -144,12 +157,6 @@ fi
 #     emulator uses the Termux API. Only the CLI package can be
 #     installed here; the Termux:API app comes from F-Droid.
 # ============================================================
-IS_TERMUX=false
-case "$PREFIX" in
-    *com.termux*) IS_TERMUX=true ;;
-esac
-if [ -n "$TERMUX_VERSION" ]; then IS_TERMUX=true; fi
-
 if [ "$IS_TERMUX" = true ]; then
     if command -v termux-battery-status >/dev/null 2>&1; then
         echo "[OK] termux-api"

@@ -349,7 +349,7 @@ goto :eof
 REM ------------------------------------------------------------
 REM Subroutine: check / install Git
 REM   - installed -> GIT_OK=1
-REM   - missing   -> install with winget when available
+REM   - missing   -> try winget, then Chocolatey, then Scoop
 REM   - failure is not fatal: the emulator starts, updates are skipped
 REM ------------------------------------------------------------
 :ensure_git
@@ -359,14 +359,49 @@ where git >nul 2>nul
 if %ERRORLEVEL% equ 0 goto :eg_found
 
 echo [INFO] Git not found, trying winget...
+call :eg_try_winget
+call :eg_refresh_path
+where git >nul 2>nul
+if %ERRORLEVEL% equ 0 goto :eg_found
+
+echo [INFO] Trying Chocolatey...
+call :eg_try_choco
+call :eg_refresh_path
+where git >nul 2>nul
+if %ERRORLEVEL% equ 0 goto :eg_found
+
+echo [INFO] Trying Scoop...
+call :eg_try_scoop
+call :eg_refresh_path
+where git >nul 2>nul
+if %ERRORLEVEL% equ 0 goto :eg_found
+goto :eg_manual
+
+:eg_try_winget
 where winget >nul 2>nul
-if %ERRORLEVEL% neq 0 goto :eg_manual
+if %ERRORLEVEL% neq 0 goto :eof
 winget install --id Git.Git -e --source winget --accept-package-agreements --accept-source-agreements --silent
+goto :eof
+
+:eg_try_choco
+where choco >nul 2>nul
+if %ERRORLEVEL% neq 0 goto :eof
+choco install git -y
+goto :eof
+
+:eg_try_scoop
+where scoop >nul 2>nul
+if %ERRORLEVEL% neq 0 goto :eof
+call scoop install git
+goto :eof
+
+REM Make a just-installed Git visible to the commands that follow
+:eg_refresh_path
 if exist "%ProgramFiles%\Git\cmd\git.exe" set "PATH=%ProgramFiles%\Git\cmd;%PATH%"
 if exist "%LOCALAPPDATA%\Programs\Git\cmd\git.exe" set "PATH=%LOCALAPPDATA%\Programs\Git\cmd;%PATH%"
-where git >nul 2>nul
-if %ERRORLEVEL% neq 0 goto :eg_manual
-goto :eg_found
+if exist "%USERPROFILE%\scoop\shims\git.exe" set "PATH=%USERPROFILE%\scoop\shims;%PATH%"
+if exist "%ProgramData%\chocolatey\bin\git.exe" set "PATH=%ProgramData%\chocolatey\bin;%PATH%"
+goto :eof
 
 :eg_found
 for /f "tokens=*" %%v in ('git --version 2^>nul') do set "GIT_VERSION=%%v"
