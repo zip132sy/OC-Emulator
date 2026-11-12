@@ -2818,6 +2818,7 @@ const Console = (() => {
   // can be positioned precisely before clicking. The toggle itself can be dragged and
   // snaps to the closest canvas edge to keep the screen readable; the coarse-pointer
   // media query keeps it hidden on desktops.
+  const VMOUSE_POS_KEY = 'oc-vmouse-pos';   // where the toggle was left (ratio of the console)
   const VMOUSE_EDGE = 4;   // minimum distance from the console edge
   const VMOUSE_GAP = 6;    // distance kept between the toggle and the canvas
   const VMOUSE_SLOP = 6;   // movement that turns a tap into a pointer drag
@@ -2985,14 +2986,45 @@ const Console = (() => {
     };
   }
 
+  // Position memory: the ratio of the console area survives resizes and reloads
+  function saveVirtualMouseRatio(ratio) {
+    try { localStorage.setItem(VMOUSE_POS_KEY, JSON.stringify(ratio)); } catch (e) { /* ignore private mode */ }
+  }
+
+  function loadVirtualMouseRatio() {
+    try {
+      const raw = localStorage.getItem(VMOUSE_POS_KEY);
+      if (!raw) return null;
+      const r = JSON.parse(raw);
+      if (!r || typeof r.x !== 'number' || typeof r.y !== 'number') return null;
+      return { x: Math.max(0, Math.min(1, r.x)), y: Math.max(0, Math.min(1, r.y)) };
+    } catch (e) {
+      return null;
+    }
+  }
+
   function applyVirtualMouseButton(view, pos) {
     const btn = view.vmouseBtn;
     if (!btn || !pos) return;
+    const prev = view._vmPos;
+    const changed = !prev || Math.abs(prev.left - pos.left) > 0.5 || Math.abs(prev.top - pos.top) > 0.5;
     btn.style.left = pos.left + 'px';
     btn.style.top = pos.top + 'px';
     btn.style.right = 'auto';
     btn.style.bottom = 'auto';
     view._vmPos = pos;
+    // Only persist real moves: layout runs on every resize and frame
+    if (!changed) return;
+    const wrap = view.canvasWrap;
+    if (wrap && wrap.clientWidth && wrap.clientHeight) {
+      const bw = btn.offsetWidth || 44;
+      const bh = btn.offsetHeight || 44;
+      view._vmRatio = {
+        x: (pos.left + bw / 2) / wrap.clientWidth,
+        y: (pos.top + bh / 2) / wrap.clientHeight,
+      };
+      saveVirtualMouseRatio(view._vmRatio);
+    }
   }
 
   // Snap the toggle just outside the closest canvas edge; anchor is a console-local point
@@ -3009,8 +3041,12 @@ const Console = (() => {
       left: wrap.clientWidth - bw - 8,
       top: wrap.clientHeight - bh - 8,
     };
-    const ax = anchor ? anchor.left : prev.left + bw / 2;
-    const ay = anchor ? anchor.top : prev.top + bh / 2;
+    // Saved ratio (reload / resize) beats the last pixel position
+    const saved = (!anchor && view._vmRatio)
+      ? { left: view._vmRatio.x * wrap.clientWidth, top: view._vmRatio.y * wrap.clientHeight }
+      : null;
+    const ax = anchor ? anchor.left : (saved ? saved.left : prev.left + bw / 2);
+    const ay = anchor ? anchor.top : (saved ? saved.top : prev.top + bh / 2);
     const wr = wrap.getBoundingClientRect();
     const cr = canvas.getBoundingClientRect();
     const cl = cr.left - wr.left;
@@ -3050,6 +3086,7 @@ const Console = (() => {
     if (!btn) return;
     // Restore the state and position after a tab rebuild
     setVirtualMouse(vmName, !!view.vmouseOn);
+    if (!view._vmRatio) view._vmRatio = loadVirtualMouseRatio();
     layoutVirtualMouse(vmName);
 
     let dragId = null;

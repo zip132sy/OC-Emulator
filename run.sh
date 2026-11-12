@@ -139,6 +139,82 @@ if [ -n "$NODE_MAJOR" ] && [ "$NODE_MAJOR" -lt "$REQUIRED_NODE_MAJOR" ] 2>/dev/n
 fi
 
 # ============================================================
+# 1b. Termux / Android
+#     The host battery is unreadable through sysfs there, so the
+#     emulator uses the Termux API. Only the CLI package can be
+#     installed here; the Termux:API app comes from F-Droid.
+# ============================================================
+IS_TERMUX=false
+case "$PREFIX" in
+    *com.termux*) IS_TERMUX=true ;;
+esac
+if [ -n "$TERMUX_VERSION" ]; then IS_TERMUX=true; fi
+
+if [ "$IS_TERMUX" = true ]; then
+    if command -v termux-battery-status >/dev/null 2>&1; then
+        echo "[OK] termux-api"
+    else
+        echo "[INFO] Termux detected, installing termux-api..."
+        pkg install -y termux-api >/dev/null 2>&1 || true
+        if command -v termux-battery-status >/dev/null 2>&1; then
+            echo "[OK] termux-api installed"
+        else
+            echo "[WARNING] termux-api could not be installed automatically."
+            echo "          Run: pkg install termux-api"
+            echo "          Battery values stay at 100% until it is available."
+        fi
+    fi
+    if ! command -v termux-battery-status >/dev/null 2>&1; then
+        echo "[INFO] Also install the Termux:API app, otherwise the battery cannot be read:"
+        echo "       https://f-droid.org/packages/com.termux.api/"
+    fi
+fi
+
+# ============================================================
+# 1c. Git
+#     Automatic updates run git pull; without it they fail.
+#     A missing Git is only a warning: the emulator still starts.
+# ============================================================
+install_git() {
+    if command -v apt-get >/dev/null 2>&1; then
+        sudo apt-get update -qq && sudo apt-get install -y git
+    elif command -v dnf >/dev/null 2>&1; then
+        sudo dnf install -y git
+    elif command -v yum >/dev/null 2>&1; then
+        sudo yum install -y git
+    elif command -v pacman >/dev/null 2>&1; then
+        sudo pacman -S --noconfirm git
+    elif command -v apk >/dev/null 2>&1; then
+        sudo apk add git
+    elif command -v brew >/dev/null 2>&1; then
+        brew install git
+    elif command -v port >/dev/null 2>&1; then
+        sudo port install git
+    else
+        return 1
+    fi
+}
+
+if command -v git >/dev/null 2>&1; then
+    echo "[OK] Git: $(git --version 2>/dev/null)"
+else
+    echo "[WARNING] Git not found; automatic updates will fail."
+    echo "[INFO] Installing Git..."
+    if [ "$IS_TERMUX" = true ]; then
+        pkg install -y git >/dev/null 2>&1 || true
+    else
+        install_git >/dev/null 2>&1 || true
+    fi
+    if command -v git >/dev/null 2>&1; then
+        echo "[OK] Git installed: $(git --version 2>/dev/null)"
+    else
+        echo "[WARNING] Could not install Git automatically."
+        echo "          Install it manually: https://git-scm.com/downloads"
+        echo "          The emulator still starts; only automatic updates are skipped."
+    fi
+fi
+
+# ============================================================
 # 2. npm dependencies + Lua (lib/ensureDeps.js)
 #    - npm dependency version mismatch -> ask before reinstalling
 #    - Lua is pinned to 5.1.x (no prompt)

@@ -42,6 +42,13 @@ REM ============================================================
 call :ensure_node
 if not "!DEP_OK!"=="1" goto :dep_failed
 
+REM Git is needed by automatic updates; a missing Git only warns (startup continues)
+call :ensure_git
+if not "!GIT_OK!"=="1" (
+    echo [WARNING] Git is not installed. Automatic updates will fail.
+    echo           Install it from: https://git-scm.com/download/win
+)
+
 echo.
 echo [INFO] Checking npm packages and Lua...
 node "%~dp0lib\ensureDeps.js"
@@ -336,6 +343,41 @@ goto :eof
 echo.
 echo [ERROR] Node.js installation failed.
 echo         Install Node.js manually, then run this script again: https://nodejs.org/
+echo.
+goto :eof
+
+REM ------------------------------------------------------------
+REM Subroutine: check / install Git
+REM   - installed -> GIT_OK=1
+REM   - missing   -> install with winget when available
+REM   - failure is not fatal: the emulator starts, updates are skipped
+REM ------------------------------------------------------------
+:ensure_git
+set "GIT_OK=0"
+set "GIT_VERSION="
+where git >nul 2>nul
+if %ERRORLEVEL% equ 0 goto :eg_found
+
+echo [INFO] Git not found, trying winget...
+where winget >nul 2>nul
+if %ERRORLEVEL% neq 0 goto :eg_manual
+winget install --id Git.Git -e --source winget --accept-package-agreements --accept-source-agreements --silent
+if exist "%ProgramFiles%\Git\cmd\git.exe" set "PATH=%ProgramFiles%\Git\cmd;%PATH%"
+if exist "%LOCALAPPDATA%\Programs\Git\cmd\git.exe" set "PATH=%LOCALAPPDATA%\Programs\Git\cmd;%PATH%"
+where git >nul 2>nul
+if %ERRORLEVEL% neq 0 goto :eg_manual
+goto :eg_found
+
+:eg_found
+for /f "tokens=*" %%v in ('git --version 2^>nul') do set "GIT_VERSION=%%v"
+echo [OK] !GIT_VERSION!
+set "GIT_OK=1"
+goto :eof
+
+:eg_manual
+echo [WARNING] Git could not be installed automatically.
+echo           Download it from https://git-scm.com/download/win and run this script again.
+echo           The emulator still starts; only automatic updates are skipped.
 echo.
 goto :eof
 
