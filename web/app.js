@@ -1779,6 +1779,12 @@ const App = (() => {
       closeMenu();
     });
 
+    // Welcome page "About this tool" button
+    const welcomeAbout = document.getElementById('welcome-about');
+    if (welcomeAbout) {
+      welcomeAbout.addEventListener('click', () => openAbout());
+    }
+
     $$('.menu-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         const action = btn.dataset.action;
@@ -2019,18 +2025,28 @@ const App = (() => {
     const t = I18N.t;
     const credits = String(t('about.credits.text')).split('\n').filter(Boolean)
       .map(line => '<div>' + line + '</div>').join('');
+    const projects = [
+      { name: 'OpenComputers', note: t('about.p1'), url: 'https://github.com/MightyPirates/OpenComputers' },
+      { name: 'MineOS', note: t('about.p2'), url: 'https://github.com/IgorTimofeev/MineOS' },
+      { name: 'Lua 5.3', note: t('about.p3'), url: 'https://www.lua.org/' },
+      { name: 'Node.js', note: t('about.p4'), url: 'https://nodejs.org/' },
+    ].map(p => `<li><a href="${p.url}" target="_blank" rel="noopener">${p.name}</a>` +
+      `<span>${p.note}</span></li>`).join('');
     Modal.open({
       title: t('about.title'),
       bodyHTML: `
         <div class="about-box">
           <div class="about-name">OC Emulator</div>
+          <div class="about-desc">${t('about.desc')}</div>
           <div class="about-line"><span>${t('about.version')}</span><b id="about-version">2.0.0</b></div>
           <div class="about-line"><span>${t('about.license')}</span><b>AGPL-3.0-or-later</b></div>
           <div class="about-line"><span>${t('about.links')}</span><b>
             <a href="https://github.com/zip132sy/OC-Emulator" target="_blank" rel="noopener">GitHub</a>
             · <a href="https://gitee.com/zip132sy/OC-Emulator" target="_blank" rel="noopener">Gitee</a>
           </b></div>
-          <div class="about-credits-title">${t('about.credits')}</div>
+          <div class="about-section">${t('about.projects')}</div>
+          <ul class="about-list">${projects}</ul>
+          <div class="about-section">${t('about.contributors')}</div>
           <div class="about-credits">${credits}</div>
         </div>`,
       footerHTML: `<button class="btn" data-action="modal-close">${t('about.close')}</button>`,
@@ -2130,6 +2146,7 @@ const App = (() => {
     set('welcome-title', 'welcome.title');
     set('welcome-subtitle', 'welcome.subtitle');
     set('welcome-hint', 'welcome.hint');
+    set('welcome-about', 'welcome.about');
     // Tab close button tooltip
     renderTabs();
     // Refresh list text

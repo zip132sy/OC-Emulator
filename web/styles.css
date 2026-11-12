@@ -1114,6 +1114,36 @@ html, body {
   color: var(--fg-secondary);
   line-height: 1.6;
 }
+.about-desc {
+  color: var(--fg-secondary);
+  line-height: 1.6;
+  margin-bottom: 10px;
+}
+.about-section {
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  color: var(--fg-muted);
+}
+.about-list {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  color: var(--fg-secondary);
+  line-height: 1.7;
+}
+.about-list li { margin-bottom: 4px; }
+.about-list a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.about-list a:hover { text-decoration: underline; }
+.about-list li span {
+  margin-left: 8px;
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+/* 主界面「关于工具」按钮 */
+.welcome-about-btn { margin-top: 14px; }
 
 /* ---------- 更新进度条 ---------- */
 .update-progress { padding: 4px 2px 2px; }
