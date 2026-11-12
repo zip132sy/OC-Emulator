@@ -30,6 +30,27 @@ case "$PREFIX" in
 esac
 if [ -n "$TERMUX_VERSION" ]; then IS_TERMUX=true; fi
 
+# Run one install step with its full output visible, then report success or the
+# exact exit code. Suppressing the package manager's progress and status made
+# failures indistinguishable from a slow install.
+run_install() {
+    local label="$1"
+    shift
+    echo "[INFO] $label"
+    echo "       \$ $*"
+    if "$@"; then
+        echo "[OK] $label"
+        return 0
+    else
+        local code=$?
+        echo "[FAIL] $label (exit code ${code})"
+        if [ "$IS_TERMUX" = true ]; then
+            echo "       If the network is slow or the mirror is stale, run 'pkg update' once and retry."
+        fi
+        return "$code"
+    fi
+}
+
 install_node() {
     echo ""
     echo "Attempting to install Node.js..."
@@ -42,43 +63,36 @@ install_node() {
         Linux*)
             if [ "$IS_TERMUX" = true ]; then
                 # Termux: pkg wraps apt, "nodejs" already ships npm
-                echo "Installing via pkg (Termux)..."
-                pkg install -y nodejs
-                INSTALL_SUCCESS=true
+                run_install "Installing Node.js via pkg (Termux)" pkg install -y nodejs \
+                    && INSTALL_SUCCESS=true
             # Try package managers
             elif command -v apt-get >/dev/null 2>&1; then
-                echo "Installing via apt-get (requires sudo)..."
-                sudo apt-get update -qq && sudo apt-get install -y nodejs npm
-                INSTALL_SUCCESS=true
+                run_install "Updating apt package lists" sudo apt-get update \
+                    && run_install "Installing Node.js via apt-get" sudo apt-get install -y nodejs npm \
+                    && INSTALL_SUCCESS=true
             elif command -v yum >/dev/null 2>&1; then
-                echo "Installing via yum (requires sudo)..."
-                sudo yum install -y nodejs npm
-                INSTALL_SUCCESS=true
+                run_install "Installing Node.js via yum" sudo yum install -y nodejs npm \
+                    && INSTALL_SUCCESS=true
             elif command -v dnf >/dev/null 2>&1; then
-                echo "Installing via dnf (requires sudo)..."
-                sudo dnf install -y nodejs npm
-                INSTALL_SUCCESS=true
+                run_install "Installing Node.js via dnf" sudo dnf install -y nodejs npm \
+                    && INSTALL_SUCCESS=true
             elif command -v pacman >/dev/null 2>&1; then
-                echo "Installing via pacman (requires sudo)..."
-                sudo pacman -S --noconfirm nodejs npm
-                INSTALL_SUCCESS=true
+                run_install "Installing Node.js via pacman" sudo pacman -S --noconfirm nodejs npm \
+                    && INSTALL_SUCCESS=true
             elif command -v apk >/dev/null 2>&1; then
-                echo "Installing via apk (requires sudo)..."
-                sudo apk add nodejs npm
-                INSTALL_SUCCESS=true
+                run_install "Installing Node.js via apk" sudo apk add nodejs npm \
+                    && INSTALL_SUCCESS=true
             else
                 echo "No known package manager found."
             fi
             ;;
         Darwin*)
             if command -v brew >/dev/null 2>&1; then
-                echo "Installing via Homebrew..."
-                brew install node
-                INSTALL_SUCCESS=true
+                run_install "Installing Node.js via Homebrew" brew install node \
+                    && INSTALL_SUCCESS=true
             elif command -v port >/dev/null 2>&1; then
-                echo "Installing via MacPorts (requires sudo)..."
-                sudo port install nodejs20
-                INSTALL_SUCCESS=true
+                run_install "Installing Node.js via MacPorts" sudo port install nodejs20 \
+                    && INSTALL_SUCCESS=true
             else
                 echo "Neither Homebrew nor MacPorts found."
                 echo "Install Homebrew from: https://brew.sh/"
@@ -98,11 +112,11 @@ install_node() {
 
         NVM_DIR="$HOME/.nvm"
         if [ ! -d "$NVM_DIR" ]; then
-            curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh 2>/dev/null | bash
+            curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
         fi
 
         [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-        nvm install --lts 2>/dev/null && nvm use --lts 2>/dev/null
+        nvm install --lts && nvm use --lts
     fi
 }
 
@@ -162,7 +176,7 @@ if [ "$IS_TERMUX" = true ]; then
         echo "[OK] termux-api"
     else
         echo "[INFO] Termux detected, installing termux-api..."
-        pkg install -y termux-api >/dev/null 2>&1 || true
+        run_install "Installing termux-api via pkg" pkg install -y termux-api
         if command -v termux-battery-status >/dev/null 2>&1; then
             echo "[OK] termux-api installed"
         else
@@ -183,21 +197,25 @@ fi
 #     A missing Git is only a warning: the emulator still starts.
 # ============================================================
 install_git() {
-    if command -v apt-get >/dev/null 2>&1; then
-        sudo apt-get update -qq && sudo apt-get install -y git
+    if [ "$IS_TERMUX" = true ]; then
+        run_install "Installing Git via pkg (Termux)" pkg install -y git
+    elif command -v apt-get >/dev/null 2>&1; then
+        run_install "Updating apt package lists" sudo apt-get update \
+            && run_install "Installing Git via apt-get" sudo apt-get install -y git
     elif command -v dnf >/dev/null 2>&1; then
-        sudo dnf install -y git
+        run_install "Installing Git via dnf" sudo dnf install -y git
     elif command -v yum >/dev/null 2>&1; then
-        sudo yum install -y git
+        run_install "Installing Git via yum" sudo yum install -y git
     elif command -v pacman >/dev/null 2>&1; then
-        sudo pacman -S --noconfirm git
+        run_install "Installing Git via pacman" sudo pacman -S --noconfirm git
     elif command -v apk >/dev/null 2>&1; then
-        sudo apk add git
+        run_install "Installing Git via apk" sudo apk add git
     elif command -v brew >/dev/null 2>&1; then
-        brew install git
+        run_install "Installing Git via Homebrew" brew install git
     elif command -v port >/dev/null 2>&1; then
-        sudo port install git
+        run_install "Installing Git via MacPorts" sudo port install git
     else
+        echo "[FAIL] No supported package manager found for Git."
         return 1
     fi
 }
@@ -206,12 +224,7 @@ if command -v git >/dev/null 2>&1; then
     echo "[OK] Git: $(git --version 2>/dev/null)"
 else
     echo "[WARNING] Git not found; automatic updates will fail."
-    echo "[INFO] Installing Git..."
-    if [ "$IS_TERMUX" = true ]; then
-        pkg install -y git >/dev/null 2>&1 || true
-    else
-        install_git >/dev/null 2>&1 || true
-    fi
+    install_git
     if command -v git >/dev/null 2>&1; then
         echo "[OK] Git installed: $(git --version 2>/dev/null)"
     else
