@@ -1841,6 +1841,8 @@ const App = (() => {
   const GUIDE_PENDING_KEY = 'oc-emu-guide-pending';
   const GUIDE_DONE_KEY = 'oc-emu-guide-done';
   let guideIndex = 0;
+  let guideSettings = null;      // last known /api/settings response
+  let guideFlashTimer = null;
 
   function guidePending() {
     try { return localStorage.getItem(GUIDE_PENDING_KEY) === '1'; } catch (e) { return false; }
@@ -1862,6 +1864,8 @@ const App = (() => {
     for (let i = 1; i <= 4; i++) {
       pages.push({ title: I18N.t('guide.' + i + '.title'), body: I18N.t('guide.' + i + '.body') });
     }
+    // Last step: the basic settings can be changed right here
+    pages.push({ title: I18N.t('guide.5.title'), body: '', settings: true });
     return pages;
   }
 
@@ -1871,20 +1875,94 @@ const App = (() => {
     const body = document.getElementById('modal-body');
     const footer = document.getElementById('modal-footer');
     if (!page || !body || !footer) return;
-    const items = String(page.body).split('\n').filter(Boolean)
-      .map(line => '<li>' + line + '</li>').join('');
-    body.innerHTML = `
-      <div class="guide-page">
-        <div class="guide-step">${I18N.t('guide.step', { n: guideIndex + 1, total: pages.length })}</div>
-        <div class="guide-page-title">${page.title}</div>
-        <ul class="guide-list">${items}</ul>
-      </div>`;
+    const step = I18N.t('guide.step', { n: guideIndex + 1, total: pages.length });
+    if (page.settings) {
+      body.innerHTML = guideSettingsHTML(step);
+      bindGuideSettings(body);
+    } else {
+      const items = String(page.body).split('\n').filter(Boolean)
+        .map(line => '<li>' + line + '</li>').join('');
+      body.innerHTML = `
+        <div class="guide-page">
+          <div class="guide-step">${step}</div>
+          <div class="guide-page-title">${page.title}</div>
+          <ul class="guide-list">${items}</ul>
+        </div>`;
+    }
     const last = guideIndex === pages.length - 1;
     footer.innerHTML = `
       <button class="btn" data-guide="skip">${I18N.t('guide.skip')}</button>
       <div class="guide-spacer"></div>
       <button class="btn" data-guide="prev"${guideIndex === 0 ? ' disabled' : ''}>${I18N.t('guide.prev')}</button>
       <button class="btn btn-primary" data-guide="next">${last ? I18N.t('guide.done') : I18N.t('guide.next')}</button>`;
+  }
+
+  // Settings step: change the common options without opening the settings dialog
+  function guideSettingsHTML(step) {
+    const t = I18N.t;
+    const cur = guideSettings || {};
+    const logLevel = cur.logLevel || 'error';
+    const autoUpdate = cur.autoUpdate !== false;
+    const showFps = !!(window.Console && Console.isShowFps && Console.isShowFps());
+    const opt = (value, label, selected) =>
+      `<option value="${value}"${selected ? ' selected' : ''}>${label}</option>`;
+    return `
+      <div class="guide-page">
+        <div class="guide-step">${step}</div>
+        <div class="guide-page-title">${t('guide.5.title')}</div>
+        <div class="guide-hint">${t('guide.5.hint')}</div>
+        <div class="guide-setting">
+          <label for="guide-log-level">${t('settings.log-level')}</label>
+          <select id="guide-log-level">
+            ${opt('full', t('settings.log-level.full'), logLevel === 'full')}
+            ${opt('error', t('settings.log-level.error'), logLevel === 'error')}
+            ${opt('off', t('settings.log-level.off'), logLevel === 'off')}
+          </select>
+        </div>
+        <div class="guide-setting">
+          <label for="guide-auto-update">${t('settings.auto-update')}</label>
+          <label class="checkbox-line"><input type="checkbox" id="guide-auto-update"${autoUpdate ? ' checked' : ''}></label>
+        </div>
+        <div class="guide-setting">
+          <label for="guide-show-fps">${t('settings.show-fps')}</label>
+          <label class="checkbox-line"><input type="checkbox" id="guide-show-fps"${showFps ? ' checked' : ''}></label>
+        </div>
+        <div class="guide-saved" id="guide-saved"></div>
+        <div class="guide-where">${t('guide.5.where')}</div>
+      </div>`;
+  }
+
+  function bindGuideSettings(body) {
+    const savedEl = body.querySelector('#guide-saved');
+    const flashSaved = () => {
+      if (!savedEl) return;
+      savedEl.textContent = I18N.t('guide.5.saved');
+      if (guideFlashTimer) clearTimeout(guideFlashTimer);
+      guideFlashTimer = setTimeout(() => {
+        if (savedEl) savedEl.textContent = '';
+      }, 1500);
+    };
+    const save = async (patch) => {
+      try {
+        await api('settings', { method: 'PUT', body: patch });
+        guideSettings = Object.assign({}, guideSettings, patch);
+        flashSaved();
+      } catch (e) {
+        // Leave the control as it is when the server rejects the change
+      }
+    };
+    const logSel = body.querySelector('#guide-log-level');
+    if (logSel) logSel.addEventListener('change', () => save({ logLevel: logSel.value }));
+    const autoBox = body.querySelector('#guide-auto-update');
+    if (autoBox) autoBox.addEventListener('change', () => save({ autoUpdate: autoBox.checked }));
+    const fpsBox = body.querySelector('#guide-show-fps');
+    if (fpsBox) {
+      fpsBox.addEventListener('change', () => {
+        // Client-side preference: applies immediately and is stored in localStorage
+        if (window.Console && Console.setShowFps) Console.setShowFps(fpsBox.checked);
+        flashSaved();
+      });
+    }
   }
 
   function openGuide(startIndex) {
@@ -1895,6 +1973,12 @@ const App = (() => {
       footerHTML: '',
       onMount() { drawGuide(); },
     });
+    // Load the server settings so the settings step shows the real values
+    api('settings').then(cur => {
+      guideSettings = cur || {};
+      const pages = guidePages();
+      if (pages[guideIndex] && pages[guideIndex].settings) drawGuide();
+    }).catch(() => { /* keep the defaults */ });
   }
 
   function handleGuideAction(action) {

@@ -38,6 +38,10 @@ const I18N = (() => {
       'guide.3.body': '点击画布获得焦点后可直接用键盘输入, 「输入法」按钮可唤起手机软键盘\n「按键」按钮提供 F1-F12 等手机软键盘没有的按键\n手机端「🖱」为虚拟鼠标: 在画布上拖动移动指针, 轻点按指针位置点击, 长按右键',
       'guide.4.title': '磁盘、Mods 与设置',
       'guide.4.body': '右键虚拟机 (手机端点「⋮」) 可以编辑磁盘、导出虚拟机\nMods 支持导入 zip、导出以及从网络下载\n「设置」中可以切换语言、调整日志级别、开关系统信息上报',
+      'guide.5.title': '基础设置',
+      'guide.5.hint': '可以直接在这里改好, 不需要再进设置',
+      'guide.5.saved': '已保存',
+      'guide.5.where': '这些选项随时可以在「菜单 → ⚙ 设置」中修改',
 
       // About dialog
       'about.title': '关于',
@@ -955,6 +959,10 @@ const I18N = (() => {
       'guide.3.body': 'Click the canvas to focus it, then type with the keyboard; the Keyboard button opens the phone soft keyboard\nThe Keys button provides F1-F12 and other keys phones lack\nOn phones the 🖱 button is a virtual mouse: drag to move the pointer, tap to click at the pointer, long press for right click',
       'guide.4.title': 'Disks, Mods and settings',
       'guide.4.body': 'Right-click a VM (or use the ⋮ menu on phones) to edit disks and export it\nMods can be imported from a zip, exported, or downloaded from a URL\nSettings let you change the language, log level and system info reporting',
+      'guide.5.title': 'Basic settings',
+      'guide.5.hint': 'Set these up right here, no need to open Settings',
+      'guide.5.saved': 'Saved',
+      'guide.5.where': 'You can change these later in Menu → ⚙ Settings',
 
       // About dialog
       'about.title': 'About',
