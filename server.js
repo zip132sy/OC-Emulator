@@ -840,6 +840,11 @@ async function handleApi(req, res, body) {
       }
     }
 
+    // /api/sysinfo/battery: battery probe diagnostics (which files / commands were readable)
+    if (parts[1] === 'sysinfo' && parts[2] === 'battery' && method === 'GET') {
+      return json(res, await sysInfo.getBatteryDiagnostics());
+    }
+
     // /api/lua/check
     if (parts[1] === 'lua' && parts[2] === 'check') {
       if (method === 'POST') {
