@@ -4689,8 +4689,18 @@ end
 -- ============================================================
 local unicode = {}
 
+-- Lua's string functions convert numbers implicitly (string.gsub(123, ...) works), so the
+-- guest may pass a number where a string is expected. MineOS does this from GUI widgets
+-- (string.wlen of a numeric value); without the conversion the method form (s:gmatch)
+-- raises "attempt to index a number value".
+unicode._str = function(v)
+  if type(v) == "number" then return tostring(v) end
+  return v
+end
+
 -- Count characters in a UTF-8 string
 unicode.len = function(s)
+  s = unicode._str(s)
   local n = 0
   for _ in s:gmatch(".[\128-\191]*") do n = n + 1 end
   return n
@@ -4698,6 +4708,7 @@ end
 
 -- Display width (narrow = 1, wide = 2)
 unicode.wlen = function(s)
+  s = unicode._str(s)
   local w = 0
   for ch in s:gmatch(".[\128-\191]*") do
     w = w + (unicode.isWide(ch) and 2 or 1)
@@ -4707,6 +4718,7 @@ end
 
 -- Substring by character index (UTF-8 safe)
 unicode.sub = function(s, i, j)
+  s = unicode._str(s)
   local chars = {}
   for ch in s:gmatch(".[\128-\191]*") do table.insert(chars, ch) end
   i = i < 0 and #chars + i + 1 or i
@@ -4719,10 +4731,10 @@ end
 
 unicode.upper = function(s)
   -- Simple implementation: ASCII only
-  return (s:gsub("%a", string.upper))
+  return (unicode._str(s):gsub("%a", string.upper))
 end
 unicode.lower = function(s)
-  return (s:gsub("%a", string.lower))
+  return (unicode._str(s):gsub("%a", string.lower))
 end
 
 -- UTF-8 character from a Unicode code point
@@ -4744,6 +4756,7 @@ end
 
 -- Unicode code point from a UTF-8 string
 unicode.byte = function(s, i, j)
+  s = unicode._str(s)
   i = i or 1
   j = j or i
   local result = {}
@@ -4765,6 +4778,7 @@ unicode.byte = function(s, i, j)
 end
 
 unicode.reverse = function(s)
+  s = unicode._str(s)
   local chars = {}
   for ch in s:gmatch(".[\128-\191]*") do table.insert(chars, 1, ch) end
   return table.concat(chars)
@@ -4782,6 +4796,7 @@ unicode.match = string.match
 -- Latin extensions and block characters (█▀▄) are narrow (width 1)
 unicode.isWide = function(ch)
   if not ch or ch == "" then return false end
+  ch = unicode._str(ch)
   -- Decode the UTF-8 code point
   local b = ch:byte(1)
   local cp
@@ -4818,6 +4833,7 @@ end
 
 -- Truncate a string to a display width
 unicode.wtrunc = function(s, width)
+  s = unicode._str(s)
   if width <= 0 then return "" end
   local w = 0
   local result = {}
@@ -4832,7 +4848,7 @@ end
 
 -- Character iterator
 unicode.chars = function(s)
-  return s:gmatch(".[\128-\191]*")
+  return unicode._str(s):gmatch(".[\128-\191]*")
 end
 
 -- ============================================================
