@@ -1015,6 +1015,68 @@ html, body {
   display: flex; gap: 8px; justify-content: flex-end;
 }
 
+/* ---------- 使用引导 ---------- */
+.guide-page { padding: 2px 2px 4px; }
+.guide-step {
+  font-size: 11px;
+  color: var(--fg-muted);
+  margin-bottom: 6px;
+}
+.guide-page-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--fg-primary);
+  margin-bottom: 10px;
+}
+.guide-list {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--fg-secondary);
+  font-size: 13px;
+  line-height: 1.7;
+}
+.guide-list li { margin-bottom: 6px; }
+.guide-spacer { flex: 1; }
+@media (max-width: 767px) {
+  .guide-spacer { display: none; }
+}
+
+/* ---------- 关于 ---------- */
+.about-box { font-size: 13px; }
+.about-name {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--fg-primary);
+  margin-bottom: 10px;
+}
+.about-line {
+  display: flex;
+  gap: 12px;
+  padding: 4px 0;
+  color: var(--fg-secondary);
+}
+.about-line > span {
+  min-width: 72px;
+  color: var(--fg-muted);
+}
+.about-line b { color: var(--fg-primary); font-weight: 600; }
+.about-line a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.about-line a:hover { text-decoration: underline; }
+.about-credits-title {
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  color: var(--fg-muted);
+}
+.about-credits {
+  margin-top: 4px;
+  color: var(--fg-secondary);
+  line-height: 1.6;
+}
+
 /* ---------- 更新进度条 ---------- */
 .update-progress { padding: 4px 2px 2px; }
 .update-progress-head {

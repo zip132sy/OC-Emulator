@@ -1790,6 +1790,7 @@ const App = (() => {
         else if (action === 'lua-recheck') checkLua();
         else if (action === 'import-vm') ExportWizard.openImport();
         else if (action === 'settings') openSettings();
+        else if (action === 'about') openAbout();
         else if (action === 'restart-server') restartServer();
         else if (action === 'stop-server') stopServer();
         else if (action === 'toggle-nav') toggleNav();
@@ -1826,7 +1827,135 @@ const App = (() => {
         e.preventDefault();
         Modal.close();
       });
+      // Usage guide buttons (the footer is rebuilt per step, so delegate once here)
+      modalContainer.addEventListener('click', (e) => {
+        const btn = e.target && e.target.closest ? e.target.closest('[data-guide]') : null;
+        if (!btn) return;
+        e.preventDefault();
+        handleGuideAction(btn.getAttribute('data-guide'));
+      });
     }
+  }
+
+  // ---------- Usage guide (shown once, after the language is picked) ----------
+  const GUIDE_PENDING_KEY = 'oc-emu-guide-pending';
+  const GUIDE_DONE_KEY = 'oc-emu-guide-done';
+  let guideIndex = 0;
+
+  function guidePending() {
+    try { return localStorage.getItem(GUIDE_PENDING_KEY) === '1'; } catch (e) { return false; }
+  }
+
+  function guideDone() {
+    try { return localStorage.getItem(GUIDE_DONE_KEY) === '1'; } catch (e) { return true; }
+  }
+
+  function finishGuide() {
+    try {
+      localStorage.setItem(GUIDE_DONE_KEY, '1');
+      localStorage.removeItem(GUIDE_PENDING_KEY);
+    } catch (e) { /* ignore private mode */ }
+  }
+
+  function guidePages() {
+    const pages = [];
+    for (let i = 1; i <= 4; i++) {
+      pages.push({ title: I18N.t('guide.' + i + '.title'), body: I18N.t('guide.' + i + '.body') });
+    }
+    return pages;
+  }
+
+  function drawGuide() {
+    const pages = guidePages();
+    const page = pages[guideIndex];
+    const body = document.getElementById('modal-body');
+    const footer = document.getElementById('modal-footer');
+    if (!page || !body || !footer) return;
+    const items = String(page.body).split('\n').filter(Boolean)
+      .map(line => '<li>' + line + '</li>').join('');
+    body.innerHTML = `
+      <div class="guide-page">
+        <div class="guide-step">${I18N.t('guide.step', { n: guideIndex + 1, total: pages.length })}</div>
+        <div class="guide-page-title">${page.title}</div>
+        <ul class="guide-list">${items}</ul>
+      </div>`;
+    const last = guideIndex === pages.length - 1;
+    footer.innerHTML = `
+      <button class="btn" data-guide="skip">${I18N.t('guide.skip')}</button>
+      <div class="guide-spacer"></div>
+      <button class="btn" data-guide="prev"${guideIndex === 0 ? ' disabled' : ''}>${I18N.t('guide.prev')}</button>
+      <button class="btn btn-primary" data-guide="next">${last ? I18N.t('guide.done') : I18N.t('guide.next')}</button>`;
+  }
+
+  function openGuide(startIndex) {
+    guideIndex = startIndex || 0;
+    Modal.open({
+      title: I18N.t('guide.title'),
+      bodyHTML: '',
+      footerHTML: '',
+      onMount() { drawGuide(); },
+    });
+  }
+
+  function handleGuideAction(action) {
+    const pages = guidePages();
+    if (action === 'skip') {
+      finishGuide();
+      Modal.close();
+      return;
+    }
+    if (action === 'prev') {
+      if (guideIndex > 0) {
+        guideIndex--;
+        drawGuide();
+      }
+      return;
+    }
+    if (action === 'next') {
+      if (guideIndex < pages.length - 1) {
+        guideIndex++;
+        drawGuide();
+      } else {
+        finishGuide();
+        Modal.close();
+      }
+    }
+  }
+
+  function maybeShowGuide() {
+    if (!guidePending() || guideDone()) return;
+    // Let the first render finish before the dialog appears
+    setTimeout(() => {
+      if (guidePending() && !guideDone()) openGuide(0);
+    }, 400);
+  }
+
+  // ---------- About ----------
+  function openAbout() {
+    const t = I18N.t;
+    const credits = String(t('about.credits.text')).split('\n').filter(Boolean)
+      .map(line => '<div>' + line + '</div>').join('');
+    Modal.open({
+      title: t('about.title'),
+      bodyHTML: `
+        <div class="about-box">
+          <div class="about-name">OC Emulator</div>
+          <div class="about-line"><span>${t('about.version')}</span><b id="about-version">2.0.0</b></div>
+          <div class="about-line"><span>${t('about.license')}</span><b>AGPL-3.0-or-later</b></div>
+          <div class="about-line"><span>${t('about.links')}</span><b>
+            <a href="https://github.com/zip132sy/OC-Emulator" target="_blank" rel="noopener">GitHub</a>
+            · <a href="https://gitee.com/zip132sy/OC-Emulator" target="_blank" rel="noopener">Gitee</a>
+          </b></div>
+          <div class="about-credits-title">${t('about.credits')}</div>
+          <div class="about-credits">${credits}</div>
+        </div>`,
+      footerHTML: `<button class="btn" data-action="modal-close">${t('about.close')}</button>`,
+    });
+    // Replace the fallback version with the one reported by the server
+    api('version').then(v => {
+      const el = document.getElementById('about-version');
+      if (el && v && v.version) el.textContent = v.version;
+    }).catch(() => { /* keep the fallback */ });
   }
 
   // ---------- Startup ----------
@@ -1836,6 +1965,8 @@ const App = (() => {
       showLanguageSelector(true);
     } else {
       applyLanguage();
+      // First visit after the language was picked: show the guide once
+      maybeShowGuide();
     }
     bindMenu();
     checkLua();
@@ -1869,16 +2000,15 @@ const App = (() => {
       `,
       footerHTML: '',
       onMount(body) {
-        body.querySelector('#lang-zh').addEventListener('click', () => {
-          I18N.setLang('zh');
+        const pick = (lang) => {
+          I18N.setLang(lang);
+          // The reload below starts the app again: mark that the guide has to follow
+          try { localStorage.setItem(GUIDE_PENDING_KEY, '1'); } catch (e) { /* ignore private mode */ }
           Modal.close();
           location.reload();
-        });
-        body.querySelector('#lang-en').addEventListener('click', () => {
-          I18N.setLang('en');
-          Modal.close();
-          location.reload();
-        });
+        };
+        body.querySelector('#lang-zh').addEventListener('click', () => pick('zh'));
+        body.querySelector('#lang-en').addEventListener('click', () => pick('en'));
       },
     });
   }
@@ -1905,6 +2035,7 @@ const App = (() => {
     set('menu-check-update', 'menu.check-update');
     set('menu-lua-recheck', 'menu.lua-recheck');
     set('menu-settings', 'menu.settings');
+    set('menu-about', 'menu.about');
     set('menu-restart-server', 'menu.restart-server');
     set('menu-stop-server', 'menu.stop-server');
     // Sidebar
