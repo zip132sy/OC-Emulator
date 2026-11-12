@@ -630,6 +630,13 @@ if not vmDir then
   os.exit(1)
 end
 
+-- Hide the host command line from guest code. Programs inside the VM inspect arg[0] to
+-- locate themselves; here it held the host path of oc-emulator.lua, so the ChatRoom
+-- server wrote "/home/C:/Users/.../server.lua" into its autostart script and never
+-- started. Real OC exposes no host arguments, so the guest sees nil.
+local hostArg = arg
+arg = nil
+
 -- Add EMU_DIR to package.path
 package.path = EMU_DIR .. "?.lua;" .. package.path
 
@@ -5251,16 +5258,16 @@ end
 diskPersist.saveNow()
 
 -- With a temporary VM disk, try to write changes back to the VM files
-if vmTempDisk and arg[1] and arg[1]:match("%.ocvm$") then
+if vmTempDisk and hostArg[1] and hostArg[1]:match("%.ocvm$") then
   local f = _io_open(vmTempDisk, "rb")
   if f then
     local diskData = f:read("*a")
     f:close()
     _os_remove(vmTempDisk)
-    local vmCfg = vm.load(arg[1])
+    local vmCfg = vm.load(hostArg[1])
     if vmCfg then
-      vm.save(arg[1], vmCfg, diskData)
-      _stderr:write("[emulator] VM disk saved back to " .. arg[1] .. "\n")
+      vm.save(hostArg[1], vmCfg, diskData)
+      _stderr:write("[emulator] VM disk saved back to " .. hostArg[1] .. "\n")
     end
   end
 end
