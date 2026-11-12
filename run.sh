@@ -30,6 +30,21 @@ case "$PREFIX" in
 esac
 if [ -n "$TERMUX_VERSION" ]; then IS_TERMUX=true; fi
 
+# Termux ships two backends behind "pkg": apt (older) and pacman (newer).
+# "-y" only means "assume yes" for apt; pacman reads it as "refresh the database"
+# and still waits for a Y/n answer, which looks like a hang. Ask termux-tools which
+# backend is active and build the confirmation flag accordingly.
+TERMUX_YES="-y"
+if [ "$IS_TERMUX" = true ] && [ -r "$PREFIX/bin/termux-setup-package-manager" ]; then
+    _pkg_backend="$(
+        . "$PREFIX/bin/termux-setup-package-manager" >/dev/null 2>&1
+        echo "${TERMUX_APP_PACKAGE_MANAGER:-apt}"
+    )"
+    if [ "$_pkg_backend" = "pacman" ]; then
+        TERMUX_YES="--noconfirm"
+    fi
+fi
+
 # Run one install step with its full output visible, then report success or the
 # exact exit code. Suppressing the package manager's progress and status made
 # failures indistinguishable from a slow install.
@@ -75,14 +90,14 @@ install_node() {
         Linux*)
             if [ "$IS_TERMUX" = true ]; then
                 # Termux: pkg wraps apt, "nodejs" already ships npm
-                if run_install "Installing Node.js via pkg (Termux)" pkg install -y nodejs; then
+                if run_install "Installing Node.js via pkg (Termux)" pkg install "$TERMUX_YES" nodejs; then
                     INSTALL_SUCCESS=true
                 else
                     # Empty or stale package lists make pkg answer "Unable to locate
                     # package"; refresh once and retry before falling back to nvm.
                     echo "[INFO] Retrying after refreshing the package lists..."
-                    if run_install "Refreshing package lists" pkg update -y \
-                        && run_install "Installing Node.js via pkg (Termux)" pkg install -y nodejs; then
+                    if run_install "Refreshing package lists" pkg update \
+                        && run_install "Installing Node.js via pkg (Termux)" pkg install "$TERMUX_YES" nodejs; then
                         INSTALL_SUCCESS=true
                     fi
                 fi
@@ -197,7 +212,7 @@ if [ "$IS_TERMUX" = true ]; then
         echo "[OK] termux-api"
     else
         echo "[INFO] Termux detected, installing termux-api..."
-        run_install "Installing termux-api via pkg" pkg install -y termux-api
+        run_install "Installing termux-api via pkg" pkg install "$TERMUX_YES" termux-api
         if command -v termux-battery-status >/dev/null 2>&1; then
             echo "[OK] termux-api installed"
         else
@@ -219,7 +234,7 @@ fi
 # ============================================================
 install_git() {
     if [ "$IS_TERMUX" = true ]; then
-        run_install "Installing Git via pkg (Termux)" pkg install -y git
+        run_install "Installing Git via pkg (Termux)" pkg install "$TERMUX_YES" git
     elif command -v apt-get >/dev/null 2>&1; then
         run_install "Updating apt package lists" sudo apt-get update \
             && run_install "Installing Git via apt-get" sudo apt-get install -y git
