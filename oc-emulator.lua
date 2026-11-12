@@ -2096,7 +2096,8 @@ local gpu = {
   _bg = 0x000000, _fg = 0xFFFFFF,
   -- Palette index, recorded only for setBackground(color, true); nil for RGB colours
   _bgIndex = nil, _fgIndex = nil,
-  _depth = config.gpuTier == 1 and 1 or config.gpuTier == 2 and 4 or 8,
+  -- Tier 1 and 2 both render 16 colours; only tier 3 adds the 240 fixed colours
+  _depth = config.gpuTier >= 3 and 8 or 4,
   _palette = {},
   -- Expose tier; programs read it via component.proxy(addr).tier
   tier = config.gpuTier,
@@ -2111,12 +2112,23 @@ local defaultPalette = {
 }
 for i = 0, 15 do gpu._palette[i] = defaultPalette[i] end
 
+-- The 240 fixed colours of tier 3 (indices 16-255). As in OpenComputers they are
+-- stored as truncated RGB: 3 bits red, 3 bits green, 2 bits blue per index.
+for i = 16, 255 do
+  local r = math.floor(i / 32) % 8
+  local g = math.floor(i / 4) % 8
+  local b = i % 4
+  gpu._palette[i] = math.floor(r * 255 / 7) * 65536
+    + math.floor(g * 255 / 7) * 256
+    + math.floor(b * 255 / 3)
+end
+
 -- Palette size for a colour depth
 local function paletteSize(depth)
   if depth == 1 then return 2
   elseif depth == 4 then return 16
   elseif depth == 8 then return 256
-  else return 16 end  -- T1 GPU
+  else return 16 end
 end
 -- GPU max resolution by tier: T1=50x16, T2=80x25, T3/Creative=160x50
 local gpuMaxW = config.gpuTier == 1 and 50 or config.gpuTier == 2 and 80 or 160
@@ -2151,7 +2163,7 @@ end
 -- maxResolution reports the tier's maximum, matching real OC
 gpu.maxResolution = function() return gpuMaxW, gpuMaxH end
 gpu.maxDepth = function()
-  return config.gpuTier == 1 and 1 or config.gpuTier == 2 and 4 or 8
+  return config.gpuTier >= 3 and 8 or 4
 end
 -- Viewport (required by the OpenOS tty)
 gpu._viewport = nil  -- nil means fullscreen
@@ -2169,15 +2181,14 @@ gpu.getDepth = function() return gpu._depth end
 gpu.setDepth = function(d)
   local previous = gpu._depth
   local value = tonumber(d)
-  local maxDepth = config.gpuTier == 1 and 1 or config.gpuTier == 2 and 4 or 8
+  local maxDepth = config.gpuTier >= 3 and 8 or 4
   -- As in OpenComputers: only 1 / 4 / 8 are accepted; other depths raise an error
   if not value or (value ~= 1 and value ~= 4 and value ~= 8) or value > maxDepth then
     error("unsupported color depth", 2)
   end
   gpu._depth = value
-  -- Reset the palette to defaults
-  gpu._palette = {}
-  for i = 0, math.min(paletteSize(value) - 1, 15) do
+  -- Reset only the 16 editable entries; the 240 fixed tier-3 colours stay in place
+  for i = 0, 15 do
     gpu._palette[i] = defaultPalette[i]
   end
   -- As in OpenComputers: return the previous depth's name
@@ -2438,7 +2449,7 @@ gpu.setBackground = function(color, isPalette)
   color = math.floor(tonumber(color) or 0)
   if isPalette then
     gpu._bgIndex = color
-    gpu._bg = gpu._palette[color] or 0
+    gpu._bg = (color >= 0 and color <= paletteSize(gpu._depth) - 1) and (gpu._palette[color] or 0) or 0
   else
     gpu._bgIndex = nil
     gpu._bg = color
@@ -2450,7 +2461,7 @@ gpu.setForeground = function(color, isPalette)
   color = math.floor(tonumber(color) or 0)
   if isPalette then
     gpu._fgIndex = color
-    gpu._fg = gpu._palette[color] or 0
+    gpu._fg = (color >= 0 and color <= paletteSize(gpu._depth) - 1) and (gpu._palette[color] or 0) or 0
   else
     gpu._fgIndex = nil
     gpu._fg = color
@@ -2461,12 +2472,14 @@ gpu.getBackground = function() return gpu._bg, gpu._bgIndex ~= nil end
 gpu.getForeground = function() return gpu._fg, gpu._fgIndex ~= nil end
 gpu.getPaletteColor = function(idx)
   idx = math.floor(tonumber(idx) or 0)
+  if idx < 0 or idx > paletteSize(gpu._depth) - 1 then return 0 end
   return gpu._palette[idx] or 0
 end
+-- Only the 16 palette entries are editable; 16-255 are the fixed tier-3 colours
 gpu.setPaletteColor = function(idx, color)
   idx = math.floor(tonumber(idx) or 0)
   color = math.floor(tonumber(color) or 0)
-  local maxIdx = paletteSize(gpu._depth) - 1
+  local maxIdx = gpu._depth == 8 and 15 or (paletteSize(gpu._depth) - 1)
   if idx < 0 or idx > maxIdx then return nil, "index out of range" end
   gpu._palette[idx] = color
   return true
