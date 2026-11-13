@@ -179,7 +179,7 @@ const Wizard = (() => {
         <div class="section-title">${T('wizard.firmware', '固件')}</div>
         <div class="form-row">
           <label>${T('hw.eeprom', 'EEPROM')}</label>
-          <select id="wz-eeprom">${renderSelect(OPTIONS.eeprom, hw.eeprom)}</select>
+          <select id="wz-eeprom">${renderSelect(hw.eepromAuto && hw.eeprom ? [{ value: hw.eeprom, label: 'EFI: ' + hw.eeprom }].concat(OPTIONS.eeprom) : OPTIONS.eeprom, hw.eeprom)}</select>
         </div>
         <div class="form-row" id="wz-eeprom-import-row" ${(hw.eeprom === 'import' || hw.eeprom === 'import-lua') ? '' : 'style="display:none"'}>
           <label>${T('wizard.eeprom', '导入 EEPROM')}</label>
