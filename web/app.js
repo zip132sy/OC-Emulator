@@ -2148,8 +2148,8 @@ const App = (() => {
       <div class="form-row" data-disk="${escapeAttr(d.file)}">
         <label>${escapeHtml(d.label)}</label>
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-          <button type="button" class="btn btn-small" data-install="${escapeAttr(d.file)}"${d.installed ? ' disabled' : ''}>
-            ${d.installed ? I18N.t('openos.cached') : I18N.t('openos.download')}
+          <button type="button" class="btn btn-small" data-install="${escapeAttr(d.file)}" data-force="${d.installed ? '1' : '0'}">
+            ${d.installed ? I18N.t('openos.redownload') : I18N.t('openos.download')}
           </button>
           ${d.efi ? `<span class="hint">EFI: ${escapeHtml(d.efi.file)}${d.efi.installed ? ' \u2713' : ''}</span>` : ''}
           <span class="hint" data-status>${d.installed ? I18N.t('openos.cached-hint') : ''}</span>
@@ -2160,8 +2160,8 @@ const App = (() => {
       <div class="form-row" data-version="${escapeAttr(v.id)}">
         <label>${escapeHtml(v.label)}</label>
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-          <button type="button" class="btn btn-small" data-dl="${escapeAttr(v.id)}"${v.cached ? ' disabled' : ''}>
-            ${v.cached ? I18N.t('openos.cached') : I18N.t('openos.download')}
+          <button type="button" class="btn btn-small" data-dl="${escapeAttr(v.id)}" data-force="${v.cached ? '1' : '0'}">
+            ${v.cached ? I18N.t('openos.rebuild') : I18N.t('openos.download')}
           </button>
           <span class="hint" data-status>${v.cached ? I18N.t('openos.cached-hint') : ''}</span>
         </div>
@@ -2226,19 +2226,23 @@ const App = (() => {
   // Download a prebuilt image from the disk repository
   async function installDisk(btn) {
     const file = btn.getAttribute('data-install');
+    // An already installed disk is downloaded again (and re-verified) on demand
+    const force = btn.getAttribute('data-force') === '1';
     const row = btn.closest('[data-disk]');
     const statusEl = row ? row.querySelector('[data-status]') : null;
     const setRowStatus = (text) => { if (statusEl) statusEl.textContent = text; };
     btn.disabled = true;
     setRowStatus(I18N.t('openos.starting'));
     try {
-      const result = await streamEndpoint('/api/openos/install', { file }, (evt) => {
+      const result = await streamEndpoint('/api/openos/install', { file, force }, (evt) => {
         if (evt.percent != null) setRowStatus(I18N.t('openos.progress', { percent: evt.percent }));
       });
       if (!result || !result.ok) throw new Error((result && result.error) || I18N.t('openos.failed'));
       const doneText = I18N.t('openos.done', { path: result.path }) + (result.efi ? ' + ' + result.efi.path : '');
       setRowStatus(doneText);
-      btn.textContent = I18N.t('openos.cached');
+      btn.disabled = false;
+      btn.setAttribute('data-force', '1');
+      btn.textContent = I18N.t('openos.redownload');
       setStatus(doneText);
     } catch (e) {
       btn.disabled = false;
@@ -2249,18 +2253,21 @@ const App = (() => {
   // Build an OpenOS release from the upstream sources (fallback without the repo)
   async function downloadOpenOS(btn) {
     const id = btn.getAttribute('data-dl');
+    const force = btn.getAttribute('data-force') === '1';
     const row = btn.closest('[data-version]');
     const statusEl = row ? row.querySelector('[data-status]') : null;
     const setRowStatus = (text) => { if (statusEl) statusEl.textContent = text; };
     btn.disabled = true;
     setRowStatus(I18N.t('openos.starting'));
     try {
-      const result = await streamEndpoint('/api/openos/build', { version: id }, (evt) => {
+      const result = await streamEndpoint('/api/openos/build', { version: id, force }, (evt) => {
         if (evt.percent != null) setRowStatus(I18N.t('openos.progress', { percent: evt.percent }));
       });
       if (!result || !result.ok) throw new Error((result && result.error) || I18N.t('openos.failed'));
       setRowStatus(I18N.t('openos.done', { path: result.path }));
-      btn.textContent = I18N.t('openos.cached');
+      btn.disabled = false;
+      btn.setAttribute('data-force', '1');
+      btn.textContent = I18N.t('openos.rebuild');
       setStatus(I18N.t('openos.done', { path: result.path }));
     } catch (e) {
       btn.disabled = false;

@@ -544,7 +544,7 @@ async function applyUpdateStreaming(res) {
 }
 
 // Stream the download/build of an OpenOS release as NDJSON (percentage + result)
-async function streamOpenOSBuild(res, version) {
+async function streamOpenOSBuild(res, version, force = false) {
   res.writeHead(200, {
     'Content-Type': 'application/x-ndjson; charset=utf-8',
     'Cache-Control': 'no-store',
@@ -560,6 +560,7 @@ async function streamOpenOSBuild(res, version) {
   try {
     const result = await openosVersions.build(version, {
       diskIO,
+      force,
       onProgress: (done, total) => emit({
         stage: 'download',
         percent: Math.round((done / total) * 100),
@@ -595,6 +596,7 @@ async function streamDiskInstall(res, entry) {
     const found = (catalog.disks || []).find((d) => d.file === wanted);
     if (!found) throw new Error(`磁盘不在仓库清单中: ${wanted}`);
     const result = await diskCatalog.install(found, {
+      force: Boolean(entry && entry.force),
       onProgress: (received, total) => emit({
         stage: 'download',
         percent: total > 0 ? Math.round((received / total) * 100) : 0,
@@ -989,7 +991,7 @@ async function handleApi(req, res, body) {
       }
       if (parts[2] === 'build' && method === 'POST') {
         const payload = JSON.parse(body || '{}');
-        return streamOpenOSBuild(res, payload.version);
+        return streamOpenOSBuild(res, payload.version, payload.force === true);
       }
     }
 
