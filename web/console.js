@@ -1946,6 +1946,12 @@ const Console = (() => {
         view.canvas.focus();
       };
       wrap.addEventListener('mousedown', view._fsFocusHandler, true);
+      // Detach the overlay from the tab pane. On iOS Safari a fixed element inside
+      // a clipped / transformed ancestor can stay at its static position, which
+      // leaves the rest of the page (toolbar, sidebar) on screen.
+      view._fsHome = { parent: wrap.parentNode, next: wrap.nextSibling };
+      if (wrap.parentNode !== document.body) document.body.appendChild(wrap);
+      document.body.classList.add('console-fullscreen');
       // Mobile: enter native fullscreen and lock landscape
       if (isTouchDevice()) requestNativeFullscreen(wrap);
       syncFsRotation(vmName);
@@ -1966,6 +1972,14 @@ const Console = (() => {
       }
       unlockOrientation();
       exitNativeFullscreen();
+      document.body.classList.remove('console-fullscreen');
+      // Put the overlay back where it came from so the tab pane stays intact
+      const home = view._fsHome;
+      if (home && home.parent) {
+        if (home.next && home.next.parentNode === home.parent) home.parent.insertBefore(wrap, home.next);
+        else home.parent.appendChild(wrap);
+      }
+      view._fsHome = null;
       view.fsRotated = false;
       wrap.classList.remove('fs-rotate');
       // Dismiss the soft keyboard when leaving fullscreen
@@ -1976,6 +1990,12 @@ const Console = (() => {
 
   function toggleFullscreen(vmName) {
     setFullscreen(vmName, !getView(vmName).isFullscreen);
+  }
+
+  // Leave fullscreen before a tab (and its pane) is removed
+  function exitFullscreen(vmName) {
+    const view = getView(vmName);
+    if (view && view.isFullscreen) setFullscreen(vmName, false);
   }
 
   // A system gesture or ESC that leaves native fullscreen must also reset the in-page state
@@ -3292,7 +3312,7 @@ const Console = (() => {
     });
   }, 1000);
 
-  return { renderVMView, onServerMessage, loadHexFont, onConnectionLost, applyServerState, reloadView, diag, isWheelKeyCompat, setWheelKeyCompat, isShowFps, setShowFps };
+  return { renderVMView, onServerMessage, loadHexFont, onConnectionLost, applyServerState, reloadView, diag, isWheelKeyCompat, setWheelKeyCompat, isShowFps, setShowFps, exitFullscreen };
 })();
 
 window.Console = Console;

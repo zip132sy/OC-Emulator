@@ -1383,7 +1383,14 @@ const App = (() => {
     const id = 'vm-' + vmName;
     let tab = state.tabs.find(t => t.id === id);
     if (!tab) {
-      tab = { id, vm: vmName, type: 'vm', title: vmName };
+      tab = {
+        id,
+        vm: vmName,
+        type: 'vm',
+        title: vmName,
+        // Fullscreen moves the console overlay to <body>; put it back first
+        onClose: () => { if (window.Console) Console.exitFullscreen(vmName); },
+      };
       state.tabs.push(tab);
     }
     activateTab(id);
