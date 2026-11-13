@@ -1079,6 +1079,11 @@ async function handleApi(req, res, body) {
         if (patch.updateChannel !== undefined) {
           patch.updateChannel = patch.updateChannel === 'beta' ? 'beta' : 'release';
         }
+        // Listen address: loopback only, or every interface (LAN access).
+        // Takes effect on the next start because the socket is already bound.
+        if (patch.host !== undefined) {
+          patch.host = patch.host === '0.0.0.0' ? '0.0.0.0' : '127.0.0.1';
+        }
         saveSettings(patch);
         // Apply the new logLevel to vmManager (affects VMs started later)
         if (patch.logLevel) {
@@ -1093,6 +1098,7 @@ async function handleApi(req, res, body) {
         return json(res, {
           ok: true,
           luaExe: settings.luaExe,
+          host: settings.host,
           logLevel: settings.logLevel,
           showConsole: settings.showConsole !== false,
           autoUpdate: settings.autoUpdate !== false,
@@ -2614,8 +2620,8 @@ async function main() {
         // Keep console lines short, especially with double-width CJK text:
         // the Windows console truncates lines wider than the window instead of
         // wrapping them, so split this into two short lines.
-        logger.log(`  本机IP:  http://${localIPs[0]}:${actualPort}`);
-        logger.log(`  仅本地监听; 改 host 为 0.0.0.0 即可局域网访问`);
+        logger.log(`  本机IP:  http://${localIPs[0]}:${actualPort}  [不可用]`);
+        logger.log(`  仅本机监听; 设置→局域网访问 开启后重启即可`);
       }
     } else {
       // Explicit IP: print it directly

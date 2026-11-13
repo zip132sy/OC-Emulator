@@ -294,6 +294,17 @@ const App = (() => {
             <span class="hint">${I18N.t('settings.skip-integrity-hint')}</span>
           </div>
           <div class="form-row">
+            <label for="settings-lan">${I18N.t('settings.lan-access')}</label>
+            <label class="checkbox-line">
+              <input type="checkbox" id="settings-lan" ${cur.host === '0.0.0.0' ? 'checked' : ''}>
+              <span id="settings-lan-state">${cur.host === '0.0.0.0' ? I18N.t('settings.lan-on') : I18N.t('settings.lan-off')}</span>
+            </label>
+          </div>
+          <div class="form-row">
+            <label></label>
+            <span class="hint">${I18N.t('settings.lan-hint')}</span>
+          </div>
+          <div class="form-row">
             <label>${I18N.t('settings.rollback')}</label>
             <div style="display:flex;align-items:center;gap:8px;flex:1;">
               <button class="btn" id="settings-rollback" type="button">${I18N.t('settings.rollback-btn')}</button>
@@ -400,6 +411,21 @@ const App = (() => {
                 setStatus(I18N.t('settings.saved'));
               } catch (e) {
                 setStatus(I18N.t('settings.save-failed'), 'err');
+              }
+            });
+          }
+          // LAN access: listen on 0.0.0.0 instead of 127.0.0.1 (after restart)
+          const lanBox = body.querySelector('#settings-lan');
+          const lanState = body.querySelector('#settings-lan-state');
+          if (lanBox) {
+            lanBox.addEventListener('change', async () => {
+              const on = lanBox.checked;
+              if (lanState) lanState.textContent = on ? I18N.t('settings.lan-on') : I18N.t('settings.lan-off');
+              try {
+                await api('settings', { method: 'PUT', body: { host: on ? '0.0.0.0' : '127.0.0.1' } });
+                setStatus(I18N.t('settings.saved'));
+              } catch (e) {
+                if (lanState) lanState.textContent = I18N.t('settings.save-failed');
               }
             });
           }
