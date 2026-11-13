@@ -568,7 +568,13 @@ async function streamDiskInstall(res, entry) {
 
   emit({ stage: 'prepare', percent: 0, line: String((entry && entry.file) || '') });
   try {
-    const result = await diskCatalog.install(entry || {}, {
+    // Only the file name comes from the client; size and sha256 are taken from
+    // index.json so a tampered request cannot skip the integrity check.
+    const catalog = await diskCatalog.list();
+    const wanted = String((entry && entry.file) || '');
+    const found = (catalog.disks || []).find((d) => d.file === wanted);
+    if (!found) throw new Error(`磁盘不在仓库清单中: ${wanted}`);
+    const result = await diskCatalog.install(found, {
       onProgress: (received, total) => emit({
         stage: 'download',
         percent: total > 0 ? Math.round((received / total) * 100) : 0,
