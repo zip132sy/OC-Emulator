@@ -1165,6 +1165,9 @@ async function handleApi(req, res, body) {
         if (method === 'GET') return json(res, vmManager.list());
         if (method === 'POST') {
           const spec = JSON.parse(body || '{}');
+          // A taken name is not an error: the disks below are written under the VM
+          // directory, so the final name has to be known before any file is created.
+          spec.name = vmManager.uniqueName(spec.name);
           // disk1/disk2 set to "new": create a fresh disk image
           if (spec.hardware && spec.hardware.disk1 === 'new') {
             const diskName = 'disk1.ocd';

@@ -1266,13 +1266,15 @@ const App = (() => {
             return;
           }
           try {
-            await api('mods', { method: 'POST', body: { name, type, description } });
+            // The server appends -1, -2, ... when the name is already taken
+            const created = await api('mods', { method: 'POST', body: { name, type, description } });
+            const finalName = (created && created.name) || name;
             Modal.close();
             await refreshMods();
             setSidebarMode('mod');
-            openModTab(name);
+            openModTab(finalName);
             if (autostart) {
-              await api(`mods/${encodeURIComponent(name)}/start`, { method: 'POST' });
+              await api(`mods/${encodeURIComponent(finalName)}/start`, { method: 'POST' });
               setTimeout(() => refreshMods(true), 500);
             }
           } catch (e) {

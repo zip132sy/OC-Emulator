@@ -453,13 +453,7 @@ const Wizard = (() => {
           alert(T('wizard.name-invalid', '名称只能包含字母、数字、下划线、连字符,最多 32 字符'));
           return;
         }
-        try {
-          const exists = await App.api(`vms/${encodeURIComponent(spec.name)}`);
-          if (exists && !exists.error) {
-            alert(I18N.t('wizard.name-exists', { name: spec.name }));
-            return;
-          }
-        } catch { /* ignore - a 404 here simply means the name is free */ }
+        // A taken name is not rejected: the server appends -1, -2, ... when creating
       }
       if (currentStep === 1) {
         // Validate custom memory capacity
@@ -512,6 +506,9 @@ const Wizard = (() => {
         alert(T('wizard.create-failed', '创建失败: ') + result.error);
         return;
       }
+      // The server appends -1, -2, ... when the name is already taken; every later
+      // step (EEPROM upload, confirmation text) has to use the real name.
+      if (result && result.name) spec.name = result.name;
     } catch (e) {
       alert(T('wizard.create-failed', '创建失败: ') + e.message);
       return;
