@@ -44,6 +44,28 @@ const WEB_DIR = path.join(PROJECT_DIR, 'web');
 const CACHE_DIR = path.join(PROJECT_DIR, 'cache');
 const EMU_SCRIPT = path.join(PROJECT_DIR, 'oc-emulator.lua');
 
+// App version, read once from package.json (npm keeps the semver there; the UI
+// shows the channel-tagged form below)
+const APP_VERSION = (() => {
+  try {
+    return require(path.join(PROJECT_DIR, 'package.json')).version || '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+})();
+
+// Version display: Release = v2.0(R), Beta = v2.0.2(B).
+// Release hides a zero patch component, Beta always shows it.
+function formatVersion(version, channel) {
+  const m = /^(\d+)\.(\d+)(?:\.(\d+))?/.exec(String(version || ''));
+  if (!m) return String(version || '');
+  const major = m[1];
+  const minor = m[2];
+  const patch = m[3] || '0';
+  if (channel === 'beta') return `v${major}.${minor}.${patch}(B)`;
+  return patch === '0' ? `v${major}.${minor}(R)` : `v${major}.${minor}.${patch}(R)`;
+}
+
 // Ensure directories exist
 for (const d of [VMS_DIR, MODS_DIR, DISKS_DIR, CACHE_DIR]) {
   if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
@@ -150,6 +172,16 @@ async function gitLogLines(args) {
 // Which branch the selected update channel follows: Release = main, Beta = beta
 function channelBranchName() {
   return updateSource.branchForChannel(settings.updateChannel);
+}
+
+// Channel of the running build: the checked-out branch decides, the setting is the fallback
+async function versionChannel() {
+  if (fs.existsSync(path.join(PROJECT_DIR, '.git'))) {
+    const branch = await currentBranchName();
+    if (branch === 'beta') return 'beta';
+    if (branch === 'main' || branch === 'master') return 'release';
+  }
+  return settings.updateChannel === 'beta' ? 'beta' : 'release';
 }
 
 // Upstream ref of the given branch (e.g. origin/main); falls back to common remote branches
@@ -842,7 +874,13 @@ async function handleApi(req, res, body) {
   try {
     // /api/version
     if (parts[1] === 'version') {
-      return json(res, { version: '2.0.0', name: 'OC Emulator' });
+      const channel = await versionChannel();
+      return json(res, {
+        version: APP_VERSION,
+        channel,
+        display: formatVersion(APP_VERSION, channel),
+        name: 'OC Emulator',
+      });
     }
 
     // /api/fs/list: list host directories (for picking the Lua interpreter in settings)

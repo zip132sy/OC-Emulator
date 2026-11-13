@@ -103,6 +103,13 @@ html, body {
 }
 .brand-sub.ok { color: var(--ok); border-color: var(--ok); }
 .brand-sub.err { color: var(--err); border-color: var(--err); }
+/* Version tag next to the brand name: v2.0(R) / v2.0.2(B) */
+.brand-version {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
 
 .menu {
   display: flex; gap: 4px;
@@ -1962,6 +1969,8 @@ html, body {
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  /* The header is crowded on phones; the version stays available in About */
+  .brand-version { display: none; }
   /* 连接状态紧跟在 Lua 徽标后面 (DOM 里在菜单之后, 用 order 调整位置) */
   .conn-status {
     display: inline-flex;

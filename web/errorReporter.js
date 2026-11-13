@@ -183,7 +183,12 @@
     github: 'https://github.com/zip132sy/OC-Emulator',
     gitee: 'https://gitee.com/zip132sy/OC-Emulator',
   };
-  const VERSION = '2.0.0';
+  // Same display the header/About use: v2.0(R) / v2.0.2(B); refreshed from the server
+  let VERSION = 'v2.0(R)';
+  fetch('/api/version', { cache: 'no-store' })
+    .then((r) => r.json())
+    .then((v) => { if (v && v.display) VERSION = v.display; })
+    .catch(() => { /* keep the fallback when the server is unreachable */ });
 
   // ---------- Text ----------
   function isEn() {

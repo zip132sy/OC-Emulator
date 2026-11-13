@@ -109,6 +109,16 @@ const App = (() => {
     return final;
   }
 
+  // ---------- App version (header badge) ----------
+  // The server formats it per channel: v2.0(R) for Release, v2.0.2(B) for Beta
+  function loadAppVersion() {
+    const el = document.getElementById('app-version');
+    if (!el) return;
+    api('version').then((v) => {
+      if (v && (v.display || v.version)) el.textContent = v.display || ('v' + v.version);
+    }).catch(() => { /* unreachable server: leave the badge empty */ });
+  }
+
   // ---------- Lua detection ----------
   async function checkLua() {
     const badge = $('#lua-badge');
@@ -2087,7 +2097,7 @@ const App = (() => {
         <div class="about-box">
           <div class="about-name">OC Emulator</div>
           <div class="about-desc">${t('about.desc')}</div>
-          <div class="about-line"><span>${t('about.version')}</span><b id="about-version">2.0.0</b></div>
+          <div class="about-line"><span>${t('about.version')}</span><b id="about-version">v2.0(R)</b></div>
           <div class="about-line"><span>${t('about.license')}</span><b>AGPL-3.0-or-later</b></div>
           <div class="about-line"><span>${t('about.links')}</span><b>
             <a href="https://github.com/zip132sy/OC-Emulator" target="_blank" rel="noopener">GitHub</a>
@@ -2103,7 +2113,8 @@ const App = (() => {
     // Replace the fallback version with the one reported by the server
     api('version').then(v => {
       const el = document.getElementById('about-version');
-      if (el && v && v.version) el.textContent = v.version;
+      if (!el || !v) return;
+      el.textContent = v.display || (v.version ? 'v' + v.version : el.textContent);
     }).catch(() => { /* keep the fallback */ });
   }
 
@@ -2119,6 +2130,7 @@ const App = (() => {
     }
     bindMenu();
     checkLua();
+    loadAppVersion();
     loadLogLevel();
     refreshVMs();
     refreshMods();
