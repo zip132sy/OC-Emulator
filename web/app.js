@@ -247,7 +247,7 @@ const App = (() => {
   }
 
   // ---------- App version (header badge) ----------
-  // The server formats it per channel: v2.1(R) for Release, v2.1.2(B) for Beta
+  // The server formats it per channel: v2.2.1(R) for Release, v2.2.2(B) for Beta
   let versionText = '';
 
   function welcomeSubtitle() {
