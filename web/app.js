@@ -57,6 +57,128 @@ const App = (() => {
     return btoa(bin);
   }
 
+  // ---------- Upload progress toast ----------
+  // A small floating card shown while a file is uploaded. It can be collapsed by
+  // tapping the header and stays visible (with an OK button) after the transfer.
+  const UploadToast = (() => {
+    let root = null;
+    let titleEl = null;
+    let pctEl = null;
+    let barEl = null;
+    let okBtn = null;
+
+    function build() {
+      if (root) return;
+      root = document.createElement('div');
+      root.className = 'upload-toast';
+      root.hidden = true;
+      root.innerHTML = `
+        <div class="upload-toast-head" data-role="head">
+          <span class="upload-toast-title" data-role="title"></span>
+          <span class="upload-toast-pct" data-role="pct">0%</span>
+          <button class="upload-toast-chevron" data-role="toggle" type="button">▾</button>
+        </div>
+        <div class="upload-toast-body" data-role="body">
+          <div class="upload-toast-bar"><i data-role="bar"></i></div>
+          <div class="upload-toast-actions">
+            <button class="btn btn-sm" data-role="ok" type="button">${I18N.t('upload.ok')}</button>
+          </div>
+        </div>`;
+      document.body.appendChild(root);
+      titleEl = root.querySelector('[data-role="title"]');
+      pctEl = root.querySelector('[data-role="pct"]');
+      barEl = root.querySelector('[data-role="bar"]');
+      okBtn = root.querySelector('[data-role="ok"]');
+      const toggle = (e) => {
+        if (e) e.stopPropagation();
+        root.classList.toggle('collapsed');
+      };
+      root.querySelector('[data-role="toggle"]').addEventListener('click', toggle);
+      root.querySelector('[data-role="head"]').addEventListener('click', () => toggle());
+      okBtn.addEventListener('click', (e) => { e.stopPropagation(); hide(); });
+    }
+
+    function hide() {
+      if (!root) return;
+      root.hidden = true;
+      root.classList.remove('collapsed');
+    }
+
+    function begin(title) {
+      build();
+      root.hidden = false;
+      root.classList.remove('collapsed', 'done', 'failed');
+      titleEl.textContent = title || '';
+      pctEl.textContent = '0%';
+      barEl.style.width = '0%';
+      okBtn.style.display = 'none';
+    }
+
+    function setProgress(ratio) {
+      if (!root || root.hidden) return;
+      const p = Math.max(0, Math.min(1, Number(ratio) || 0));
+      pctEl.textContent = Math.round(p * 100) + '%';
+      barEl.style.width = (p * 100) + '%';
+    }
+
+    function finish(text, ok) {
+      if (!root || root.hidden) return;
+      titleEl.textContent = text || '';
+      root.classList.toggle('done', !!ok);
+      root.classList.toggle('failed', !ok);
+      pctEl.textContent = ok ? '100%' : '';
+      if (ok) barEl.style.width = '100%';
+      okBtn.style.display = '';
+    }
+
+    return {
+      begin,
+      progress: setProgress,
+      done: (text) => finish(text || I18N.t('upload.done'), true),
+      fail: (text) => finish(text || I18N.t('upload.failed'), false),
+      hide,
+    };
+  })();
+
+  // POST JSON through XHR so the browser reports real upload progress
+  function upload(path, body, onProgress) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api/' + path, true);
+      xhr.setRequestHeader('Content-Type', 'application/json');
+      if (xhr.upload && onProgress) {
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable && e.total > 0) onProgress(e.loaded / e.total);
+        };
+      }
+      xhr.onload = () => {
+        let data = null;
+        try { data = xhr.responseText ? JSON.parse(xhr.responseText) : null; } catch (e) { data = xhr.responseText; }
+        if (xhr.status >= 200 && xhr.status < 300) { resolve(data); return; }
+        // HTTP errors resolve like api(): callers inspect `result.error`
+        const message = (data && data.error) || (typeof data === 'string' && data) || ('HTTP ' + xhr.status);
+        resolve({ error: message });
+      };
+      xhr.onerror = () => reject(new Error('network error'));
+      xhr.onabort = () => reject(new Error('aborted'));
+      xhr.send(JSON.stringify(body));
+    });
+  }
+
+  // Upload a request body with the floating progress card
+  async function uploadFile(path, body, title) {
+    UploadToast.begin(title);
+    try {
+      const result = await upload(path, body, (r) => UploadToast.progress(r));
+      if (result && result.error) UploadToast.fail(result.error);
+      else UploadToast.done();
+      return result;
+    } catch (e) {
+      UploadToast.fail(I18N.t('upload.failed') + ' ' + e.message);
+      throw e;
+    }
+  }
+
   // ---------- HTTP requests ----------
   async function api(path, opts = {}) {
     const res = await fetch('/api/' + path, {
@@ -1310,7 +1432,7 @@ const App = (() => {
               for (let i = 0; i < bytes.length; i += 0x8000) {
                 bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
               }
-              result = await api('mods/import', { method: 'POST', body: { name, data: btoa(bin) } });
+              result = await uploadFile('mods/import', { name, data: btoa(bin) }, I18N.t('upload.title.mod'));
             } else {
               const url = urlInput.value.trim();
               if (!url) {
@@ -2425,7 +2547,7 @@ const App = (() => {
   }
 
   return {
-    state, $, $$, api, fileToBase64,
+    state, $, $$, api, fileToBase64, uploadFile,
     init, refreshVMs, refreshMods, openVMTab, openModTab, openTab, closeTab, activateTab,
     setSidebarMode,
     wsSend, wsSubscribe, setStatus, setStatusRight,

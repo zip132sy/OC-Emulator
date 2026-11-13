@@ -1347,10 +1347,9 @@ const Console = (() => {
     async function uploadEeprom(file, format) {
       try {
         const b64 = await App.fileToBase64(file);
-        const result = await App.api('eeprom/import', {
-          method: 'POST',
-          body: { vmName, content: b64, format, filename: file.name.replace(/\.(lua|oce)$/i, '') },
-        });
+        const result = await App.uploadFile('eeprom/import',
+          { vmName, content: b64, format, filename: file.name.replace(/\.(lua|oce)$/i, '') },
+          t('upload.title.eeprom'));
         if (result && result.ok) {
           // Refresh the config and reopen the editor
           const newCfg = await App.api(`vms/${encodeURIComponent(vmName)}`);
@@ -1537,10 +1536,9 @@ const Console = (() => {
       if (!file) return;
       try {
         const b64 = await App.fileToBase64(file);
-        const result = await App.api('disks/import', {
-          method: 'POST',
-          body: { vmName, content: b64, filename: file.name },
-        });
+        const result = await App.uploadFile('disks/import',
+          { vmName, content: b64, filename: file.name },
+          t('upload.title.disk'));
         if (result && result.ok) {
           // Assign as disk1
           await App.api(`vms/${encodeURIComponent(vmName)}`, {
@@ -1564,10 +1562,9 @@ const Console = (() => {
       if (!file) return;
       try {
         const b64 = await App.fileToBase64(file);
-        const result = await App.api('disks/import', {
-          method: 'POST',
-          body: { vmName, content: b64, filename: file.name },
-        });
+        const result = await App.uploadFile('disks/import',
+          { vmName, content: b64, filename: file.name },
+          t('upload.title.disk'));
         if (result && result.ok) {
           await App.api(`vms/${encodeURIComponent(vmName)}`, {
             method: 'PUT',

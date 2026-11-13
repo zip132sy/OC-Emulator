@@ -1927,6 +1927,79 @@ body.console-fullscreen { overflow: hidden; }
   opacity: 0;
 }
 
+/* ---------- 上传进度悬浮窗 ---------- */
+.upload-toast {
+  position: fixed;
+  right: 16px;
+  bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  width: 280px;
+  max-width: calc(100vw - 24px);
+  z-index: 1200;
+  background: var(--bg-top);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.45);
+  color: var(--fg-primary);
+  font-size: 12px;
+}
+.upload-toast-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+  user-select: none;
+}
+.upload-toast-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.upload-toast-pct { color: var(--fg-secondary); font-variant-numeric: tabular-nums; }
+.upload-toast-chevron {
+  background: none;
+  border: 0;
+  padding: 0 2px;
+  color: var(--fg-muted);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+.upload-toast.collapsed .upload-toast-body { display: none; }
+.upload-toast.collapsed .upload-toast-chevron { transform: rotate(180deg); }
+.upload-toast-body { padding: 0 10px 10px; }
+.upload-toast-bar {
+  height: 4px;
+  background: var(--bg-input);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.upload-toast-bar i {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  transition: width 0.15s linear;
+}
+.upload-toast.done .upload-toast-bar i { background: var(--ok, #5f9e5f); }
+.upload-toast.failed .upload-toast-bar i { background: var(--err); }
+.upload-toast-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+@media (max-width: 700px) {
+  .upload-toast {
+    left: 12px;
+    right: 12px;
+    width: auto;
+    max-width: none;
+    bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  }
+}
+
 /* 滚动条 */
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: var(--bg-app); }

@@ -517,9 +517,15 @@ const Wizard = (() => {
       }
     }
 
-    // 1. Create the VM via POST /api/vms (disks and floppy are created server-side)
+    // 1. Create the VM via POST /api/vms (disks and floppy are created server-side).
+    //    When the wizard carries imported files the body can be large, so show the
+    //    upload progress card and stream it through XHR.
+    const hasImportFiles = !!((spec.hardware.disk1ImportFiles && spec.hardware.disk1ImportFiles.length)
+      || (spec.hardware.disk2ImportFiles && spec.hardware.disk2ImportFiles.length));
     try {
-      const result = await App.api('vms', { method: 'POST', body: spec });
+      const result = hasImportFiles
+        ? await App.uploadFile('vms', spec, T('upload.title.files', '上传文件'))
+        : await App.api('vms', { method: 'POST', body: spec });
       if (result && result.error) {
         alert(T('wizard.create-failed', '创建失败: ') + result.error);
         return;
@@ -536,10 +542,9 @@ const Wizard = (() => {
     if (eepromImportFile) {
       try {
         const b64 = await App.fileToBase64(eepromImportFile);
-        await App.api('eeprom/import', {
-          method: 'POST',
-          body: { vmName: spec.name, content: b64, format: eepromFormat },
-        });
+        await App.uploadFile('eeprom/import',
+          { vmName: spec.name, content: b64, format: eepromFormat },
+          T('upload.title.eeprom', '上传 EEPROM'));
       } catch (e) {
         alert(T('wizard.eeprom-import-failed', 'EEPROM 导入失败 (但 VM 已创建): ') + e.message);
       }
