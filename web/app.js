@@ -42,6 +42,21 @@ const App = (() => {
     el.className = 'conn-status ' + kind;
   }
 
+  // ---------- File helpers ----------
+  // Base64 of a File/Blob/ArrayBuffer. The binary string is built in chunks:
+  // `String.fromCharCode(...bytes)` exceeds the argument limit on large files,
+  // which iOS Safari reports as "Maximum call stack size exceeded".
+  async function fileToBase64(file) {
+    const buf = (file && typeof file.arrayBuffer === 'function') ? await file.arrayBuffer() : file;
+    const bytes = new Uint8Array(buf);
+    const CHUNK = 0x8000;
+    let bin = '';
+    for (let i = 0; i < bytes.length; i += CHUNK) {
+      bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+    }
+    return btoa(bin);
+  }
+
   // ---------- HTTP requests ----------
   async function api(path, opts = {}) {
     const res = await fetch('/api/' + path, {
@@ -2410,7 +2425,7 @@ const App = (() => {
   }
 
   return {
-    state, $, $$, api,
+    state, $, $$, api, fileToBase64,
     init, refreshVMs, refreshMods, openVMTab, openModTab, openTab, closeTab, activateTab,
     setSidebarMode,
     wsSend, wsSubscribe, setStatus, setStatusRight,

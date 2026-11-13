@@ -1215,8 +1215,8 @@ const Console = (() => {
               <button type="button" class="btn btn-sm" id="hw-eeprom-add-oce" ${disabled}>+ ${t('hw.option-custom-oce')}</button>
               <button type="button" class="btn btn-sm" id="hw-eeprom-add-lua" ${disabled}>+ ${t('hw.option-custom-lua')}</button>
             </div>
-            <input type="file" id="hw-eeprom-file-oce" accept=".oce" style="display:none;">
-            <input type="file" id="hw-eeprom-file-lua" accept=".lua" style="display:none;">
+            <input type="file" id="hw-eeprom-file-oce" accept=".oce" class="file-input-hidden">
+            <input type="file" id="hw-eeprom-file-lua" accept=".lua" class="file-input-hidden">
           </div>
           <label>${t('hw.disk1')}</label>
           <div class="hw-value">
@@ -1226,7 +1226,7 @@ const Console = (() => {
               <button type="button" class="btn btn-sm" id="hw-disk1-openos" ${disabled}>+ ${t('hw.option-openos')}</button>
               <button type="button" class="btn btn-sm" id="hw-disk1-import" ${disabled}>+ ${t('hw.option-import-disk')}</button>
             </div>
-            <input type="file" id="hw-disk1-import-file" accept=".ocd" style="display:none;">
+            <input type="file" id="hw-disk1-import-file" accept=".ocd" class="file-input-hidden">
           </div>
           <label>${t('hw.disk2')}</label>
           <div class="hw-value">
@@ -1236,7 +1236,7 @@ const Console = (() => {
               <button type="button" class="btn btn-sm" id="hw-disk2-openos" ${disabled}>+ ${t('hw.option-openos')}</button>
               <button type="button" class="btn btn-sm" id="hw-disk2-import" ${disabled}>+ ${t('hw.option-import-disk')}</button>
             </div>
-            <input type="file" id="hw-disk2-import-file" accept=".ocd" style="display:none;">
+            <input type="file" id="hw-disk2-import-file" accept=".ocd" class="file-input-hidden">
           </div>
           <label>${t('hw.floppy')}</label>
           <div class="hw-value">
@@ -1346,8 +1346,7 @@ const Console = (() => {
 
     async function uploadEeprom(file, format) {
       try {
-        const buf = await file.arrayBuffer();
-        const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+        const b64 = await App.fileToBase64(file);
         const result = await App.api('eeprom/import', {
           method: 'POST',
           body: { vmName, content: b64, format, filename: file.name.replace(/\.(lua|oce)$/i, '') },
@@ -1537,8 +1536,7 @@ const Console = (() => {
       const file = disk1ImportFile.files[0];
       if (!file) return;
       try {
-        const buf = await file.arrayBuffer();
-        const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+        const b64 = await App.fileToBase64(file);
         const result = await App.api('disks/import', {
           method: 'POST',
           body: { vmName, content: b64, filename: file.name },
@@ -1565,8 +1563,7 @@ const Console = (() => {
       const file = disk2ImportFile.files[0];
       if (!file) return;
       try {
-        const buf = await file.arrayBuffer();
-        const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+        const b64 = await App.fileToBase64(file);
         const result = await App.api('disks/import', {
           method: 'POST',
           body: { vmName, content: b64, filename: file.name },

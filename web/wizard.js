@@ -535,8 +535,7 @@ const Wizard = (() => {
     // 2. Upload the EEPROM file only after the VM exists
     if (eepromImportFile) {
       try {
-        const buf = await eepromImportFile.arrayBuffer();
-        const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+        const b64 = await App.fileToBase64(eepromImportFile);
         await App.api('eeprom/import', {
           method: 'POST',
           body: { vmName: spec.name, content: b64, format: eepromFormat },
@@ -652,7 +651,7 @@ const Wizard = (() => {
         <div class="section-title" style="margin-top:15px;">${T('wizard.import-folder', '从文件夹导入 (可选)')}</div>
         <div class="form-row">
           <label>${T('wizard.import-folder-label', '导入文件夹')}</label>
-          <input type="file" id="dc-folder" webkitdirectory multiple style="display:none;">
+          <input type="file" id="dc-folder" webkitdirectory multiple class="file-input-hidden">
           <button class="btn" id="dc-folder-btn" type="button">${T('wizard.choose-folder', '选择文件夹...')}</button>
           <span class="hint" id="dc-folder-hint">${T('wizard.import-folder-hint', '将文件夹中的所有文件打包进磁盘')}</span>
         </div>
@@ -756,8 +755,7 @@ const Wizard = (() => {
                   if (!innerPath || innerPath === '') continue;
                   innerPath = '/' + innerPath;
 
-                  const buf = await f.arrayBuffer();
-                  const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+                  const b64 = await App.fileToBase64(f);
                   fileEntries.push({ path: innerPath, content: b64 });
                 }
 
