@@ -274,7 +274,7 @@ const Wizard = (() => {
         <div class="form-row"><label>${T('wizard.disk2', '磁盘 2 (从盘)')}</label><span>${fmtDisk(hw.disk2)}${hw.disk2 === 'new' ? ` (T${hw.disk2Tier}, ${formatSize(hw.disk2Size || OPTIONS.diskSize[hw.disk2Tier])}${hw.disk2Label ? ', ' + escapeHTML(hw.disk2Label) : ''})` : ''}</span></div>
         <div class="form-row"><label>${T('wizard.floppy', '软盘')}</label><span>${fmtFloppy(hw.floppy)}</span></div>
         <div class="section-title">${T('wizard.firmware', '固件')}</div>
-        <div class="form-row"><label>${T('hw.eeprom', 'EEPROM')}</label><span>${hw.eeprom === 'built-in' ? T('hw.option-builtin-bios', '内置 BIOS') : T('wizard.import-prefix', '导入: ') + escapeHTML(hw.eepromImportPath || T('wizard.not-selected', '(未选择)'))}</span></div>
+        <div class="form-row"><label>${T('hw.eeprom', 'EEPROM')}</label><span>${hw.eeprom === 'built-in' ? T('hw.option-builtin-bios', '内置 BIOS') : hw.eepromAuto ? 'EFI: ' + escapeHTML(hw.eeprom) : T('wizard.import-prefix', '导入: ') + escapeHTML(hw.eepromImportPath || T('wizard.not-selected', '(未选择)'))}</span></div>
         <div class="section-title">${T('wizard.cpu-mem', '处理器与内存')}</div>
         <div class="form-row"><label>${T('hw.apu-tier', 'APU 等级')}</label><span>${fmtTier(hw.apu.tier)}</span></div>
         <div class="form-row"><label>${T('hw.mem1', '内存 1')}</label><span>${fmtMem(0)}</span></div>
@@ -331,6 +331,21 @@ const Wizard = (() => {
     bindStepEvents();
   }
 
+  // A downloaded system disk may ship its own EFI (EEPROM boot program).
+  // Selecting that template adopts the EFI unless the user imported one.
+  function syncTemplateEeprom(value) {
+    const tpl = value && value.startsWith('disk_template:')
+      ? diskTemplates.find((t) => t.path === value.substring('disk_template:'.length))
+      : null;
+    if (tpl) {
+      spec.hardware.eeprom = tpl.eeprom || 'built-in';
+      spec.hardware.eepromAuto = !!tpl.eeprom;
+    } else if (spec.hardware.eepromAuto) {
+      spec.hardware.eeprom = 'built-in';
+      spec.hardware.eepromAuto = false;
+    }
+  }
+
   function bindStepEvents() {
     const body = document.getElementById('modal-body');
     const footer = document.getElementById('modal-footer');
@@ -347,6 +362,7 @@ const Wizard = (() => {
     if (disk1Sel) {
       disk1Sel.addEventListener('change', () => {
         hw.disk1 = disk1Sel.value;
+        syncTemplateEeprom(hw.disk1);
         if (hw.disk1 === 'new') {
           openDiskConfig('disk1');
         } else {
@@ -358,6 +374,7 @@ const Wizard = (() => {
     if (disk2Sel) {
       disk2Sel.addEventListener('change', () => {
         hw.disk2 = disk2Sel.value;
+        syncTemplateEeprom(hw.disk2);
         if (hw.disk2 === 'new') {
           openDiskConfig('disk2');
         } else {
@@ -371,6 +388,7 @@ const Wizard = (() => {
     if (eepromSel) {
       eepromSel.addEventListener('change', () => {
         hw.eeprom = eepromSel.value;
+        hw.eepromAuto = false;
         const importRow = body.querySelector('#wz-eeprom-import-row');
         importRow.style.display = (hw.eeprom === 'import' || hw.eeprom === 'import-lua') ? '' : 'none';
         const fileInput = body.querySelector('#wz-eeprom-file');
@@ -547,7 +565,11 @@ const Wizard = (() => {
         for (const tpl of templates) {
           // Keep 'openos' as the value for backward compatibility
           const val = tpl.path === 'openos.ocd' ? 'openos' : 'disk_template:' + tpl.path;
-          diskOpts.push({ value: val, label: tpl.name + T('wizard.template-suffix', ' (预装系统)') });
+          diskOpts.push({
+            value: val,
+            label: tpl.name + T('wizard.template-suffix', ' (预装系统)'),
+            eeprom: tpl.eeprom || null,
+          });
         }
         diskOpts.push({ value: '', labelKey: 'wizard.no-mount' });
         OPTIONS.disk = diskOpts;

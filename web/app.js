@@ -2151,6 +2151,7 @@ const App = (() => {
           <button type="button" class="btn btn-small" data-install="${escapeAttr(d.file)}"${d.installed ? ' disabled' : ''}>
             ${d.installed ? I18N.t('openos.cached') : I18N.t('openos.download')}
           </button>
+          ${d.efi ? `<span class="hint">EFI: ${escapeHtml(d.efi.file)}${d.efi.installed ? ' \u2713' : ''}</span>` : ''}
           <span class="hint" data-status>${d.installed ? I18N.t('openos.cached-hint') : ''}</span>
         </div>
       </div>`).join('');
@@ -2235,9 +2236,10 @@ const App = (() => {
         if (evt.percent != null) setRowStatus(I18N.t('openos.progress', { percent: evt.percent }));
       });
       if (!result || !result.ok) throw new Error((result && result.error) || I18N.t('openos.failed'));
-      setRowStatus(I18N.t('openos.done', { path: result.path }));
+      const doneText = I18N.t('openos.done', { path: result.path }) + (result.efi ? ' + ' + result.efi.path : '');
+      setRowStatus(doneText);
       btn.textContent = I18N.t('openos.cached');
-      setStatus(I18N.t('openos.done', { path: result.path }));
+      setStatus(doneText);
     } catch (e) {
       btn.disabled = false;
       setRowStatus(I18N.t('openos.failed') + ' ' + e.message);

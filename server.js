@@ -44,6 +44,26 @@ const MODS_DIR = path.join(PROJECT_DIR, 'Mods');
 const DISKS_DIR = path.join(PROJECT_DIR, 'disks');
 const WEB_DIR = path.join(PROJECT_DIR, 'web');
 const CACHE_DIR = path.join(PROJECT_DIR, 'cache');
+
+// Disks downloaded from the image repository may ship an EEPROM boot program
+// ("EFI", e.g. Fuchas / MineOS). It is stored next to the disk and named after it.
+function templateEfiName(diskFile) {
+  const base = String(diskFile || '').replace(/\.ocd$/i, '');
+  if (!/^[A-Za-z0-9._-]+$/.test(base)) return null;
+  return fs.existsSync(path.join(DISKS_DIR, 'eeprom', base + '.efi')) ? base + '.efi' : null;
+}
+
+// Copy the EFI into the VM directory and use it as the EEPROM unless the user
+// picked their own EEPROM image.
+function applyTemplateEfi(vmName, tplFile, hardware) {
+  const efi = templateEfiName(tplFile);
+  if (!efi || !hardware) return;
+  const vmDir = path.join(VMS_DIR, vmName);
+  fs.mkdirSync(vmDir, { recursive: true });
+  fs.copyFileSync(path.join(DISKS_DIR, 'eeprom', efi), path.join(vmDir, efi));
+  if (!hardware.eeprom || hardware.eeprom === 'built-in') hardware.eeprom = efi;
+}
+
 const EMU_SCRIPT = path.join(PROJECT_DIR, 'oc-emulator.lua');
 
 // App version, read once from package.json (npm keeps the semver there; the UI
@@ -1458,6 +1478,7 @@ async function handleApi(req, res, body) {
             const diskPath = path.join(VMS_DIR, spec.name, 'disk1.ocd');
             fs.mkdirSync(path.join(VMS_DIR, spec.name), { recursive: true });
             if (fs.existsSync(srcPath)) fs.copyFileSync(srcPath, diskPath);
+            applyTemplateEfi(spec.name, tplFile, spec.hardware);
             spec.hardware.disk1 = 'disk1.ocd';
           }
           if (spec.hardware && (spec.hardware.disk2 === 'openos' || (spec.hardware.disk2 || '').startsWith('disk_template:'))) {
@@ -1467,6 +1488,7 @@ async function handleApi(req, res, body) {
             const srcPath = path.join(DISKS_DIR, tplFile);
             const diskPath = path.join(VMS_DIR, spec.name, 'disk2.ocd');
             if (fs.existsSync(srcPath)) fs.copyFileSync(srcPath, diskPath);
+            applyTemplateEfi(spec.name, tplFile, spec.hardware);
             spec.hardware.disk2 = 'disk2.ocd';
           }
           // Floppy selected: write the template contents or create an empty .ocf floppy
@@ -1531,6 +1553,14 @@ async function handleApi(req, res, body) {
             const diskPath = path.join(VMS_DIR, vmName, 'disk1.ocd');
             if (fs.existsSync(srcPath)) {
               fs.copyFileSync(srcPath, diskPath);
+              // Keep a custom EEPROM; adopt the disk's EFI when still on the built-in one
+              const merged = {
+                eeprom: patch.hardware.eeprom !== undefined
+                  ? patch.hardware.eeprom
+                  : (vmManager.getConfig(vmName) || { hardware: {} }).hardware.eeprom,
+              };
+              applyTemplateEfi(vmName, tplFile, merged);
+              if (merged.eeprom) patch.hardware.eeprom = merged.eeprom;
               patch.hardware.disk1 = 'disk1.ocd';
             }
           }
@@ -1543,6 +1573,13 @@ async function handleApi(req, res, body) {
             const diskPath = path.join(VMS_DIR, vmName, 'disk2.ocd');
             if (fs.existsSync(srcPath)) {
               fs.copyFileSync(srcPath, diskPath);
+              const merged = {
+                eeprom: patch.hardware.eeprom !== undefined
+                  ? patch.hardware.eeprom
+                  : (vmManager.getConfig(vmName) || { hardware: {} }).hardware.eeprom,
+              };
+              applyTemplateEfi(vmName, tplFile, merged);
+              if (merged.eeprom) patch.hardware.eeprom = merged.eeprom;
               patch.hardware.disk2 = 'disk2.ocd';
             }
           }
@@ -1694,6 +1731,8 @@ async function handleApi(req, res, body) {
               name: label || fname.replace(/\.ocd$/i, ''),
               path: fname,
               size: stat.size,
+              // Paired EEPROM boot program downloaded with the disk (if any)
+              eeprom: templateEfiName(fname),
             });
           }
         }
