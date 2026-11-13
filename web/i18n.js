@@ -23,6 +23,18 @@ const I18N = (() => {
       'menu.stop-server': '■ 停止服务',
       'menu.check-update': '⟳ 检查更新',
       'menu.toggle': '菜单',
+      'menu.openos': '⬇ OpenOS 版本',
+      'openos.title': '下载 OpenOS 版本',
+      'openos.hint': '这些版本不会随项目发布；下载后会在 disks/ 目录生成磁盘镜像，新建虚拟机时可直接选择。',
+      'openos.download': '下载并生成磁盘',
+      'openos.cached': '已生成',
+      'openos.cached-hint': '磁盘已在 disks/ 目录中',
+      'openos.starting': '准备下载…',
+      'openos.progress': '下载中 {percent}%',
+      'openos.done': '已生成磁盘: {path}',
+      'openos.failed': '下载失败:',
+      'openos.none': '当前没有可下载的版本。',
+      'openos.list-failed': '无法获取版本列表: ',
 
       // Usage guide (shown once, after the language is picked)
       'guide.title': '使用引导',
@@ -96,7 +108,7 @@ const I18N = (() => {
 
       // Welcome page
       'welcome.title': 'OC Emulator',
-      'welcome.subtitle': 'OpenComputers 模拟器 · Web 控制面板 v2.0',
+      'welcome.subtitle': 'OpenComputers 模拟器 · Web 控制面板 v2.1',
       'welcome.hint': '从左侧选择一个虚拟机,或点击「新建虚拟机」开始。',
       'tab.close': '关闭',
 
@@ -960,6 +972,18 @@ const I18N = (() => {
       'menu.stop-server': '■ Stop service',
       'menu.check-update': '⟳ Check update',
       'menu.toggle': 'Menu',
+      'menu.openos': '⬇ OpenOS versions',
+      'openos.title': 'Download OpenOS versions',
+      'openos.hint': 'These releases are not shipped with the project. Downloading builds a disk image in disks/, which you can pick when creating a VM.',
+      'openos.download': 'Download and build',
+      'openos.cached': 'Built',
+      'openos.cached-hint': 'Image already in disks/',
+      'openos.starting': 'Preparing…',
+      'openos.progress': 'Downloading {percent}%',
+      'openos.done': 'Disk created: {path}',
+      'openos.failed': 'Download failed:',
+      'openos.none': 'No versions available right now.',
+      'openos.list-failed': 'Cannot load the version list: ',
 
       // Usage guide (shown once, after the language is picked)
       'guide.title': 'Quick start',
@@ -1033,7 +1057,7 @@ const I18N = (() => {
 
       // Welcome
       'welcome.title': 'OC Emulator',
-      'welcome.subtitle': 'OpenComputers Emulator · Web Control Panel v2.0',
+      'welcome.subtitle': 'OpenComputers Emulator · Web Control Panel v2.1',
       'welcome.hint': 'Select a VM from the left, or click "New VM" to begin.',
       'tab.close': 'Close',
 

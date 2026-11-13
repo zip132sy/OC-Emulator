@@ -20,6 +20,7 @@ const { DeviceBus } = require('./lib/deviceBus');
 const floppyTemplates = require('./lib/floppyTemplates');
 const sysInfo = require('./lib/sysInfo');
 const updateSource = require('./lib/updateSource');
+const openosVersions = require('./lib/openosVersions');
 const modTransfer = require('./lib/modTransfer');
 
 // Some networks have no working IPv6; prefer IPv4 so guest HTTP requests do not fail
@@ -521,6 +522,36 @@ async function applyUpdateStreaming(res) {
   finish();
 }
 
+// Stream the download/build of an OpenOS release as NDJSON (percentage + result)
+async function streamOpenOSBuild(res, version) {
+  res.writeHead(200, {
+    'Content-Type': 'application/x-ndjson; charset=utf-8',
+    'Cache-Control': 'no-store',
+    'X-Accel-Buffering': 'no',
+  });
+  if (typeof res.flushHeaders === 'function') res.flushHeaders();
+  const emit = (evt) => {
+    if (res.writableEnded) return;
+    try { res.write(JSON.stringify(evt) + '\n'); } catch (e) { /* client disconnected */ }
+  };
+
+  emit({ stage: 'prepare', percent: 0, line: String(version || '') });
+  try {
+    const result = await openosVersions.build(version, {
+      diskIO,
+      onProgress: (done, total) => emit({
+        stage: 'download',
+        percent: Math.round((done / total) * 100),
+        line: `${done}/${total}`,
+      }),
+    });
+    emit({ done: true, result });
+  } catch (e) {
+    emit({ done: true, result: { ok: false, error: e.message } });
+  }
+  if (!res.writableEnded) res.end();
+}
+
 // List recent versions for the "rollback" picker in settings
 async function listVersions() {
   const out = { ok: false, error: null, current: null, versions: [] };
@@ -881,6 +912,18 @@ async function handleApi(req, res, body) {
         display: formatVersion(APP_VERSION, channel),
         name: 'OC Emulator',
       });
+    }
+
+    // /api/openos/versions and /api/openos/build: download another OpenOS release
+    // and assemble it into disks/openos-<version>.ocd (never bundled with the project)
+    if (parts[1] === 'openos') {
+      if (parts[2] === 'versions' && method === 'GET') {
+        return json(res, { versions: openosVersions.listVersions() });
+      }
+      if (parts[2] === 'build' && method === 'POST') {
+        const payload = JSON.parse(body || '{}');
+        return streamOpenOSBuild(res, payload.version);
+      }
     }
 
     // /api/fs/list: list host directories (for picking the Lua interpreter in settings)
@@ -2386,7 +2429,7 @@ function probeExistingInstance(host, port, timeoutMs = 1500) {
 async function main() {
   // Lua check
   logger.log('===============================================');
-  logger.log('  OC Emulator - Web Control Panel v2.0');
+  logger.log('  OC Emulator - Web Control Panel v2.1');
   logger.log('===============================================');
 
   const HOST = settings.host || '127.0.0.1';

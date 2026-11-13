@@ -1854,6 +1854,7 @@ const App = (() => {
         else if (action === 'check-update') checkUpdate();
         else if (action === 'lua-recheck') checkLua();
         else if (action === 'import-vm') ExportWizard.openImport();
+        else if (action === 'openos') openOpenOSVersions();
         else if (action === 'settings') openSettings();
         else if (action === 'about') openAbout();
         else if (action === 'restart-server') restartServer();
@@ -2118,6 +2119,91 @@ const App = (() => {
     }).catch(() => { /* keep the fallback */ });
   }
 
+  // ---------- OpenOS versions: download a release and build it into a disk ----------
+  // Only the bundled template ships with the project; these are fetched on demand.
+  async function openOpenOSVersions() {
+    let list = [];
+    try {
+      const r = await api('openos/versions');
+      list = (r && r.versions) || [];
+    } catch (e) {
+      setStatus(I18N.t('openos.list-failed') + e.message, 'err');
+      return;
+    }
+    if (list.length === 0) {
+      alert(I18N.t('openos.none'));
+      return;
+    }
+    const rows = list.map((v) => `
+      <div class="form-row" data-version="${escapeAttr(v.id)}">
+        <label>${escapeHtml(v.label)}</label>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <button type="button" class="btn btn-small" data-dl="${escapeAttr(v.id)}"${v.cached ? ' disabled' : ''}>
+            ${v.cached ? I18N.t('openos.cached') : I18N.t('openos.download')}
+          </button>
+          <span class="hint" data-status>${v.cached ? I18N.t('openos.cached-hint') : ''}</span>
+        </div>
+      </div>`).join('');
+
+    Modal.open({
+      title: I18N.t('openos.title'),
+      size: 'small',
+      bodyHTML: `
+        <p class="hint" style="margin:0 0 12px;line-height:1.6;">${I18N.t('openos.hint')}</p>
+        ${rows}`,
+      footerHTML: `<button class="btn" data-action="modal-close">${I18N.t('settings.cancel')}</button>`,
+      onMount(body) {
+        body.querySelectorAll('button[data-dl]').forEach((btn) => {
+          btn.addEventListener('click', () => downloadOpenOS(btn));
+        });
+      },
+    });
+  }
+
+  // Stream the build progress (NDJSON): percent lines, then a final result
+  async function downloadOpenOS(btn) {
+    const id = btn.getAttribute('data-dl');
+    const row = btn.closest('[data-version]');
+    const statusEl = row ? row.querySelector('[data-status]') : null;
+    const setRowStatus = (text) => { if (statusEl) statusEl.textContent = text; };
+    btn.disabled = true;
+    setRowStatus(I18N.t('openos.starting'));
+    let result = null;
+    try {
+      const res = await fetch('/api/openos/build', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' },
+        body: JSON.stringify({ version: id }),
+      });
+      if (!res.ok || !res.body) throw new Error('HTTP ' + res.status);
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      for (;;) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        buf += decoder.decode(chunk.value, { stream: true });
+        let idx;
+        while ((idx = buf.indexOf('\n')) >= 0) {
+          const line = buf.slice(0, idx).trim();
+          buf = buf.slice(idx + 1);
+          if (!line) continue;
+          let evt;
+          try { evt = JSON.parse(line); } catch (e) { continue; }
+          if (evt.done) result = evt.result;
+          else if (evt.percent != null) setRowStatus(I18N.t('openos.progress', { percent: evt.percent }));
+        }
+      }
+      if (!result || !result.ok) throw new Error((result && result.error) || I18N.t('openos.failed'));
+      setRowStatus(I18N.t('openos.done', { path: result.path }));
+      btn.textContent = I18N.t('openos.cached');
+      setStatus(I18N.t('openos.done', { path: result.path }));
+    } catch (e) {
+      btn.disabled = false;
+      setRowStatus(I18N.t('openos.failed') + ' ' + e.message);
+    }
+  }
+
   // ---------- Startup ----------
   function init() {
     // First run: ask for a language
@@ -2194,6 +2280,7 @@ const App = (() => {
     set('menu-new-mod', 'menu.new-mod');
     set('menu-import-mod', 'menu.import-mod');
     set('menu-import-vm', 'menu.import-vm');
+    set('menu-openos', 'menu.openos');
     set('menu-refresh', 'menu.refresh');
     set('menu-check-update', 'menu.check-update');
     set('menu-lua-recheck', 'menu.lua-recheck');
