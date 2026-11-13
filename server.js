@@ -62,6 +62,8 @@ function loadSettings() {
     sysInfoPolling: true,
     showConsole: true,   // show the console window hosting the server (toggleable in the UI)
     autoUpdate: true,    // launcher pulls updates from the remote repo (toggleable in the UI)
+    updateSource: 'auto', // auto | gitee | github (which remote the updater uses)
+    updateChannel: 'release', // release | beta (which branch the updater follows)
     skipIntegrityCheck: false, // skip the dependency integrity check at startup (toggleable in the UI)
   };
   if (fs.existsSync(settingsPath)) {
@@ -145,12 +147,17 @@ async function gitLogLines(args) {
     });
 }
 
-// Upstream ref of the current branch (e.g. origin/main); falls back to common remote branches
-async function resolveUpstreamRef() {
+// Which branch the selected update channel follows: Release = main, Beta = beta
+function channelBranchName() {
+  return updateSource.branchForChannel(settings.updateChannel);
+}
+
+// Upstream ref of the given branch (e.g. origin/main); falls back to common remote branches
+async function resolveUpstreamRef(branch) {
   const up = await gitRun(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}'], 15000);
   const name = up.ok ? up.stdout.trim() : '';
-  if (name && name.indexOf('/') >= 0) return name;
-  for (const ref of ['origin/main', 'origin/master', 'github/main']) {
+  if (name && name.indexOf('/') >= 0 && name.endsWith('/' + branch)) return name;
+  for (const ref of [`origin/${branch}`, `github/${branch}`, 'origin/main', 'origin/master']) {
     const r = await gitRun(['rev-parse', '--verify', ref], 15000);
     if (r.ok && r.stdout.trim()) return ref;
   }
@@ -185,6 +192,11 @@ function listUpdateTargets() {
       label: updateSource.SOURCES[key].label,
     });
   };
+  // An explicit choice in the settings is used alone; "auto" keeps the measured order
+  if (settings.updateSource === 'gitee' || settings.updateSource === 'github') {
+    add(settings.updateSource);
+    return { targets, remotes };
+  }
   if (cache && cache.source) add(cache.source);
   add('gitee');
   add('github');
@@ -203,7 +215,7 @@ async function checkForUpdate() {
   if (!fs.existsSync(path.join(PROJECT_DIR, '.git'))) { out.error = 'not-a-repo'; return out; }
 
   // Fetch each source in turn; the first success becomes the comparison base
-  const branch = await currentBranchName();
+  const branch = channelBranchName();
   const { targets } = listUpdateTargets();
   let ref = null;
   let detail = '';
@@ -231,7 +243,7 @@ async function checkForUpdate() {
 
   // No GitHub / Gitee remote detected (custom mirror etc.): fall back to the default upstream
   if (!ref) {
-    const upstream = await resolveUpstreamRef();
+    const upstream = await resolveUpstreamRef(branch);
     if (upstream) {
       const fetch = await gitRun(['fetch', '--quiet'], 30000);
       if (fetch.ok) {
@@ -278,12 +290,51 @@ async function checkForUpdate() {
   return out;
 }
 
+// Switch the working tree to the branch the selected channel follows. An existing
+// local branch is checked out; otherwise it is created from the fetched ref.
+async function switchToChannelBranch(branch, targets) {
+  if ((await currentBranchName()) === branch) return { ok: true };
+  const local = await gitRun(['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`], 10000);
+  if (local.ok) {
+    const r = await gitRun(['checkout', branch], 30000);
+    return r.ok
+      ? { ok: true }
+      : { ok: false, detail: ((r.stderr || r.err || '') + '').trim().slice(0, 400) };
+  }
+  for (const target of targets) {
+    const fetch = await gitRun(target.isUrl
+      ? ['fetch', '--quiet', target.remote, branch]
+      : ['fetch', '--quiet', target.remote], 45000);
+    if (!fetch.ok) continue;
+    const ref = target.isUrl ? 'FETCH_HEAD' : `${target.remote}/${branch}`;
+    const create = await gitRun(['checkout', '-b', branch, ref], 30000);
+    if (create.ok) return { ok: true };
+  }
+  return { ok: false, detail: `cannot switch to branch ${branch}` };
+}
+
 // Try `git pull --ff-only` from each source in turn, then from the default upstream.
 // onLine receives streamed progress lines (null for a plain call).
 async function pullFromUpdateSources(onLine) {
-  const branch = await currentBranchName();
+  const branch = channelBranchName();
   const { targets } = listUpdateTargets();
   const note = (text) => { if (onLine) onLine(text); };
+
+  // The channel decides the branch: switching Release <-> Beta happens here
+  note(`git checkout ${branch}`);
+  const switched = await switchToChannelBranch(branch, targets);
+  if (!switched.ok) {
+    logger.log('[update] 切换版本分支失败: ' + (switched.detail || ''));
+    note('切换版本分支失败: ' + (switched.detail || ''));
+    return {
+      ok: false,
+      error: 'channel-switch-failed',
+      source: null,
+      remote: null,
+      result: { ok: false, stdout: '', stderr: switched.detail || '' },
+    };
+  }
+
   const runPull = (args) => (onLine
     ? runGitStreaming(args, onLine)
     : gitRun(args, 180000));
@@ -315,7 +366,7 @@ async function applyUpdate() {
   const pull = pulled.result;
   out.source = pulled.source;
   out.output = ((pull.stdout || '') + (pull.stderr || '')).trim().slice(0, 2000);
-  if (!pull.ok) { out.error = 'pull-failed'; return out; }
+  if (!pull.ok) { out.error = pulled.error || 'pull-failed'; return out; }
 
   const after = await gitRun(['rev-parse', 'HEAD'], 15000);
   out.after = after.ok ? after.stdout.trim().slice(0, 7) : null;
@@ -420,7 +471,7 @@ async function applyUpdateStreaming(res) {
   out.source = pulled.source;
   out.output = ((pull.stdout || '') + (pull.stderr || '')).trim().slice(0, 2000);
   if (!pull.ok) {
-    out.error = 'pull-failed';
+    out.error = pulled.error || 'pull-failed';
     emit({ stage: 'error', percent, line: (pull.stderr || pull.err || '').trim().slice(0, 500) });
     emit({ done: true, result: out });
     finish();
@@ -864,11 +915,20 @@ async function handleApi(req, res, body) {
           logLevel: settings.logLevel || 'full',
           showConsole: settings.showConsole !== false,
           autoUpdate: settings.autoUpdate !== false,
+          updateSource: settings.updateSource === 'gitee' || settings.updateSource === 'github' ? settings.updateSource : 'auto',
+          updateChannel: settings.updateChannel === 'beta' ? 'beta' : 'release',
           skipIntegrityCheck: settings.skipIntegrityCheck === true,
         });
       }
       if (method === 'PUT') {
         const patch = JSON.parse(body || '{}');
+        // Only known values reach settings.json
+        if (patch.updateSource !== undefined) {
+          patch.updateSource = ['auto', 'gitee', 'github'].includes(patch.updateSource) ? patch.updateSource : 'auto';
+        }
+        if (patch.updateChannel !== undefined) {
+          patch.updateChannel = patch.updateChannel === 'beta' ? 'beta' : 'release';
+        }
         saveSettings(patch);
         // Apply the new logLevel to vmManager (affects VMs started later)
         if (patch.logLevel) {
@@ -886,6 +946,8 @@ async function handleApi(req, res, body) {
           logLevel: settings.logLevel,
           showConsole: settings.showConsole !== false,
           autoUpdate: settings.autoUpdate !== false,
+          updateSource: settings.updateSource === 'gitee' || settings.updateSource === 'github' ? settings.updateSource : 'auto',
+          updateChannel: settings.updateChannel === 'beta' ? 'beta' : 'release',
           skipIntegrityCheck: settings.skipIntegrityCheck === true,
           consoleResult,
         });

@@ -240,6 +240,29 @@ const App = (() => {
             <span class="hint">${I18N.t('settings.auto-update-hint')}</span>
           </div>
           <div class="form-row">
+            <label>${I18N.t('settings.update-source')}</label>
+            <select id="settings-update-source" style="flex:1;padding:6px 8px;background:var(--bg-input);color:var(--fg-primary);border:1px solid var(--border);border-radius:3px;">
+              <option value="auto" ${cur.updateSource !== 'gitee' && cur.updateSource !== 'github' ? 'selected' : ''}>${I18N.t('settings.update-source-auto')}</option>
+              <option value="gitee" ${cur.updateSource === 'gitee' ? 'selected' : ''}>Gitee</option>
+              <option value="github" ${cur.updateSource === 'github' ? 'selected' : ''}>GitHub</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label></label>
+            <span class="hint">${I18N.t('settings.update-source-hint')}</span>
+          </div>
+          <div class="form-row">
+            <label>${I18N.t('settings.update-channel')}</label>
+            <select id="settings-update-channel" style="flex:1;padding:6px 8px;background:var(--bg-input);color:var(--fg-primary);border:1px solid var(--border);border-radius:3px;">
+              <option value="release" ${cur.updateChannel !== 'beta' ? 'selected' : ''}>${I18N.t('settings.update-channel-release')}</option>
+              <option value="beta" ${cur.updateChannel === 'beta' ? 'selected' : ''}>${I18N.t('settings.update-channel-beta')}</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label></label>
+            <span class="hint">${I18N.t('settings.update-channel-hint')}</span>
+          </div>
+          <div class="form-row">
             <label for="settings-skipintegrity">${I18N.t('settings.skip-integrity')}</label>
             <label class="checkbox-line">
               <input type="checkbox" id="settings-skipintegrity" ${cur.skipIntegrityCheck === true ? 'checked' : ''}>
@@ -333,6 +356,30 @@ const App = (() => {
                 await api('settings', { method: 'PUT', body: { autoUpdate: on } });
               } catch (e) {
                 if (autoUpdateState) autoUpdateState.textContent = I18N.t('settings.save-failed');
+              }
+            });
+          }
+          // Update source: which mirror the updater talks to (auto = speed test)
+          const updateSourceSel = body.querySelector('#settings-update-source');
+          if (updateSourceSel) {
+            updateSourceSel.addEventListener('change', async () => {
+              try {
+                await api('settings', { method: 'PUT', body: { updateSource: updateSourceSel.value } });
+                setStatus(I18N.t('settings.saved'));
+              } catch (e) {
+                setStatus(I18N.t('settings.save-failed'), 'err');
+              }
+            });
+          }
+          // Update channel: Release follows main, Beta follows the beta branch
+          const updateChannelSel = body.querySelector('#settings-update-channel');
+          if (updateChannelSel) {
+            updateChannelSel.addEventListener('change', async () => {
+              try {
+                await api('settings', { method: 'PUT', body: { updateChannel: updateChannelSel.value } });
+                setStatus(I18N.t('settings.saved'));
+              } catch (e) {
+                setStatus(I18N.t('settings.save-failed'), 'err');
               }
             });
           }
