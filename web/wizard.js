@@ -554,6 +554,18 @@ const Wizard = (() => {
       }
     } catch (e) { /* fallback to defaults */ }
 
+    // The OpenOS floppy template is built from the downloaded sources; take its
+    // label (e.g. "OpenOS 1.8.10") so the wizard shows the version too
+    try {
+      const floppies = await App.api('floppy/templates');
+      const openosTpl = Array.isArray(floppies) ? floppies.find((f) => f.key === 'OpenOS') : null;
+      const opt = OPTIONS.floppy.find((o) => o.value === 'OpenOS');
+      if (opt && openosTpl && openosTpl.label) {
+        opt.label = openosTpl.label;
+        delete opt.labelKey;
+      }
+    } catch (e) { /* keep the static label */ }
+
     Modal.open({
       title: T('wizard.title', '新建虚拟机'),
       size: 'large',
