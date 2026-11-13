@@ -244,7 +244,7 @@
   function issueUrl(kind, summary, detail) {
     const title = '[Bug] ' + String(summary).slice(0, 120);
     let body = detail;
-    if (body.length > 1500) body = body.slice(0, 1500) + '\n...(内容过长已截断, 请粘贴复制到的完整信息)';
+    if (body.length > 1500) body = body.slice(0, 1500) + '\n' + tr('...(内容过长已截断, 请粘贴复制到的完整信息)', '...(truncated; paste the full copied text)');
     const qs = (k, v) => encodeURIComponent(k) + '=' + encodeURIComponent(v);
     if (kind === 'gitee') {
       return REPO.gitee + '/issues/new?' + qs('issue[title]', title) + '&' + qs('issue[body]', body);

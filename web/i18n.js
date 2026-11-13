@@ -22,6 +22,7 @@ const I18N = (() => {
       'menu.restart-server': '⟳ 重启服务',
       'menu.stop-server': '■ 停止服务',
       'menu.check-update': '⟳ 检查更新',
+      'menu.toggle': '菜单',
 
       // Usage guide (shown once, after the language is picked)
       'guide.title': '使用引导',
@@ -438,6 +439,7 @@ const I18N = (() => {
       'reactor.info.neighbors': '相邻燃料棒',
       'reactor.info.absorb': '吸热',
       'reactor.info.state': '状态',
+      'reactor.status': '状态',
       'reactor.info.active': '生效',
       'reactor.info.inactive': '未生效',
       'reactor.info.fuel-rods': '燃料棒总数',
@@ -951,6 +953,7 @@ const I18N = (() => {
       'menu.restart-server': '⟳ Restart service',
       'menu.stop-server': '■ Stop service',
       'menu.check-update': '⟳ Check update',
+      'menu.toggle': 'Menu',
 
       // Usage guide (shown once, after the language is picked)
       'guide.title': 'Quick start',
@@ -1367,6 +1370,7 @@ const I18N = (() => {
       'reactor.info.neighbors': 'Adjacent rods',
       'reactor.info.absorb': 'Capacity',
       'reactor.info.state': 'State',
+      'reactor.status': 'Status',
       'reactor.info.active': 'Active',
       'reactor.info.inactive': 'Inactive',
       'reactor.info.fuel-rods': 'Total rods',

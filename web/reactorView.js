@@ -572,12 +572,12 @@ const ReactorView = (() => {
       }
       const ids = Object.keys(inventory.items);
       const options = ids.map(id =>
-        `<option value="${id}">${escapeHTML(inventory.items[id].label || id)}</option>`).join('');
+        `<option value="${id}">${escapeHTML(partLabel(inventory.items, id))}</option>`).join('');
       const boxHTML = (key, title) => {
         const counts = invCounts(invList(key));
         const rows = ids.filter(id => counts[id]).map(id => `
           <div class="ic2-inv-row">
-            <span>${escapeHTML(inventory.items[id].label || id)}</span>
+            <span>${escapeHTML(partLabel(inventory.items, id))}</span>
             <b>×${counts[id]}</b>
             <button type="button" class="ic2-inv-btn" data-box="${key}" data-remove="${id}"
               title="${escapeHTML(T('reactor.inventory.remove', '取出一个'))}">−</button>

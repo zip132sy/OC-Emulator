@@ -1261,7 +1261,9 @@ const ModView = (() => {
 
     const componentLabel = (id) => {
       const comp = components[id];
-      return comp && comp.label ? comp.label : String(id || '-');
+      // The server ships Chinese component labels; prefer the translated
+      // reactor.part.* name so English mode does not fall back to Chinese.
+      return T('reactor.part.' + id, (comp && comp.label) || String(id || '-'));
     };
     // Fuel rods last a fixed 10000 seconds; other parts use their heat capacity
     const componentMaxDurability = (id) => {

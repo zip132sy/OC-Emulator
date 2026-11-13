@@ -2123,6 +2123,8 @@ const App = (() => {
     setConnStatus(state.connText, state.connKind);
     const navToggle = $('.nav-toggle');
     if (navToggle) navToggle.setAttribute('aria-label', t('sidebar.vm-library'));
+    const menuToggle = $('.menu-toggle');
+    if (menuToggle) menuToggle.setAttribute('aria-label', t('menu.toggle'));
     const modalClose = $('.modal-close');
     if (modalClose) modalClose.setAttribute('aria-label', t('tab.close'));
     // Top menu
