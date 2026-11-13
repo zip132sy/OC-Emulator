@@ -705,7 +705,10 @@ const Wizard = (() => {
               hw[diskKey + 'Label'] = newLabel;
 
               const files = folderInput ? folderInput.files : [];
-              const isMirror = modalBody.querySelector('#dc-mirror')?.checked;
+              // No optional chaining: the Android WebView in use is Chrome 74,
+              // which rejects "?." at parse time and would break the whole file.
+              const mirrorInput = modalBody.querySelector('#dc-mirror');
+              const isMirror = !!(mirrorInput && mirrorInput.checked);
 
               if (files.length > 0) {
                 // Read every file and base64-encode it for the API

@@ -512,7 +512,7 @@ const DiskEditor = (() => {
         document.getElementById(`disk-file-actions-${cssEsc(diskPath)}`).style.display = 'none';
       } else {
         document.getElementById(`disk-file-info-${cssEsc(diskPath)}`).innerHTML =
-          `<span style="color:var(--err)">${result?.error || I18N.t('disk.read-failed')}</span>`;
+          `<span style="color:var(--err)">${(result && result.error) || I18N.t('disk.read-failed')}</span>`;
       }
     } catch (e) {
       document.getElementById(`disk-file-info-${cssEsc(diskPath)}`).innerHTML =
@@ -1264,7 +1264,7 @@ const DiskEditor = (() => {
 
   function newItemDialog(diskPath, type) {
     const session = getSession(diskPath);
-    if (session.info?.locked) {
+    if (session.info && session.info.locked) {
       alert(I18N.t('disk.locked-alert'));
       return;
     }
@@ -1471,7 +1471,7 @@ const DiskEditor = (() => {
 
   async function handleFileUpload(diskPath, files, targetDir) {
     const session = getSession(diskPath);
-    if (session.info?.locked) {
+    if (session.info && session.info.locked) {
       alert(I18N.t('disk.locked-alert'));
       return;
     }
@@ -1633,8 +1633,8 @@ const DiskEditor = (() => {
 
   function openMirrorDialog(diskPath, vm) {
     const session = getSession(diskPath);
-    const enabled = session.mirror?.enabled || false;
-    const currentPath = session.mirror?.path || '';
+    const enabled = (session.mirror && session.mirror.enabled) || false;
+    const currentPath = (session.mirror && session.mirror.path) || '';
 
     const modal = document.createElement('div');
     modal.className = 'modal';

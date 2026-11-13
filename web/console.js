@@ -704,7 +704,7 @@ const Console = (() => {
       openHardwareEditor(vmName, cfg);
     } else if (action === 'edit-disk1') {
       const cfg = await App.api(`vms/${encodeURIComponent(vmName)}`);
-      const f = cfg?.hardware?.disk1;
+      const f = cfg && cfg.hardware && cfg.hardware.disk1;
       if (f) {
         App.openTab({
           id: 'disk-' + vmName + '-disk1',
@@ -718,7 +718,7 @@ const Console = (() => {
       }
     } else if (action === 'edit-disk2') {
       const cfg = await App.api(`vms/${encodeURIComponent(vmName)}`);
-      const f = cfg?.hardware?.disk2;
+      const f = cfg && cfg.hardware && cfg.hardware.disk2;
       if (f) {
         App.openTab({
           id: 'disk-' + vmName + '-disk2',
@@ -732,7 +732,7 @@ const Console = (() => {
       }
     } else if (action === 'edit-floppy') {
       const cfg = await App.api(`vms/${encodeURIComponent(vmName)}`);
-      const f = cfg?.hardware?.floppy;
+      const f = cfg && cfg.hardware && cfg.hardware.floppy;
       if (f) {
         App.openTab({
           id: 'disk-' + vmName + '-floppy',
@@ -1049,7 +1049,7 @@ const Console = (() => {
       return arr;
     })();
 
-    const cur = cfg?.hardware || {};
+    const cur = (cfg && cfg.hardware) || {};
     // Custom memory size (MB): when set, that dropdown shows "custom"
     const curMemMB = Array.isArray(cur.memoryMB) ? cur.memoryMB : [null, null];
     const memSelectValue = (i) => (curMemMB[i] != null ? 'custom' : (cur.memory || [3, 3])[i]);
@@ -1191,7 +1191,7 @@ const Console = (() => {
         ${!isStopped && !isRunning ? `<div class="hint" style="margin-bottom:12px;">${t('hw.state-label')}${view.state}</div>` : ''}
         <div class="hw-grid">
           <label>${t('hw.apu-tier')}</label>
-          <div class="hw-value"><select id="hw-apu" ${disabled}>${opts(apuOpts, cur.apu?.tier ?? 2)}</select></div>
+          <div class="hw-value"><select id="hw-apu" ${disabled}>${opts(apuOpts, (cur.apu && cur.apu.tier != null) ? cur.apu.tier : 2)}</select></div>
           <label>${t('hw.mem1')}</label>
           <div class="hw-value">
             <select id="hw-mem1" ${disabled}>${opts(memOpts, memSelectValue(0))}</select>
@@ -1285,9 +1285,9 @@ const Console = (() => {
           </div>
           <label>${t('hw.screen')}</label>
           <div class="hw-value"><select id="hw-screen" ${disabled}>
-            <option value="1" ${cur.screen?.tier == 1 ? 'selected' : ''}>${t('hw.option-screen-t1')}</option>
-            <option value="2" ${cur.screen?.tier == 2 ? 'selected' : ''}>${t('hw.option-screen-t2')}</option>
-            <option value="3" ${(cur.screen?.tier ?? 3) == 3 ? 'selected' : ''}>${t('hw.option-screen-t3')}</option>
+            <option value="1" ${(cur.screen && cur.screen.tier) == 1 ? 'selected' : ''}>${t('hw.option-screen-t1')}</option>
+            <option value="2" ${(cur.screen && cur.screen.tier) == 2 ? 'selected' : ''}>${t('hw.option-screen-t2')}</option>
+            <option value="3" ${((cur.screen && cur.screen.tier != null) ? cur.screen.tier : 3) == 3 ? 'selected' : ''}>${t('hw.option-screen-t3')}</option>
           </select></div>
           <label>${t('hw.boot-order')}</label>
           <div class="hw-value">
@@ -1666,7 +1666,7 @@ const Console = (() => {
       // Everything is editable while stopped
       patch.hardware.apu = { tier: getVal('hw-apu') };
       // Memory: read the MB input when the dropdown is on "custom"
-      const oldTiers = Array.isArray(oldCfg?.hardware?.memory) ? oldCfg.hardware.memory : [3, 3];
+      const oldTiers = Array.isArray(oldCfg && oldCfg.hardware && oldCfg.hardware.memory) ? oldCfg.hardware.memory : [3, 3];
       const readMem = (i) => {
         const sel = getVal(i === 0 ? 'hw-mem1' : 'hw-mem2');
         if (sel !== 'custom') return { tier: parseFloat(sel), mb: null };
