@@ -5,6 +5,9 @@
 
 # ---------- 依赖 ----------
 node_modules/
+# 不提交 npm 锁文件: 它会把 resolved 地址固定到某个镜像源, npm 12 的
+# allow-remote 策略会因此拒绝安装 (EALLOWREMOTE)。让 npm 按用户本地源解析。
+package-lock.json
 
 # ---------- 运行时数据 ----------
 # 运行日志
