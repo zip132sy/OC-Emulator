@@ -21,6 +21,7 @@ const floppyTemplates = require('./lib/floppyTemplates');
 const sysInfo = require('./lib/sysInfo');
 const updateSource = require('./lib/updateSource');
 const openosVersions = require('./lib/openosVersions');
+const diskCatalog = require('./lib/diskCatalog');
 const modTransfer = require('./lib/modTransfer');
 
 // Some networks have no working IPv6; prefer IPv4 so guest HTTP requests do not fail
@@ -552,6 +553,35 @@ async function streamOpenOSBuild(res, version) {
   if (!res.writableEnded) res.end();
 }
 
+// Stream the download of a prebuilt disk image as NDJSON (percentage + result)
+async function streamDiskInstall(res, entry) {
+  res.writeHead(200, {
+    'Content-Type': 'application/x-ndjson; charset=utf-8',
+    'Cache-Control': 'no-store',
+    'X-Accel-Buffering': 'no',
+  });
+  if (typeof res.flushHeaders === 'function') res.flushHeaders();
+  const emit = (evt) => {
+    if (res.writableEnded) return;
+    try { res.write(JSON.stringify(evt) + '\n'); } catch (e) { /* client disconnected */ }
+  };
+
+  emit({ stage: 'prepare', percent: 0, line: String((entry && entry.file) || '') });
+  try {
+    const result = await diskCatalog.install(entry || {}, {
+      onProgress: (received, total) => emit({
+        stage: 'download',
+        percent: total > 0 ? Math.round((received / total) * 100) : 0,
+        line: total > 0 ? '' : `${Math.round(received / 1024)} KB`,
+      }),
+    });
+    emit({ done: true, result });
+  } catch (e) {
+    emit({ done: true, result: { ok: false, error: e.message } });
+  }
+  if (!res.writableEnded) res.end();
+}
+
 // List recent versions for the "rollback" picker in settings
 async function listVersions() {
   const out = { ok: false, error: null, current: null, versions: [] };
@@ -919,6 +949,17 @@ async function handleApi(req, res, body) {
     if (parts[1] === 'openos') {
       if (parts[2] === 'versions' && method === 'GET') {
         return json(res, { versions: openosVersions.listVersions() });
+      }
+      // Prebuilt disks published in the separate OC-Emulator-Disks repository
+      if (parts[2] === 'catalog' && method === 'GET') {
+        return json(res, {
+          catalog: await diskCatalog.list(),
+          build: openosVersions.listVersions(),
+        });
+      }
+      if (parts[2] === 'install' && method === 'POST') {
+        const payload = JSON.parse(body || '{}');
+        return streamDiskInstall(res, payload);
       }
       if (parts[2] === 'build' && method === 'POST') {
         const payload = JSON.parse(body || '{}');

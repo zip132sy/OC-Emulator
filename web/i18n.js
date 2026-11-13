@@ -23,9 +23,14 @@ const I18N = (() => {
       'menu.stop-server': '■ 停止服务',
       'menu.check-update': '⟳ 检查更新',
       'menu.toggle': '菜单',
-      'menu.openos': '⬇ OpenOS 版本',
-      'openos.title': '下载 OpenOS 版本',
-      'openos.hint': '这些版本不会随项目发布；下载后会在 disks/ 目录生成磁盘镜像，新建虚拟机时可直接选择。',
+      'menu.openos': '⬇ 系统磁盘',
+      'openos.title': '系统磁盘',
+      'openos.hint': '磁盘由单独的镜像仓库提供（OpenOS 各版本、MineOS、FuchasOS 等），不会随项目发布；下载后保存到 disks/ 目录，新建虚拟机时可直接选择。',
+      'openos.repo-section': '镜像仓库',
+      'openos.build-section': 'OpenOS 源码构建',
+      'openos.repo-empty': '仓库中暂无磁盘。',
+      'openos.stale': '网络不可用，当前显示的是本地缓存的列表。',
+      'openos.repo-unavailable': '无法连接镜像仓库: {error}',
       'openos.download': '下载并生成磁盘',
       'openos.cached': '已生成',
       'openos.cached-hint': '磁盘已在 disks/ 目录中',
@@ -108,7 +113,7 @@ const I18N = (() => {
 
       // Welcome page
       'welcome.title': 'OC Emulator',
-      'welcome.subtitle': 'OpenComputers 模拟器 · Web 控制面板 v2.1',
+      'welcome.subtitle': 'OpenComputers 模拟器 · Web 控制面板',
       'welcome.hint': '从左侧选择一个虚拟机,或点击「新建虚拟机」开始。',
       'tab.close': '关闭',
 
@@ -972,9 +977,14 @@ const I18N = (() => {
       'menu.stop-server': '■ Stop service',
       'menu.check-update': '⟳ Check update',
       'menu.toggle': 'Menu',
-      'menu.openos': '⬇ OpenOS versions',
-      'openos.title': 'Download OpenOS versions',
-      'openos.hint': 'These releases are not shipped with the project. Downloading builds a disk image in disks/, which you can pick when creating a VM.',
+      'menu.openos': '⬇ System disks',
+      'openos.title': 'System disks',
+      'openos.hint': 'Disks are published in a separate image repository (OpenOS releases, MineOS, FuchasOS and more) and are not shipped with the project. Downloads land in disks/ and can be picked when creating a VM.',
+      'openos.repo-section': 'Image repository',
+      'openos.build-section': 'Build OpenOS from source',
+      'openos.repo-empty': 'No disks in the repository yet.',
+      'openos.stale': 'Network unavailable; showing the cached list.',
+      'openos.repo-unavailable': 'Cannot reach the image repository: {error}',
       'openos.download': 'Download and build',
       'openos.cached': 'Built',
       'openos.cached-hint': 'Image already in disks/',
@@ -1057,7 +1067,7 @@ const I18N = (() => {
 
       // Welcome
       'welcome.title': 'OC Emulator',
-      'welcome.subtitle': 'OpenComputers Emulator · Web Control Panel v2.1',
+      'welcome.subtitle': 'OpenComputers Emulator · Web Control Panel',
       'welcome.hint': 'Select a VM from the left, or click "New VM" to begin.',
       'tab.close': 'Close',
 

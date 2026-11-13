@@ -110,12 +110,22 @@ const App = (() => {
   }
 
   // ---------- App version (header badge) ----------
-  // The server formats it per channel: v2.0(R) for Release, v2.0.2(B) for Beta
+  // The server formats it per channel: v2.1(R) for Release, v2.1.2(B) for Beta
+  let versionText = '';
+
+  function welcomeSubtitle() {
+    const base = I18N.t('welcome.subtitle');
+    return versionText ? base + ' ' + versionText : base;
+  }
+
   function loadAppVersion() {
     const el = document.getElementById('app-version');
-    if (!el) return;
     api('version').then((v) => {
-      if (v && (v.display || v.version)) el.textContent = v.display || ('v' + v.version);
+      versionText = (v && (v.display || (v.version ? 'v' + v.version : ''))) || '';
+      if (el && versionText) el.textContent = versionText;
+      // The welcome page shows the same string; refresh it when it is on screen
+      const sub = document.getElementById('welcome-subtitle');
+      if (sub) sub.textContent = welcomeSubtitle();
     }).catch(() => { /* unreachable server: leave the badge empty */ });
   }
 
@@ -1443,7 +1453,7 @@ const App = (() => {
         welcome.innerHTML = `
           <div class="welcome-logo">⬣</div>
           <h1 id="welcome-title">${I18N.t('welcome.title')}</h1>
-          <p id="welcome-subtitle">${I18N.t('welcome.subtitle')}</p>
+          <p id="welcome-subtitle">${welcomeSubtitle()}</p>
           <p class="hint" id="welcome-hint">${I18N.t('welcome.hint')}</p>`;
         container.appendChild(welcome);
       }
@@ -2119,22 +2129,33 @@ const App = (() => {
     }).catch(() => { /* keep the fallback */ });
   }
 
-  // ---------- OpenOS versions: download a release and build it into a disk ----------
-  // Only the bundled template ships with the project; these are fetched on demand.
+  // ---------- System disks: prebuilt images + OpenOS built from source ----------
+  // Prebuilt images come from the separate OC-Emulator-Disks repository; OpenOS
+  // releases can also be assembled locally from the upstream loot tree.
   async function openOpenOSVersions() {
-    let list = [];
+    let data = null;
     try {
-      const r = await api('openos/versions');
-      list = (r && r.versions) || [];
+      data = await api('openos/catalog');
     } catch (e) {
       setStatus(I18N.t('openos.list-failed') + e.message, 'err');
       return;
     }
-    if (list.length === 0) {
-      alert(I18N.t('openos.none'));
-      return;
-    }
-    const rows = list.map((v) => `
+    const catalog = (data && data.catalog) || { disks: [] };
+    const builds = (data && data.build) || [];
+    const disks = catalog.disks || [];
+
+    const diskRows = disks.map((d) => `
+      <div class="form-row" data-disk="${escapeAttr(d.file)}">
+        <label>${escapeHtml(d.label)}</label>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <button type="button" class="btn btn-small" data-install="${escapeAttr(d.file)}"${d.installed ? ' disabled' : ''}>
+            ${d.installed ? I18N.t('openos.cached') : I18N.t('openos.download')}
+          </button>
+          <span class="hint" data-status>${d.installed ? I18N.t('openos.cached-hint') : ''}</span>
+        </div>
+      </div>`).join('');
+
+    const buildRows = builds.map((v) => `
       <div class="form-row" data-version="${escapeAttr(v.id)}">
         <label>${escapeHtml(v.label)}</label>
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
@@ -2145,14 +2166,25 @@ const App = (() => {
         </div>
       </div>`).join('');
 
+    const repoNote = catalog.ok
+      ? (catalog.stale ? `<p class="hint" style="margin:0 0 8px;">${I18N.t('openos.stale')}</p>` : '')
+      : `<p class="hint" style="margin:0 0 8px;">${escapeHtml(I18N.t('openos.repo-unavailable', { error: catalog.error || '' }))}</p>`;
+
     Modal.open({
       title: I18N.t('openos.title'),
       size: 'small',
       bodyHTML: `
         <p class="hint" style="margin:0 0 12px;line-height:1.6;">${I18N.t('openos.hint')}</p>
-        ${rows}`,
+        <div class="section-title">${I18N.t('openos.repo-section')}</div>
+        ${repoNote}
+        ${diskRows || `<p class="hint" style="margin:0 0 8px;">${I18N.t('openos.repo-empty')}</p>`}
+        <div class="section-title" style="margin-top:16px;">${I18N.t('openos.build-section')}</div>
+        ${buildRows}`,
       footerHTML: `<button class="btn" data-action="modal-close">${I18N.t('settings.cancel')}</button>`,
       onMount(body) {
+        body.querySelectorAll('button[data-install]').forEach((btn) => {
+          btn.addEventListener('click', () => installDisk(btn));
+        });
         body.querySelectorAll('button[data-dl]').forEach((btn) => {
           btn.addEventListener('click', () => downloadOpenOS(btn));
         });
@@ -2160,7 +2192,59 @@ const App = (() => {
     });
   }
 
-  // Stream the build progress (NDJSON): percent lines, then a final result
+  // Read an NDJSON progress stream and return the final result object
+  async function streamEndpoint(url, body, onEvent) {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok || !res.body) throw new Error('HTTP ' + res.status);
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    let result = null;
+    for (;;) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      buf += decoder.decode(chunk.value, { stream: true });
+      let idx;
+      while ((idx = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, idx).trim();
+        buf = buf.slice(idx + 1);
+        if (!line) continue;
+        let evt;
+        try { evt = JSON.parse(line); } catch (e) { continue; }
+        if (evt.done) result = evt.result;
+        else if (onEvent) onEvent(evt);
+      }
+    }
+    return result;
+  }
+
+  // Download a prebuilt image from the disk repository
+  async function installDisk(btn) {
+    const file = btn.getAttribute('data-install');
+    const row = btn.closest('[data-disk]');
+    const statusEl = row ? row.querySelector('[data-status]') : null;
+    const setRowStatus = (text) => { if (statusEl) statusEl.textContent = text; };
+    btn.disabled = true;
+    setRowStatus(I18N.t('openos.starting'));
+    try {
+      const result = await streamEndpoint('/api/openos/install', { file }, (evt) => {
+        if (evt.percent != null) setRowStatus(I18N.t('openos.progress', { percent: evt.percent }));
+      });
+      if (!result || !result.ok) throw new Error((result && result.error) || I18N.t('openos.failed'));
+      setRowStatus(I18N.t('openos.done', { path: result.path }));
+      btn.textContent = I18N.t('openos.cached');
+      setStatus(I18N.t('openos.done', { path: result.path }));
+    } catch (e) {
+      btn.disabled = false;
+      setRowStatus(I18N.t('openos.failed') + ' ' + e.message);
+    }
+  }
+
+  // Build an OpenOS release from the upstream sources (fallback without the repo)
   async function downloadOpenOS(btn) {
     const id = btn.getAttribute('data-dl');
     const row = btn.closest('[data-version]');
@@ -2168,32 +2252,10 @@ const App = (() => {
     const setRowStatus = (text) => { if (statusEl) statusEl.textContent = text; };
     btn.disabled = true;
     setRowStatus(I18N.t('openos.starting'));
-    let result = null;
     try {
-      const res = await fetch('/api/openos/build', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' },
-        body: JSON.stringify({ version: id }),
+      const result = await streamEndpoint('/api/openos/build', { version: id }, (evt) => {
+        if (evt.percent != null) setRowStatus(I18N.t('openos.progress', { percent: evt.percent }));
       });
-      if (!res.ok || !res.body) throw new Error('HTTP ' + res.status);
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buf = '';
-      for (;;) {
-        const chunk = await reader.read();
-        if (chunk.done) break;
-        buf += decoder.decode(chunk.value, { stream: true });
-        let idx;
-        while ((idx = buf.indexOf('\n')) >= 0) {
-          const line = buf.slice(0, idx).trim();
-          buf = buf.slice(idx + 1);
-          if (!line) continue;
-          let evt;
-          try { evt = JSON.parse(line); } catch (e) { continue; }
-          if (evt.done) result = evt.result;
-          else if (evt.percent != null) setRowStatus(I18N.t('openos.progress', { percent: evt.percent }));
-        }
-      }
       if (!result || !result.ok) throw new Error((result && result.error) || I18N.t('openos.failed'));
       setRowStatus(I18N.t('openos.done', { path: result.path }));
       btn.textContent = I18N.t('openos.cached');
@@ -2294,7 +2356,8 @@ const App = (() => {
     updateSidebarCount();
     // Welcome page
     set('welcome-title', 'welcome.title');
-    set('welcome-subtitle', 'welcome.subtitle');
+    const welcomeSub = $('#welcome-subtitle');
+    if (welcomeSub) welcomeSub.textContent = welcomeSubtitle();
     set('welcome-hint', 'welcome.hint');
     set('welcome-about', 'welcome.about');
     // Tab close button tooltip
