@@ -2675,9 +2675,23 @@ const Console = (() => {
     };
     const isRecent = (name) => lastKey === name && (Date.now() - lastKeyAt) < 200;
 
+    // The field always keeps one zero-width sentinel character. Holding Backspace on
+    // iOS repeats deletion *input* events (not keydown), and an empty field would
+    // stop producing them after the first press.
+    const SENTINEL = '\u200B';
+    let composing = false;
+    let composeEndedAt = 0;
+
     const sendKeyPair = (code, char) => {
       sendInput(vmName, { event: 'key_down', char: char || 0, code });
       sendInput(vmName, { event: 'key_up', char: char || 0, code });
+    };
+
+    // Restore the sentinel without touching the field while an IME is composing
+    const resetInput = () => {
+      if (composing) return;
+      input.value = SENTINEL;
+      try { input.setSelectionRange(SENTINEL.length, SENTINEL.length); } catch (e) { /* older browsers */ }
     };
 
     btn.addEventListener('mousedown', (e) => e.stopPropagation());
@@ -2686,35 +2700,58 @@ const Console = (() => {
       if (document.activeElement === input) {
         input.blur();
       } else {
-        input.value = '';
+        input.value = SENTINEL;
         input.focus();
       }
     });
 
-    input.addEventListener('focus', () => btn.classList.add('active'));
+    input.addEventListener('focus', () => {
+      btn.classList.add('active');
+      resetInput();
+    });
     input.addEventListener('blur', () => {
       input.value = '';
       btn.classList.remove('active');
     });
 
+    // Chinese/Japanese input: the composing text (pinyin etc.) must never reach the
+    // guest, and clearing the field mid-composition makes the IME keep re-inserting it.
+    input.addEventListener('compositionstart', () => { composing = true; });
+    input.addEventListener('compositionend', () => {
+      composing = false;
+      composeEndedAt = Date.now();
+      input.value = SENTINEL;
+    });
+
     input.addEventListener('input', (e) => {
-      // Never clear or forward while composing: it breaks pinyin, Japanese, etc.
-      if (e.isComposing) return;
       const inputType = e.inputType || '';
+      // Never clear or forward while composing: it breaks pinyin, Japanese, etc.
+      const isComposeEvent = composing || e.isComposing || inputType === 'insertCompositionText';
+      if (isComposeEvent || (Date.now() - composeEndedAt) < 100) {
+        // Only clean up after the composition has finished; touching the field
+        // during composition makes the IME re-insert the text.
+        if (!isComposeEvent) resetInput();
+        return;
+      }
       // Backspace/delete usually arrive only as input events, without a usable keydown
       if (inputType.indexOf('delete') === 0) {
-        input.value = '';
         const isForward = inputType.indexOf('Forward') >= 0;
         const name = isForward ? 'Delete' : 'Backspace';
-        if (!isRecent(name)) {
+        resetInput();
+        // Desktop repeats keydown (handled below); only touch keyboards need this path
+        if (isTouchDevice()) {
+          markKey(name);
+          sendKeyPair(isForward ? 0xD3 : 0x0E, 0);
+        } else if (!isRecent(name)) {
           markKey(name);
           sendKeyPair(isForward ? 0xD3 : 0x0E, 0);
         }
         return;
       }
 
-      const text = input.value;
-      input.value = '';
+      let text = input.value || '';
+      if (text.charAt(0) === SENTINEL) text = text.slice(1);
+      resetInput();
       if (!text) return;
 
       for (const ch of Array.from(text)) {
@@ -2736,9 +2773,12 @@ const Console = (() => {
 
     input.addEventListener('keydown', (e) => {
       // Leave composing keys alone and let the input event handle them
-      if (e.isComposing || e.keyCode === 229) return;
+      if (composing || e.isComposing || e.keyCode === 229) return;
       const code = IME_SPECIAL_KEYS[e.key];
       if (code == null) return;
+      // Touch keyboards: let Backspace/Delete go through the input events above so
+      // holding the key keeps repeating (iOS does not repeat keydown).
+      if (isTouchDevice() && (e.key === 'Backspace' || e.key === 'Delete')) return;
       e.preventDefault();
       markKey(e.key);
       sendKeyPair(code, 0);
