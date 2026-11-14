@@ -22,7 +22,7 @@ set "GUARD_LOG=%~dp0logs\guardian.log"
 if not exist "%~dp0logs" mkdir "%~dp0logs" >nul 2>nul
 
 echo ===============================================
-echo   OC Emulator - Web Control Panel v2.2.1
+echo   OC Emulator - Web Control Panel v2.2.3
 echo ===============================================
 echo.
 

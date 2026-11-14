@@ -459,6 +459,39 @@ const DiskEditor = (() => {
     return !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
   }
 
+  // On phones the in-panel upload progress lives inside the floating file viewer,
+  // which is hidden while browsing the tree. Uploads therefore report to the
+  // global floating progress card instead of the editor pane.
+  function useFloatingProgress() {
+    return isTouchUi() || window.innerWidth <= 767;
+  }
+
+  function uploadOverallFraction(diskPath) {
+    const session = getSession(diskPath);
+    const items = session.uploadItems || [];
+    if (!items.length) return 0;
+    let sum = 0;
+    for (const item of items) {
+      if (item.status === 'uploading') {
+        // The server write phase has no percentage; keep the sending value (70%)
+        const pct = Number.isFinite(item.percent) ? item.percent : 70;
+        sum += Math.max(0, Math.min(100, pct)) / 100;
+      } else if (item.status === 'done' || item.status === 'error' || item.status === 'skipped') {
+        sum += 1;
+      }
+    }
+    return sum / items.length;
+  }
+
+  function syncFloatingProgress(diskPath) {
+    if (!useFloatingProgress() || !App.UploadToast) return;
+    const session = getSession(diskPath);
+    const items = session.uploadItems || [];
+    const index = items.findIndex(it => it.status === 'uploading');
+    if (index >= 0) App.UploadToast.title(`${index + 1}/${items.length} ${items[index].name}`);
+    App.UploadToast.progress(uploadOverallFraction(diskPath));
+  }
+
   function bindFileRow(diskPath, row, openFn) {
     let lastTapAt = 0;
     row.addEventListener('click', () => {
@@ -964,7 +997,8 @@ const DiskEditor = (() => {
   function showUploadList(diskPath) {
     const box = uploadListBox(diskPath);
     if (!box) return;
-    box.style.display = '';
+    // Phones use the global floating card, never the in-panel list
+    if (!useFloatingProgress()) box.style.display = '';
     applyUploadListCollapsed(diskPath);
     renderUploadRows(diskPath);
     updateUploadSummary(diskPath);
@@ -1071,12 +1105,14 @@ const DiskEditor = (() => {
     if (!row) {
       // The tab was rebuilt, so re-render the whole list
       renderUploadRows(diskPath);
+      syncFloatingProgress(diskPath);
       return;
     }
     const nameEl = row.querySelector('.disk-upload-name');
     if (patch.name) nameEl.textContent = patch.name;
     if (patch.path) nameEl.title = patch.path;
     paintUploadRow(diskPath, index);
+    syncFloatingProgress(diskPath);
   }
 
   // Update the header summary: done / total (failures)
@@ -1386,7 +1422,8 @@ const DiskEditor = (() => {
     const input = document.createElement('input');
     input.type = 'file';
     input.multiple = true;
-    input.style.display = 'none';
+    // Off-screen styling (not display:none): iOS Safari sometimes ignores click() on a display:none input
+    input.className = 'file-input-hidden';
     document.body.appendChild(input);
     pendingFileInput = input;
     input.addEventListener('change', () => {
@@ -1488,6 +1525,9 @@ const DiskEditor = (() => {
 
     // Upload the files one by one, tracking each in the upload list
     startUploadList(diskPath, list);
+    if (useFloatingProgress() && App.UploadToast) {
+      App.UploadToast.begin(I18N.t('disk.uploading-files', { n: list.length }));
+    }
     for (let i = 0; i < list.length; i++) {
       const file = list[i];
       let targetName = file.name;
@@ -1546,9 +1586,17 @@ const DiskEditor = (() => {
       App.setStatus(successCount > 0
         ? I18N.t('disk.uploaded', { n: successCount })
         : I18N.t('disk.upload-skipped'));
+      if (useFloatingProgress() && App.UploadToast) {
+        App.UploadToast.done(successCount > 0
+          ? I18N.t('disk.uploaded', { n: successCount })
+          : I18N.t('disk.upload-skipped'));
+      }
     } else {
       App.setStatus(I18N.t('disk.upload-summary', { ok: successCount, fail: errors.length }));
       alert(I18N.t('disk.upload-failed') + '\n' + errors.join('\n'));
+      if (useFloatingProgress() && App.UploadToast) {
+        App.UploadToast.fail(I18N.t('disk.upload-summary', { ok: successCount, fail: errors.length }));
+      }
     }
   }
 

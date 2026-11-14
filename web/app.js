@@ -138,8 +138,14 @@ const App = (() => {
       okBtn.style.display = '';
     }
 
+    function setTitle(text) {
+      if (!root || root.hidden || !text) return;
+      titleEl.textContent = text;
+    }
+
     return {
       begin,
+      title: setTitle,
       progress: setProgress,
       done: (text) => finish(text || I18N.t('upload.done'), true),
       fail: (text) => finish(text || I18N.t('upload.failed'), false),
@@ -254,7 +260,7 @@ const App = (() => {
   }
 
   // ---------- App version (header badge) ----------
-  // The server formats it per channel: v2.2.1(R) for Release, v2.2.2(B) for Beta
+  // The server formats it per channel: v2.2.3(R) for Release, v2.2.3(B) for Beta
   let versionText = '';
 
   function welcomeSubtitle() {
@@ -2583,7 +2589,7 @@ const App = (() => {
   }
 
   return {
-    state, $, $$, api, fileToBase64, uploadFile,
+    state, $, $$, api, fileToBase64, uploadFile, UploadToast,
     init, refreshVMs, refreshMods, openVMTab, openModTab, openTab, closeTab, activateTab,
     setSidebarMode,
     wsSend, wsSubscribe, setStatus, setStatusRight,
