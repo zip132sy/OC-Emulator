@@ -104,25 +104,32 @@ const App = (() => {
       root.classList.remove('collapsed');
     }
 
+    // The card appears at once in a "loading" state (animated bar, no percentage)
+    // so even a slow first server response never looks like nothing happened.
     function begin(title) {
       build();
       root.hidden = false;
       root.classList.remove('collapsed', 'done', 'failed');
+      root.classList.add('pending');
       titleEl.textContent = title || '';
-      pctEl.textContent = '0%';
-      barEl.style.width = '0%';
+      pctEl.textContent = I18N.t('upload.loading');
+      barEl.style.width = '';
       okBtn.style.display = 'none';
     }
 
     function setProgress(ratio) {
       if (!root || root.hidden) return;
       const p = Math.max(0, Math.min(1, Number(ratio) || 0));
+      // Stay in the loading state until real progress arrives
+      if (p <= 0) return;
+      root.classList.remove('pending');
       pctEl.textContent = Math.round(p * 100) + '%';
       barEl.style.width = (p * 100) + '%';
     }
 
     function finish(text, ok) {
       if (!root || root.hidden) return;
+      root.classList.remove('pending');
       titleEl.textContent = text || '';
       root.classList.toggle('done', !!ok);
       root.classList.toggle('failed', !ok);
@@ -2303,10 +2310,34 @@ const App = (() => {
   // Prebuilt images come from the separate OC-Emulator-Disks repository; OpenOS
   // releases can also be assembled locally from the upstream loot tree.
   async function openOpenOSVersions() {
+    let bodyEl = null;
+    const bindRows = () => {
+      if (!bodyEl) return;
+      bodyEl.querySelectorAll('button[data-install]').forEach((btn) => {
+        btn.addEventListener('click', () => installDisk(btn));
+      });
+      bodyEl.querySelectorAll('button[data-dl]').forEach((btn) => {
+        btn.addEventListener('click', () => downloadOpenOS(btn));
+      });
+    };
+
+    // Open the dialog at once with a loading hint: reading the remote catalog can
+    // take seconds and the click must give instant feedback instead of a freeze.
+    Modal.open({
+      title: I18N.t('openos.title'),
+      size: 'small',
+      bodyHTML: `<p class="hint" style="margin:0;line-height:1.6;">${I18N.t('openos.loading')}</p>`,
+      footerHTML: `<button class="btn" data-action="modal-close">${I18N.t('settings.cancel')}</button>`,
+      onMount(body) { bodyEl = body; },
+    });
+
     let data = null;
     try {
       data = await api('openos/catalog');
     } catch (e) {
+      if (bodyEl) {
+        bodyEl.innerHTML = `<p class="hint" style="margin:0;line-height:1.6;">${escapeHtml(I18N.t('openos.list-failed') + e.message)}</p>`;
+      }
       setStatus(I18N.t('openos.list-failed') + e.message, 'err');
       return;
     }
@@ -2341,26 +2372,15 @@ const App = (() => {
       ? (catalog.stale ? `<p class="hint" style="margin:0 0 8px;">${I18N.t('openos.stale')}</p>` : '')
       : `<p class="hint" style="margin:0 0 8px;">${escapeHtml(I18N.t('openos.repo-unavailable', { error: catalog.error || '' }))}</p>`;
 
-    Modal.open({
-      title: I18N.t('openos.title'),
-      size: 'small',
-      bodyHTML: `
+    if (!bodyEl) return;
+    bodyEl.innerHTML = `
         <p class="hint" style="margin:0 0 12px;line-height:1.6;">${I18N.t('openos.hint')}</p>
         <div class="section-title">${I18N.t('openos.repo-section')}</div>
         ${repoNote}
         ${diskRows || `<p class="hint" style="margin:0 0 8px;">${I18N.t('openos.repo-empty')}</p>`}
         <div class="section-title" style="margin-top:16px;">${I18N.t('openos.build-section')}</div>
-        ${buildRows}`,
-      footerHTML: `<button class="btn" data-action="modal-close">${I18N.t('settings.cancel')}</button>`,
-      onMount(body) {
-        body.querySelectorAll('button[data-install]').forEach((btn) => {
-          btn.addEventListener('click', () => installDisk(btn));
-        });
-        body.querySelectorAll('button[data-dl]').forEach((btn) => {
-          btn.addEventListener('click', () => downloadOpenOS(btn));
-        });
-      },
-    });
+        ${buildRows}`;
+    bindRows();
   }
 
   // Read an NDJSON progress stream and return the final result object
@@ -2400,21 +2420,30 @@ const App = (() => {
     const force = btn.getAttribute('data-force') === '1';
     const row = btn.closest('[data-disk]');
     const statusEl = row ? row.querySelector('[data-status]') : null;
+    const labelEl = row ? row.querySelector('label') : null;
     const setRowStatus = (text) => { if (statusEl) statusEl.textContent = text; };
     btn.disabled = true;
     setRowStatus(I18N.t('openos.starting'));
+    // Show the progress card before the request starts: the download can take a
+    // while to produce its first byte and the click must give instant feedback.
+    UploadToast.begin((labelEl ? labelEl.textContent : file));
     try {
       const result = await streamEndpoint('/api/openos/install', { file, force }, (evt) => {
-        if (evt.percent != null) setRowStatus(I18N.t('openos.progress', { percent: evt.percent }));
+        if (evt.percent != null) {
+          setRowStatus(I18N.t('openos.progress', { percent: evt.percent }));
+          UploadToast.progress(evt.percent / 100);
+        }
       });
       if (!result || !result.ok) throw new Error((result && result.error) || I18N.t('openos.failed'));
       const doneText = I18N.t('openos.done', { path: result.path }) + (result.efi ? ' + ' + result.efi.path : '');
       setRowStatus(doneText);
+      UploadToast.done(I18N.t('openos.done', { path: result.path }));
       btn.disabled = false;
       btn.setAttribute('data-force', '1');
       btn.textContent = I18N.t('openos.redownload');
       setStatus(doneText);
     } catch (e) {
+      UploadToast.fail(I18N.t('openos.failed') + ' ' + e.message);
       btn.disabled = false;
       setRowStatus(I18N.t('openos.failed') + ' ' + e.message);
     }
@@ -2426,20 +2455,27 @@ const App = (() => {
     const force = btn.getAttribute('data-force') === '1';
     const row = btn.closest('[data-version]');
     const statusEl = row ? row.querySelector('[data-status]') : null;
+    const labelEl = row ? row.querySelector('label') : null;
     const setRowStatus = (text) => { if (statusEl) statusEl.textContent = text; };
     btn.disabled = true;
     setRowStatus(I18N.t('openos.starting'));
+    UploadToast.begin((labelEl ? labelEl.textContent : id));
     try {
       const result = await streamEndpoint('/api/openos/build', { version: id, force }, (evt) => {
-        if (evt.percent != null) setRowStatus(I18N.t('openos.progress', { percent: evt.percent }));
+        if (evt.percent != null) {
+          setRowStatus(I18N.t('openos.progress', { percent: evt.percent }));
+          UploadToast.progress(evt.percent / 100);
+        }
       });
       if (!result || !result.ok) throw new Error((result && result.error) || I18N.t('openos.failed'));
       setRowStatus(I18N.t('openos.done', { path: result.path }));
+      UploadToast.done(I18N.t('openos.done', { path: result.path }));
       btn.disabled = false;
       btn.setAttribute('data-force', '1');
       btn.textContent = I18N.t('openos.rebuild');
       setStatus(I18N.t('openos.done', { path: result.path }));
     } catch (e) {
+      UploadToast.fail(I18N.t('openos.failed') + ' ' + e.message);
       btn.disabled = false;
       setRowStatus(I18N.t('openos.failed') + ' ' + e.message);
     }

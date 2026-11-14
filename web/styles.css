@@ -1983,6 +1983,18 @@ body.console-fullscreen { overflow: hidden; }
   background: var(--accent);
   transition: width 0.15s linear;
 }
+/* Loading state before the first real progress event (e.g. while the server
+   prepares a system disk download): sweep the bar instead of showing 0%. */
+.upload-toast.pending .upload-toast-bar i {
+  width: 35%;
+  transition: none;
+  animation: upload-toast-sweep 1.1s ease-in-out infinite;
+}
+@keyframes upload-toast-sweep {
+  0%   { margin-left: 0; }
+  50%  { margin-left: 65%; }
+  100% { margin-left: 0; }
+}
 .upload-toast.done .upload-toast-bar i { background: var(--ok, #5f9e5f); }
 .upload-toast.failed .upload-toast-bar i { background: var(--err); }
 .upload-toast-actions {
