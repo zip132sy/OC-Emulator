@@ -462,6 +462,8 @@ async function applyUpdate() {
   out.after = after.ok ? after.stdout.trim().slice(0, 7) : null;
   out.changed = !!(out.before && out.after && out.before !== out.after);
   out.ok = true;
+  // An explicit update resumes normal auto-update behaviour
+  clearRollbackPin();
   return out;
 }
 
@@ -573,6 +575,8 @@ async function applyUpdateStreaming(res) {
   out.after = after.ok ? after.stdout.trim().slice(0, 7) : null;
   out.changed = !!(out.before && out.after && out.before !== out.after);
   out.ok = true;
+  // An explicit update resumes normal auto-update behaviour
+  clearRollbackPin();
   progress('verify', 96, `${out.before || '?'} -> ${out.after || '?'}`);
   progress('done', 100, `${((Date.now() - startedAt) / 1000).toFixed(1)}s`);
   emit({ done: true, result: out });
@@ -646,13 +650,48 @@ async function streamDiskInstall(res, entry) {
   if (!res.writableEnded) res.end();
 }
 
+// ---------- Rollback pin ----------
+// The launcher runs an auto-update on every start, which would fast-forward a
+// rolled-back checkout straight back to the newest commit. A pin file records the
+// chosen version; the launcher skips auto-update while it exists and an explicit
+// update clears it.
+const ROLLBACK_PIN = path.join(CACHE_DIR, 'rollback.json');
+
+function readRollbackPin() {
+  try {
+    const pin = JSON.parse(fs.readFileSync(ROLLBACK_PIN, 'utf8'));
+    return pin && typeof pin === 'object' ? pin : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeRollbackPin(sha) {
+  try {
+    fs.mkdirSync(CACHE_DIR, { recursive: true });
+    fs.writeFileSync(ROLLBACK_PIN, JSON.stringify({ sha: sha || null, at: new Date().toISOString() }, null, 2));
+  } catch (e) {
+    logger.log('[update] 写入回退标记失败: ' + e.message);
+  }
+}
+
+function clearRollbackPin() {
+  try {
+    if (fs.existsSync(ROLLBACK_PIN)) fs.rmSync(ROLLBACK_PIN, { force: true });
+  } catch (e) {
+    logger.log('[update] 清除回退标记失败: ' + e.message);
+  }
+}
+
 // List recent versions for the "rollback" picker in settings
 async function listVersions() {
-  const out = { ok: false, error: null, current: null, versions: [] };
+  const out = { ok: false, error: null, current: null, versions: [], pinned: null };
   if (!fs.existsSync(path.join(PROJECT_DIR, '.git'))) { out.error = 'not-a-repo'; return out; }
   const head = await gitRun(['rev-parse', 'HEAD'], 15000);
   out.current = head.ok ? head.stdout.trim().slice(0, 7) : null;
   out.versions = await gitLogLines(['log', '--pretty=%H%x1f%h%x1f%s%x1f%ad', '--date=short', '-n', '15', 'HEAD']);
+  const pin = readRollbackPin();
+  if (pin) out.pinned = { sha: String(pin.sha || '').slice(0, 7), at: pin.at || null };
   out.ok = true;
   return out;
 }
@@ -677,6 +716,9 @@ async function rollbackTo(ref) {
   out.after = after.ok ? after.stdout.trim().slice(0, 7) : null;
   out.changed = !!(out.before && out.after && out.before !== out.after);
   out.ok = true;
+  // A rollback has to survive the next launch: the launcher's auto-update would
+  // otherwise fast-forward the branch straight back to the newest commit.
+  writeRollbackPin(out.after || ref);
   return out;
 }
 

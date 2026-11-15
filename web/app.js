@@ -1019,6 +1019,15 @@ const App = (() => {
         </li>`;
     }).join('');
 
+    const pinnedNote = v.pinned
+      ? `<div style="color:var(--warn);font-size:12px;margin-bottom:8px;">
+           ${escapeHtml(trLang(
+             `当前已回退到 ${v.pinned.sha}，自动更新已暂停；在「检查更新」中应用更新即可恢复。`,
+             `Rolled back to ${v.pinned.sha}; auto-update is paused. Apply an update from "Check update" to resume.`
+           ))}
+         </div>`
+      : '';
+
     Modal.open({
       title: trLang('版本回退', 'Rollback'),
       size: 'medium',
@@ -1026,6 +1035,7 @@ const App = (() => {
         <div style="color:var(--fg-muted);font-size:12px;margin-bottom:8px;">
           ${escapeHtml(trLang('选择要回退到的历史版本（会覆盖本地对已跟踪文件的修改）。', 'Choose a previous version (local changes to tracked files will be overwritten).'))}
         </div>
+        ${pinnedNote}
         <ul style="margin:0;padding:0;list-style:none;max-height:300px;overflow:auto;">${rows}</ul>
       `,
       footerHTML: `<button class="btn" data-action="modal-close">${escapeHtml(trLang('关闭', 'Close'))}</button>`,
@@ -1059,8 +1069,8 @@ const App = (() => {
     if (!a.changed) { showUpdateModal('info', { message: trLang('已经处于该版本。', 'Already at this version.') }); return; }
 
     const ask = trLang(
-      `版本回退完成（${a.before} → ${a.after}）。\n\n是否立即重启后端使回退生效？`,
-      `Rollback complete (${a.before} -> ${a.after}).\n\nRestart the backend now to apply it?`
+      `版本回退完成（${a.before} → ${a.after}）。\n\n自动更新已暂停，避免下次启动又拉回最新版本。\n是否立即重启后端使回退生效？`,
+      `Rollback complete (${a.before} -> ${a.after}).\n\nAuto-update is paused so the next launch does not pull the newest version again.\nRestart the backend now to apply it?`
     ) + restartWarn();
     if (confirm(ask)) await restartServer(true);
   }
