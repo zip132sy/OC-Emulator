@@ -10,6 +10,42 @@ const os = require('os');
 const { execFile, spawn } = require('child_process');
 const { WebSocketServer } = require('ws');
 
+// Local modules can be lost (partial download / accidental delete). Starting with
+// "node server.js" skips the launcher checks, so the shared repair step runs once
+// here instead of dying with a bare MODULE_NOT_FOUND stack.
+(function ensureLocalModules() {
+  const LOCAL_MODULES = [
+    'vmManager', 'modsManager', 'diskIO', 'luaCheck', 'modemHub', 'internetProxy',
+    'deviceBus', 'floppyTemplates', 'sysInfo', 'updateSource', 'openosVersions',
+    'diskCatalog', 'modTransfer',
+  ];
+  const missingOf = (list) => list.filter((name) => {
+    try { require.resolve('./lib/' + name); return false; } catch { return true; }
+  });
+
+  const missing = missingOf(LOCAL_MODULES);
+  if (missing.length === 0) return;
+
+  console.error('[FATAL] 缺少本地模块: ' + missing.map((m) => 'lib/' + m + '.js').join(', '));
+  const repairScript = path.join(__dirname, 'lib', 'repair.js');
+  if (fs.existsSync(repairScript)) {
+    console.error('[INFO] 正在尝试自动修复 (lib/repair.js)...');
+    try {
+      require('child_process').execFileSync(process.execPath, [repairScript], { cwd: __dirname, stdio: 'inherit' });
+    } catch (e) {
+      console.error('[WARN] 修复过程出错: ' + (e && e.message ? e.message : e));
+    }
+  } else {
+    console.error('[WARN] lib/repair.js 也不存在, 无法自动修复。');
+  }
+
+  const still = missingOf(LOCAL_MODULES);
+  if (still.length === 0) return;
+  console.error('[ERROR] 以下文件仍然缺失, 请运行 sh run.sh (Windows: run.bat) 或重新克隆仓库:');
+  for (const m of still) console.error('        - lib/' + m + '.js');
+  process.exit(1);
+})();
+
 const { VMManager } = require('./lib/vmManager');
 const { ModsManager } = require('./lib/modsManager');
 const { DiskIO } = require('./lib/diskIO');
