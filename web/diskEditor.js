@@ -183,11 +183,19 @@ const DiskEditor = (() => {
       const info = await App.api(`disks/${diskApiPath(diskPath)}/info`);
       const session = getSession(diskPath);
       session.info = info;
-      if (info.locked) {
-        renderLocked(diskPath);
-      } else {
+      // A protected image stays locked; editing is allowed once this session
+      // has been verified with the password (sessionUnlocked).
+      const open = !info.locked || info.sessionUnlocked;
+      if (open) {
         renderUnlocked(diskPath);
         loadTree(diskPath);
+      } else {
+        renderLocked(diskPath);
+      }
+      const labelEl = document.getElementById(`disk-label-${cssEsc(diskPath)}`);
+      if (labelEl) {
+        const base = I18N.t('disk.label-prefix') + diskPath;
+        labelEl.textContent = info.protected ? base + ' 🔒' : base;
       }
     } catch (e) {
       setStatus(diskPath, I18N.t('disk.load-failed') + e.message);
@@ -907,7 +915,7 @@ const DiskEditor = (() => {
     const r = await App.api(`disks/${diskApiPath(diskPath)}/unlock`, { method: 'POST', body: {} });
     if (r && r.ok) {
       await loadInfo(diskPath);
-      App.setStatus(I18N.t('disk.unlocked'));
+      App.setStatus(I18N.t('disk.session-unlocked'));
       return;
     }
     openLockDialog(diskPath, 'unlock', r && r.code === 'wrong-password');
@@ -969,7 +977,8 @@ const DiskEditor = (() => {
             if (r && r.ok) {
               Modal.close();
               await loadInfo(diskPath);
-              App.setStatus(I18N.t(isLock ? 'disk.locked' : 'disk.unlocked'));
+              // The image stays locked; only this session was opened
+              App.setStatus(I18N.t(isLock ? 'disk.locked' : 'disk.session-unlocked'));
             } else {
               showError(r);
             }

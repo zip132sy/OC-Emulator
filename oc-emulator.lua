@@ -809,6 +809,12 @@ local config = {
   -- Disk paths (relative to vmDir)
   disk1File = hw.disk1 and hw.disk1 ~= "empty" and (vmDir .. "/" .. hw.disk1) or nil,
   disk2File = hw.disk2 and hw.disk2 ~= "empty" and (vmDir .. "/" .. hw.disk2) or nil,
+  -- Disk lock passwords: the control panel reads them from the local .key files
+  -- and passes them through the environment, so the guest boots with the files
+  -- visible while the image itself stays locked for the UI and other tools.
+  -- (Inlined instead of locals: the main chunk is at Lua's 200-local limit.)
+  disk1Password = os.getenv("OC_DISK1_PASSWORD"),
+  disk2Password = os.getenv("OC_DISK2_PASSWORD"),
   floppyFile = hw.floppy and hw.floppy ~= "empty" and (vmDir .. "/" .. hw.floppy) or nil,
   eepromFile = (hw.eeprom and hw.eeprom ~= "built-in") and (vmDir .. "/" .. hw.eeprom) or nil,
   -- Boot order
@@ -1131,9 +1137,14 @@ function diskPersist.flush(force)
 end
 
 -- Load a disk from file (.ocd and legacy .img)
-local function loadDisk(path)
+-- password: unlocks a password-protected image without clearing its lock flag
+local function loadDisk(path, password)
   -- Try .ocd first
-  local loaded = disk.load(path)
+  local loaded, loadErr = disk.load(path, password)
+  if loaded and loaded.files == nil then
+    _stderr:write("[emulator] disk is locked (no matching password): " .. tostring(path) .. "\n")
+    return false
+  end
   if loaded then
     vdisk.label = loaded.label or "Untitled"
     vdisk.files = loaded.files or {}
@@ -3569,7 +3580,7 @@ fs2Label = "HDD2"
 fs2Size = 4 * 1024 * 1024
 fs2Tier = 3
 if config.disk2File then
-  local loaded2 = disk.load(config.disk2File)
+  local loaded2 = disk.load(config.disk2File, config.disk2Password)
   if loaded2 then
     fs2Files = loaded2.files or {}
     fs2Label = loaded2.label or "HDD2"
@@ -5160,7 +5171,7 @@ if projectPath then
 elseif config.diskFile then
   dlog("loading disk:", config.diskFile)
   _stderr:write("[emulator] loading disk: " .. config.diskFile .. "\n")
-  local diskLoaded = loadDisk(config.diskFile)
+  local diskLoaded = loadDisk(config.diskFile, config.disk1Password)
   if not diskLoaded then
     dlog("ERROR: disk not found")
     _stderr:write("[emulator] ERROR: disk not found: " .. config.diskFile .. "\n")

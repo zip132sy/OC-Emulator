@@ -932,7 +932,7 @@ function removeDiskKey(diskPath) {
 // Lock state of one image (never unlocks it)
 function diskLockInfo(diskPath) {
   const exists = fs.existsSync(diskPath);
-  if (!exists) return { exists: false, locked: false, hasPassword: false, hasKey: false };
+  if (!exists) return { exists: false, locked: false, hasPassword: false, protected: false, hasKey: false };
   let locked = false;
   let hasPassword = false;
   try {
@@ -940,15 +940,41 @@ function diskLockInfo(diskPath) {
     locked = !!info.locked;
     hasPassword = !!info.hasPassword;
   } catch (e) { /* unreadable header: treat as unlocked */ }
-  return { exists: true, locked, hasPassword, hasKey: !!readDiskKey(diskPath) };
+  return { exists: true, locked, hasPassword, protected: hasPassword, hasKey: !!readDiskKey(diskPath) };
 }
 
-// Unlock every locked disk of a VM with the locally stored key.
-// Returns the slots that still need a password from the user.
-function autoUnlockVmDisks(vmName) {
+// Editing / reading a locked image requires an explicit unlock. A successful
+// verification is kept in memory for a while instead of clearing the image flag,
+// so the disk stays locked for scripts, exports and other tools.
+const DISK_SESSION_TTL = 30 * 60 * 1000;
+const diskSessions = new Map();   // diskPath -> { password, expires }
+
+function grantDiskSession(diskPath, password) {
+  diskSessions.set(diskPath, { password, expires: Date.now() + DISK_SESSION_TTL });
+}
+
+function diskSessionPassword(diskPath) {
+  const s = diskSessions.get(diskPath);
+  if (!s) return null;
+  if (s.expires < Date.now()) {
+    diskSessions.delete(diskPath);
+    return null;
+  }
+  return s.password;
+}
+
+function hasDiskSession(diskPath) {
+  return !!diskSessionPassword(diskPath);
+}
+
+// Passwords the guest needs to boot: taken from the local .key files only.
+// Returns { passwords: { disk1, disk2 }, pending: [slot...] } where pending lists
+// the locked images that have no usable key yet.
+function vmDiskAccess(vmName) {
   const cfg = vmManager.getConfig(vmName);
+  const passwords = {};
   const pending = [];
-  if (!cfg || !cfg.hardware) return pending;
+  if (!cfg || !cfg.hardware) return { passwords, pending };
   const vmDir = path.join(VMS_DIR, vmName);
   for (const slot of ['disk1', 'disk2', 'floppy']) {
     const file = cfg.hardware[slot];
@@ -956,24 +982,26 @@ function autoUnlockVmDisks(vmName) {
     const diskPath = path.join(vmDir, file);
     const info = diskLockInfo(diskPath);
     if (!info.exists || !info.locked) continue;
+    if (!info.protected) {
+      // Legacy plain lock: there is no secret, just clear the flag
+      try { diskIO.unlock(diskPath); } catch (e) { /* reported as pending below */ }
+      continue;
+    }
     const key = readDiskKey(diskPath);
     if (key) {
-      try {
-        diskIO.unlock(diskPath, key.password);
-        logger.log(`[disk] ${vmName}/${slot} auto-unlocked with the local key`);
-        continue;
-      } catch (e) {
-        logger.error(`[disk] stored key failed for ${vmName}/${slot}: ${e.message}`);
-      }
+      // Verified by the emulator: a wrong key just leaves the disk locked
+      passwords[slot] = key.password;
+      continue;
     }
     pending.push({
       slot,
       file,
       path: path.relative(PROJECT_DIR, diskPath).replace(/\\/g, '/'),
-      label: info.hasPassword ? 'password' : 'lock',
+      protected: info.protected,
+      hasKey: !!key,
     });
   }
-  return pending;
+  return { passwords, pending };
 }
 
 // ---------- Static file serving ----------
@@ -1823,18 +1851,18 @@ async function handleApi(req, res, body) {
       }
       // /api/vms/:name/start
       if (parts[3] === 'start' && method === 'POST') {
-        // Password-locked disks are unlocked with the local key; anything left
-        // over is reported so the UI can ask for the password or a key file.
-        const locked = autoUnlockVmDisks(vmName);
-        if (locked.length) {
+        // Locked images stay locked; the guest gets its password from the local
+        // key file. Without a key the UI asks for the password or a key upload.
+        const { passwords, pending } = vmDiskAccess(vmName);
+        if (pending.length) {
           return json(res, {
             ok: false,
             code: 'disk-locked',
             error: 'disk locked',
-            locked,
+            locked: pending,
           }, 409);
         }
-        const result = vmManager.start(vmName);
+        const result = vmManager.start(vmName, { diskPasswords: passwords });
         return json(res, result);
       }
       // /api/vms/:name/stop
@@ -2059,33 +2087,34 @@ async function handleApi(req, res, body) {
         if (parts[3] === 'unlock' && method === 'POST') {
           let password = null;
           try { password = (JSON.parse(body || '{}') || {}).password || null; } catch (e) { /* no body */ }
-          // A machine that already holds the key unlocks on its own
-          if (!password) {
-            const key = readDiskKey(diskPath);
-            if (key) password = key.password;
-          }
-          try {
-            diskIO.unlock(diskPath, password);
-            return json(res, { ok: true });
-          } catch (e) {
-            const msg = String(e.message || '');
-            if (/wrong password/i.test(msg)) {
-              return json(res, { ok: false, code: 'wrong-password', error: 'wrong password' }, 403);
-            }
-            if (/password required/i.test(msg)) {
+          const info = diskLockInfo(diskPath);
+          if (!info.exists) return json(res, { error: 'disk not found' }, 404);
+          // A protected image is never unlocked in the header; the verification
+          // only opens this server session for editing.
+          if (info.protected) {
+            if (!password) {
               return json(res, { ok: false, code: 'password-required', error: 'password required' }, 401);
             }
-            throw e;
+            let ok = false;
+            try { ok = diskIO.checkPassword(diskPath, password); } catch (e) { ok = false; }
+            if (!ok) return json(res, { ok: false, code: 'wrong-password', error: 'wrong password' }, 403);
+            grantDiskSession(diskPath, password);
+            return json(res, { ok: true, sessionUnlocked: true, locked: true });
           }
+          // Plain lock (legacy): clear the flag
+          diskIO.unlock(diskPath);
+          return json(res, { ok: true, sessionUnlocked: true, locked: false });
         }
         if (parts[3] === 'lock' && method === 'POST') {
           let password = null;
           try { password = (JSON.parse(body || '{}') || {}).password || null; } catch (e) { /* no body */ }
           if (password) {
             // Store the verifier in the image and keep the local key so this
-            // machine can unlock it again on boot.
+            // machine can boot it again. Any open editing session is dropped:
+            // from now on the disk is locked for the UI too.
             diskIO.setPassword(diskPath, password);
             writeDiskKey(diskPath, password);
+            diskSessions.delete(diskPath);
             return json(res, { ok: true, hasPassword: true, hasKey: true });
           }
           diskIO.lock(diskPath);
@@ -2093,13 +2122,17 @@ async function handleApi(req, res, body) {
         }
         // Lock state + password/key availability (read-only)
         if (parts[3] === 'lock-info' && method === 'GET') {
-          return json(res, diskLockInfo(diskPath));
+          return json(res, Object.assign(diskLockInfo(diskPath), {
+            sessionUnlocked: hasDiskSession(diskPath),
+          }));
         }
         // Change or remove the password of a locked disk
         if (parts[3] === 'password' && (method === 'POST' || method === 'DELETE')) {
           if (method === 'DELETE') {
             diskIO.clearPassword(diskPath);
+            diskIO.unlock(diskPath);
             removeDiskKey(diskPath);
+            diskSessions.delete(diskPath);
             return json(res, { ok: true, hasPassword: false, hasKey: false });
           }
           const data = JSON.parse(body || '{}') || {};
@@ -2149,13 +2182,9 @@ async function handleApi(req, res, body) {
           try { valid = diskIO.checkPassword(diskPath, password); } catch (e) { valid = false; }
           if (!valid) return json(res, { ok: false, code: 'wrong-key', error: 'wrong key' }, 403);
           writeDiskKey(diskPath, password);
-          // Uploading a key is also the "unlock on this machine" action
-          let unlocked = false;
-          try {
-            diskIO.unlock(diskPath, password);
-            unlocked = true;
-          } catch (e) { /* key stored; the disk may still be locked for another reason */ }
-          return json(res, { ok: true, hasKey: true, unlocked });
+          // A key upload counts as the explicit unlock for this session
+          grantDiskSession(diskPath, password);
+          return json(res, { ok: true, hasKey: true, sessionUnlocked: true });
         }
         if (parts[3] === 'key' && method === 'DELETE') {
           return json(res, { ok: true, removed: removeDiskKey(diskPath) });
@@ -2164,6 +2193,8 @@ async function handleApi(req, res, body) {
           const info = diskIO.getInfo(diskPath);
           if (mirrorFolder) info.mirror = mirrorFolder;
           info.hasKey = !!readDiskKey(diskPath);
+          info.protected = !!info.hasPassword;
+          info.sessionUnlocked = hasDiskSession(diskPath);
           return json(res, info);
         }
         if (parts[3] === 'tree' && method === 'GET') {
@@ -2172,7 +2203,7 @@ async function handleApi(req, res, body) {
             const tree = diskIO.listFolderTree(mirrorFolder);
             return json(res, tree);
           }
-          const tree = diskIO.listTree(diskPath);
+          const tree = diskIO.listTree(diskPath, diskSessionPassword(diskPath));
           return json(res, tree);
         }
         if (parts[3] === 'read' && method === 'GET') {
@@ -2182,7 +2213,7 @@ async function handleApi(req, res, body) {
             const result = diskIO.readFromFolder(mirrorFolder, innerPath);
             return json(res, { type: result.type, content: result.content, path: innerPath, ok: result.ok, error: result.error });
           }
-          const fileData = diskIO.read(diskPath, innerPath);
+          const fileData = diskIO.read(diskPath, innerPath, diskSessionPassword(diskPath));
           return json(res, { type: fileData.type, content: fileData.content, path: innerPath, ok: fileData.ok, error: fileData.error });
         }
         // Download an inner file as raw bytes so the UI can show progress
@@ -2194,7 +2225,7 @@ async function handleApi(req, res, body) {
             if (mirrorFolder && !vmRunning && fs.existsSync(mirrorFolder)) {
               result = diskIO.readFromFolder(mirrorFolder, innerPath);
             } else {
-              result = diskIO.read(diskPath, innerPath);
+              result = diskIO.read(diskPath, innerPath, diskSessionPassword(diskPath));
             }
             if (!result || result.ok === false) throw new Error((result && result.error) || 'cannot read file');
             if (result.type !== 'file') throw new Error('target is not a file');
@@ -2220,7 +2251,7 @@ async function handleApi(req, res, body) {
             diskIO.writeToFolder(mirrorFolder, innerPath, data.content || '');
             return json(res, { ok: true });
           }
-          diskIO.write(diskPath, innerPath, data.content || '');
+          diskIO.write(diskPath, innerPath, data.content || '', diskSessionPassword(diskPath));
           return json(res, { ok: true });
         }
         if (parts[3] === 'remove' && method === 'DELETE') {
@@ -2229,7 +2260,7 @@ async function handleApi(req, res, body) {
             diskIO.removeFromFolder(mirrorFolder, innerPath);
             return json(res, { ok: true });
           }
-          diskIO.remove(diskPath, innerPath);
+          diskIO.remove(diskPath, innerPath, diskSessionPassword(diskPath));
           return json(res, { ok: true });
         }
         if (parts[3] === 'mkdir' && method === 'POST') {
@@ -2240,14 +2271,18 @@ async function handleApi(req, res, body) {
             diskIO.mkdirInFolder(mirrorFolder, innerPath);
             return json(res, { ok: true });
           }
-          diskIO.mkdir(diskPath, innerPath);
+          diskIO.mkdir(diskPath, innerPath, diskSessionPassword(diskPath));
           return json(res, { ok: true });
         }
         if (parts[3] === 'format' && method === 'POST') {
-          let password = null;
-          try { password = (JSON.parse(body || '{}') || {}).password || null; } catch (e) { /* no body */ }
+          let password = diskSessionPassword(diskPath);
+          try {
+            const data = JSON.parse(body || '{}') || {};
+            if (data.password) password = data.password;
+          } catch (e) { /* no body */ }
           diskIO.format(diskPath, password);
           removeDiskKey(diskPath);
+          diskSessions.delete(diskPath);
           return json(res, { ok: true });
         }
         // Mirror mode configuration

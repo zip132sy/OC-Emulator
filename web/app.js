@@ -1964,12 +1964,14 @@ const App = (() => {
           btn.disabled = true;
           try {
             for (const d of locked) {
-              const r = await api(`disks/${encodeURIComponent(d.path)}/unlock`, {
+              // Saving the key (not unlocking the image) lets the guest boot;
+              // the image itself stays locked for the UI and other tools.
+              const r = await api(`disks/${encodeURIComponent(d.path)}/key`, {
                 method: 'POST',
                 body: { password: input.value },
               });
               if (!r || !r.ok) {
-                fail(r && r.code === 'wrong-password' ? I18N.t('disk.wrong-password')
+                fail(r && (r.code === 'wrong-password' || r.code === 'wrong-key') ? I18N.t('disk.wrong-password')
                   : (r && r.error) || I18N.t('disk.unlock-failed'));
                 return;
               }
