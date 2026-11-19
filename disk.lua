@@ -47,6 +47,7 @@ local FLAG_LOCKED = 2          -- v4: disk locked
 local FLAG_TIER = 4            -- v4: tier field is valid
 local FLAG_ENCRYPT_V2 = 8      -- v4: 16-byte rolling-key encryption
 local FLAG_PASSWORD = 16       -- v4: lock password verifier is stored in UnlockToken+Reserved
+local FLAG_KEYED = 32          -- v4: body is encrypted with a password-derived key (UnlockToken+Reserved = salt)
 
 -- ============================================================
 -- Host filesystem access (must be captured at module load time)
@@ -214,10 +215,9 @@ local XOR_CHUNK = 4096        -- must divide XOR_STREAM_PERIOD
 local charByByte = {}
 for b = 0, 255 do charByByte[b] = string.char(b) end
 
-local function xorTransformV2(data, label)
+local function xorTransformSalt(data, salt)
   local n = #data
   if n == 0 then return "" end
-  local salt = deriveLabelSalt(label or "")
 
   -- Small input: byte by byte (precomputing the keystream is not worth it)
   if n <= XOR_STREAM_PERIOD then
@@ -264,6 +264,14 @@ local function xorTransformV2(data, label)
     end
   end
   return table.concat(out)
+end
+
+-- Label-derived transform (unprotected disks and protected disks created
+-- before the keyed format). The label is stored in plaintext, so this only
+-- obfuscates the body; a password-protected image uses xorTransformSalt with
+-- a password-derived key instead.
+local function xorTransformV2(data, label)
+  return xorTransformSalt(data, deriveLabelSalt(label or ""))
 end
 
 -- Raw LZW compression (no encryption; callers encrypt separately)
@@ -514,8 +522,55 @@ local function readProtection(path)
   local rest = f:read(HEADER_SIZE_V4 - 7)
   f:close()
   if not rest or #rest < HEADER_SIZE_V4 - 7 then return nil end
-  return { flags = rest:byte(1), verifier = rest:sub(27, 33) }
+  return { flags = rest:byte(1), extra = rest:sub(27, 33) }
 end
+
+-- ============================================================
+-- Keyed body encryption (FLAG_KEYED)
+--
+-- The label sits in plaintext in the header, so encrypting the body with a
+-- label-derived key means any tool that reads the header can decode the image.
+-- A keyed image instead derives its 16-byte key from the password + a random
+-- 7-byte salt (stored in the header) + the label; the salt alone reveals
+-- nothing. A wrong password fails the "OCPW" magic check after decryption.
+-- This is still a stream cipher (XOR), not modern crypto: it stops casual
+-- decoding, not a determined cryptanalyst.
+-- ============================================================
+local PASSWORD_MAGIC = "OCPW"
+
+local function makeSalt()
+  local seed = os.time() + math.floor((os.clock() or 0) * 1000000) + (math.random and math.random(1, 1000000) or 0)
+  local bytes = {}
+  for i = 1, 7 do
+    seed = (seed * 1103515245 + 12345) % 2147483648
+    bytes[i] = string.char(math.floor(seed / 65536) % 256)
+  end
+  return table.concat(bytes)
+end
+
+-- 16-byte key from password + salt + label (iterated mixing, no crypto libs)
+local function deriveKeyFromPassword(password, salt, label)
+  local key = {}
+  for i = 1, 16 do
+    key[i] = bxor((i * 53) % 256, XOR_KEY_V2[i])
+  end
+  local material = tostring(password or "") .. "\1" .. tostring(salt or "") .. "\1" .. tostring(label or "")
+  if #material == 0 then material = "\1" end
+  for round = 1, 96 do
+    local mix = (round * 31) % 256
+    for i = 1, #material do
+      local idx = ((i - 1) % 16) + 1
+      local v = bxor(key[idx], material:byte(i))
+      v = bxor(v, mix)
+      v = (v * 2 + (v >= 128 and 1 or 0)) % 256
+      key[idx] = v
+      local nxt = (idx % 16) + 1
+      key[nxt] = bxor(key[nxt], (v + i + round) % 256)
+    end
+  end
+  return key
+end
+
 
 -- v4 save: tier + locked parameters and V2 encryption
 -- @param path     output path
@@ -524,17 +579,35 @@ end
 -- @param size     disk capacity (bytes)
 -- @param tier     tier 1/2/3 (optional, default 3)
 -- @param locked   lock flag (optional, default false)
-function disk.save(path, label, files, size, tier, locked)
+-- @param password optional lock password:
+--                 string  -> protect with this password (keyed body encryption)
+--                 false/"" -> drop any existing protection
+--                 nil      -> keep the existing protection mode (a keyed image
+--                             cannot be rewritten without the password)
+function disk.save(path, label, files, size, tier, locked, password)
   label = label or "Untitled"
   size = size or (4 * 1024 * 1024)
   files = files or {}
   tier = tier or 3
   locked = locked or false
 
-  -- Writing the body must not drop protection: keep the password flag, the
-  -- verifier and the locked state of an existing protected image.
   local prev = readProtection(path)
-  local keepProtected = prev and band(prev.flags, FLAG_PASSWORD) ~= 0
+  local prevKeyed = prev and band(prev.flags, FLAG_KEYED) ~= 0
+  local prevProtected = prev and band(prev.flags, FLAG_PASSWORD) ~= 0
+
+  -- Which protection the new image gets
+  local mode          -- "keyed" | "legacy" | "none"
+  if password == false or password == "" then
+    mode = "none"                      -- explicit: strip protection
+  elseif password ~= nil then
+    mode = "keyed"                     -- explicit: protect with this password
+  elseif prevKeyed then
+    return false, "password required"  -- cannot re-encrypt without it
+  elseif prevProtected then
+    mode = "legacy"                    -- keep the old verifier-based scheme
+  else
+    mode = "none"
+  end
 
   if #label > 16 then label = label:sub(1, 16) end
   local labelPadded = label .. string.rep("\0", 16 - #label)
@@ -553,22 +626,27 @@ function disk.save(path, label, files, size, tier, locked)
     flags = FLAG_ENCRYPT_V2  -- ENCRYPT_V2 without COMPRESSED
   end
 
-  -- V2 encryption: 16-byte rolling key + label salt
-  compressed = xorTransformV2(compressed, label)
-
-  -- v4 flags
-  local verifier = string.rep("\0", 7)
-  if keepProtected then
-    flags = flags + FLAG_PASSWORD
-    flags = flags + FLAG_LOCKED      -- the image stays locked for every reader
-    verifier = prev.verifier
-  elseif locked then
-    flags = bxor(flags, FLAG_LOCKED)
+  local extra = string.rep("\0", 7)
+  if mode == "keyed" then
+    -- Keep the per-image salt across rewrites; a new password gets a new salt
+    extra = (prev and prevKeyed and prev.extra) or makeSalt()
+    compressed = xorTransformSalt(PASSWORD_MAGIC .. compressed,
+      deriveKeyFromPassword(password, extra, label))
+    flags = flags + FLAG_PASSWORD + FLAG_KEYED + FLAG_LOCKED
+  else
+    -- Label-derived key (unprotected image, or legacy protected image)
+    compressed = xorTransformV2(compressed, label)
+    if mode == "legacy" then
+      flags = flags + FLAG_PASSWORD + FLAG_LOCKED
+      extra = prev.extra
+    elseif locked then
+      flags = bxor(flags, FLAG_LOCKED)
+    end
   end
   flags = bxor(flags, FLAG_TIER)  -- tier field is valid
 
   -- v4 header (40 bytes): Magic(6) + Ver(1) + Flags(1) + Label(16) + Size(4) + FileCount(4) + Tier(1) + UnlockToken(4) + Reserved(3)
-  local header = MAGIC .. string.char(VERSION) .. string.char(flags) .. labelPadded .. packU32(size) .. packU32(fileCount) .. string.char(tier) .. verifier
+  local header = MAGIC .. string.char(VERSION) .. string.char(flags) .. labelPadded .. packU32(size) .. packU32(fileCount) .. string.char(tier) .. extra
 
   return writeFileAtomic(path, header .. compressed)
 end
@@ -633,7 +711,9 @@ function disk.load(path, password)
     if tier == 0 then tier = 3 end  -- older disks may leave tier unset
 
     local protected = band(flags, FLAG_PASSWORD) ~= 0
+    local keyed = band(flags, FLAG_KEYED) ~= 0
     local locked = band(flags, FLAG_LOCKED) ~= 0
+    local extra = rest:sub(27, 33)
     local body = f:read("*a")
     f:close()
 
@@ -643,11 +723,19 @@ function disk.load(path, password)
         return {
           label = label, size = size, tier = tier, version = 4,
           flags = flags, files = nil, locked = true, protected = true,
-          hasPassword = true, fileCount = fileCount
+          hasPassword = true, keyed = keyed, fileCount = fileCount
         }
       end
-      local stored = rest:sub(27, 33)
-      if stored ~= passwordVerifier(password) then
+      if keyed then
+        -- Body key comes from the password + header salt: the header alone
+        -- cannot decrypt it. A wrong password breaks the magic check.
+        body = xorTransformSalt(body, deriveKeyFromPassword(password, extra, label))
+        if body:sub(1, 4) ~= PASSWORD_MAGIC then
+          return nil, "wrong password"
+        end
+        body = body:sub(5)
+      elseif extra ~= passwordVerifier(password) then
+        -- Legacy protected image: verifier in the header, label-keyed body
         return nil, "wrong password"
       end
       -- Correct password: the guest reads the files even though the flag stays set
@@ -664,8 +752,8 @@ function disk.load(path, password)
     local useCompressed = band(flags, FLAG_COMPRESSED) ~= 0
 
     if useEncryptV2 then
-      -- V2: 16-byte rolling key + label salt (symmetric, same function decrypts)
-      body = xorTransformV2(body, label)
+      -- A keyed body was already decrypted above with the password-derived key
+      if not keyed then body = xorTransformV2(body, label) end
       if useCompressed then
         body = lzwDecompressRaw(body)
       end
@@ -681,7 +769,7 @@ function disk.load(path, password)
     return {
       label = label, size = size, tier = tier, version = 4,
       flags = flags, files = files, locked = locked, protected = protected,
-      hasPassword = protected, fileCount = fileCount
+      hasPassword = protected, keyed = keyed, fileCount = fileCount
     }
 
   elseif version == 3 then
@@ -787,33 +875,24 @@ end
 -- ============================================================
 -- Lock password operations (v4 only)
 -- ============================================================
-local function writeVerifier(path, verifier, withFlag)
-  local f = io.open(path, "r+b")
-  if not f then return false, "cannot open file" end
-  f:seek("set", PASSWORD_OFFSET)
-  f:write(verifier)
-  f:close()
-  local flags = readFlags(path)
-  if not flags then return false, "cannot read disk" end
-  if withFlag then
-    if band(flags, FLAG_PASSWORD) == 0 then
-      return rewriteFlags(path, flags + FLAG_PASSWORD)
-    end
-  elseif band(flags, FLAG_PASSWORD) ~= 0 then
-    return rewriteFlags(path, band(flags, bxor(0xFF, FLAG_PASSWORD)))
-  end
-  return true
-end
 
--- Store a password verifier (the disk should be locked separately)
+-- Set (or change) the lock password. This rewrites the body with a
+-- password-derived key, so the image cannot be decoded without the password.
+-- An already protected image needs its current password to re-encrypt.
 function disk.setPassword(path, password)
   if password == nil or password == "" then return false, "password is required" end
-  return writeVerifier(path, passwordVerifier(password), true)
+  local info, err = disk.load(path, password)
+  if not info then return false, err or "cannot load disk" end
+  if info.files == nil then return false, "password required" end
+  return disk.save(path, info.label, info.files, info.size, info.tier, true, password)
 end
 
--- Remove the verifier; locking then behaves like a plain (password-less) lock
-function disk.clearPassword(path)
-  return writeVerifier(path, string.rep("\0", 7), false)
+-- Remove the password and rewrite the body with the label-derived key.
+function disk.clearPassword(path, password)
+  local info, err = disk.load(path, password)
+  if not info then return false, err or "cannot load disk" end
+  if info.files == nil then return false, "password required" end
+  return disk.save(path, info.label, info.files, info.size, info.tier, false, false)
 end
 
 -- Does this disk require a password to unlock?
@@ -823,18 +902,33 @@ function disk.hasPassword(path)
   return band(flags, FLAG_PASSWORD) ~= 0
 end
 
--- Check a password against the stored verifier
+-- Check a password without rewriting or unlocking the image
 function disk.checkPassword(path, password)
   local has, err = disk.hasPassword(path)
   if has == nil then return nil, err end
   if not has then return true end
   local f = io.open(path, "rb")
   if not f then return nil, "cannot open file" end
-  f:seek("set", PASSWORD_OFFSET)
-  local stored = f:read(7)
+  local magic = f:read(7)
+  local rest = magic and f:read(HEADER_SIZE_V4 - 7)
+  if not rest or #rest < HEADER_SIZE_V4 - 7 then
+    f:close()
+    return nil, "invalid header"
+  end
+  local flags = rest:byte(1)
+  local label = rest:sub(2, 17):match("^%Z*") or ""
+  local extra = rest:sub(27, 33)
+  if band(flags, FLAG_KEYED) ~= 0 then
+    -- Decrypt the beginning of the body and look for the plaintext magic
+    f:seek("set", HEADER_SIZE_V4)
+    local head = f:read(64) or ""
+    f:close()
+    if #head < 4 then return false end
+    local plain = xorTransformSalt(head, deriveKeyFromPassword(password, extra, label))
+    return plain:sub(1, 4) == PASSWORD_MAGIC
+  end
   f:close()
-  if not stored or #stored < 7 then return nil, "invalid header" end
-  return stored == passwordVerifier(password)
+  return extra == passwordVerifier(password)
 end
 
 -- Unlock a plain-locked disk. A password-protected image never drops its
@@ -860,9 +954,9 @@ end
 function disk.format(path, password)
   local info, err = disk.load(path, password)
   if not info then return false, err or "cannot load disk" end
-  if info.files == nil and info.protected then return false, "password required" end
-  disk.clearPassword(path)
-  local ok, saveErr = disk.save(path, info.label, {}, info.size, info.tier, false)
+  if info.files == nil then return false, "password required" end
+  -- password=false: the fresh image carries no protection
+  local ok, saveErr = disk.save(path, info.label, {}, info.size, info.tier, false, false)
   return ok, saveErr
 end
 
@@ -890,6 +984,7 @@ function disk.getInfo(path)
       fileCount = fileCount, locked = band(flags, FLAG_LOCKED) ~= 0,
       protected = band(flags, FLAG_PASSWORD) ~= 0,
       hasPassword = band(flags, FLAG_PASSWORD) ~= 0,
+      keyed = band(flags, FLAG_KEYED) ~= 0,
       encrypted = band(flags, FLAG_ENCRYPT_V2) ~= 0,
       compressed = band(flags, FLAG_COMPRESSED) ~= 0
     }

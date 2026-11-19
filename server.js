@@ -2129,23 +2129,39 @@ async function handleApi(req, res, body) {
         // Change or remove the password of a locked disk
         if (parts[3] === 'password' && (method === 'POST' || method === 'DELETE')) {
           if (method === 'DELETE') {
-            diskIO.clearPassword(diskPath);
-            diskIO.unlock(diskPath);
+            // Removing the password rewrites the body, so the current password
+            // (or an active session) is required
+            let pw = null;
+            try { pw = (JSON.parse(body || '{}') || {}).password || null; } catch (e) { /* no body */ }
+            const sess = diskSessions.get(diskPath);
+            if (!pw && sess && sess.expires > Date.now()) pw = sess.password;
+            try {
+              diskIO.clearPassword(diskPath, pw);
+              diskIO.unlock(diskPath);
+            } catch (e) {
+              if (/wrong password|password required/i.test(String(e.message || ''))) {
+                return json(res, { ok: false, code: 'wrong-password', error: 'wrong password' }, 403);
+              }
+              throw e;
+            }
             removeDiskKey(diskPath);
             diskSessions.delete(diskPath);
             return json(res, { ok: true, hasPassword: false, hasKey: false });
           }
           const data = JSON.parse(body || '{}') || {};
           if (!data.password) return json(res, { error: 'password required' }, 400);
-          // Changing an existing password requires the current one
-          if (!data.force) {
-            let info = null;
-            try { info = diskIO.getInfo(diskPath); } catch (e) { /* header unreadable */ }
-            if (info && info.hasPassword) {
-              let ok = false;
-              try { ok = diskIO.checkPassword(diskPath, data.currentPassword || ''); } catch (e) { ok = false; }
-              if (!ok) return json(res, { ok: false, code: 'wrong-password', error: 'wrong password' }, 403);
-            }
+          // Changing the password re-encrypts the body, so the current one is needed
+          let info = null;
+          try { info = diskIO.getInfo(diskPath); } catch (e) { /* header unreadable */ }
+          if (info && info.hasPassword) {
+            const sess = diskSessions.get(diskPath);
+            const current = data.currentPassword
+              || (sess && sess.expires > Date.now() ? sess.password : '');
+            let ok = false;
+            try { ok = diskIO.checkPassword(diskPath, current); } catch (e) { ok = false; }
+            if (!ok) return json(res, { ok: false, code: 'wrong-password', error: 'wrong password' }, 403);
+            // Drop the old key first, then apply the new one
+            diskIO.clearPassword(diskPath, current);
           }
           diskIO.setPassword(diskPath, data.password);
           writeDiskKey(diskPath, data.password);

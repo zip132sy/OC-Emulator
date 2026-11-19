@@ -1021,7 +1021,7 @@ local function saveDisk(path)
   local tier = vdisk.tier or 3
   -- Write back the disk's own size/tier; using config.hddSize would inflate small disks
   -- to 4MB and force tier 3, contradicting what the disk declares.
-  local ok, err = disk.save(path, vdisk.label, vdisk.files, size, tier, false)
+  local ok, err = disk.save(path, vdisk.label, vdisk.files, size, tier, false, config.disk1Password)
   if not ok then
     _stderr:write("[emulator] WARNING: save disk1 failed: " .. tostring(err) .. "\n")
   end
@@ -1043,7 +1043,7 @@ local function saveAllDisks()
     local ok, err = pcall(function()
       local size2 = fs2Size or (4 * 1024 * 1024)
       local tier2 = fs2Tier or 3
-      local ok2, err2 = disk.save(config.disk2File, fs2Label, fs2Files, size2, tier2, false)
+      local ok2, err2 = disk.save(config.disk2File, fs2Label, fs2Files, size2, tier2, false, config.disk2Password)
       if not ok2 then error(err2 or "disk2 save failed") end
     end)
     if not ok then _stderr:write("[emulator] WARNING: save disk2 failed: " .. tostring(err) .. "\n") end
