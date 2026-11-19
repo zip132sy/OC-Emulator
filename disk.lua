@@ -46,6 +46,7 @@ local FLAG_COMPRESSED = 1
 local FLAG_LOCKED = 2          -- v4: disk locked
 local FLAG_TIER = 4            -- v4: tier field is valid
 local FLAG_ENCRYPT_V2 = 8      -- v4: 16-byte rolling-key encryption
+local FLAG_PASSWORD = 16       -- v4: lock password verifier is stored in UnlockToken+Reserved
 
 -- ============================================================
 -- Host filesystem access (must be captured at module load time)
@@ -715,7 +716,87 @@ function disk.lock(path)
   return rewriteFlags(path, bxor(flags, FLAG_LOCKED))
 end
 
-function disk.unlock(path)
+-- ============================================================
+-- Lock password (v4 only)
+--
+-- The verifier occupies the 7 spare header bytes (UnlockToken 4 + Reserved 3):
+-- a wrong password can be rejected without decrypting the body. It is a plain
+-- keyed checksum, not a key derivation: the disk body itself is only obfuscated
+-- (XOR with the label), so this protects against casual opening, not cryptanalysis.
+-- ============================================================
+local PASSWORD_OFFSET = 33      -- 0-based: Magic(6)+Ver(1)+Flags(1)+Label(16)+Size(4)+Files(4)+Tier(1)
+
+local function passwordVerifier(password)
+  local h = { 0x4F, 0x43, 0x44, 0x4B, 0x53, 0x43, 0x21 }  -- "OCDSKC!"
+  local s = "ocdisk-lock\1" .. tostring(password or "")
+  for i = 1, #s do
+    local idx = ((i - 1) % 7) + 1
+    local v = bxor(h[idx], s:byte(i))
+    v = (v * 2 + (v >= 128 and 1 or 0)) % 256  -- rotate left by one bit
+    h[idx] = v
+  end
+  return string.char(h[1], h[2], h[3], h[4], h[5], h[6], h[7])
+end
+
+local function writeVerifier(path, verifier, withFlag)
+  local f = io.open(path, "r+b")
+  if not f then return false, "cannot open file" end
+  f:seek("set", PASSWORD_OFFSET)
+  f:write(verifier)
+  f:close()
+  local flags = readFlags(path)
+  if not flags then return false, "cannot read disk" end
+  if withFlag then
+    if band(flags, FLAG_PASSWORD) == 0 then
+      return rewriteFlags(path, flags + FLAG_PASSWORD)
+    end
+  elseif band(flags, FLAG_PASSWORD) ~= 0 then
+    return rewriteFlags(path, band(flags, bxor(0xFF, FLAG_PASSWORD)))
+  end
+  return true
+end
+
+-- Store a password verifier (the disk should be locked separately)
+function disk.setPassword(path, password)
+  if password == nil or password == "" then return false, "password is required" end
+  return writeVerifier(path, passwordVerifier(password), true)
+end
+
+-- Remove the verifier; locking then behaves like a plain (password-less) lock
+function disk.clearPassword(path)
+  return writeVerifier(path, string.rep("\0", 7), false)
+end
+
+-- Does this disk require a password to unlock?
+function disk.hasPassword(path)
+  local flags = readFlags(path)
+  if not flags then return nil, "cannot read disk" end
+  return band(flags, FLAG_PASSWORD) ~= 0
+end
+
+-- Check a password against the stored verifier
+function disk.checkPassword(path, password)
+  local has, err = disk.hasPassword(path)
+  if has == nil then return nil, err end
+  if not has then return true end
+  local f = io.open(path, "rb")
+  if not f then return nil, "cannot open file" end
+  f:seek("set", PASSWORD_OFFSET)
+  local stored = f:read(7)
+  f:close()
+  if not stored or #stored < 7 then return nil, "invalid header" end
+  return stored == passwordVerifier(password)
+end
+
+-- Unlock the disk. A password-protected disk refuses to unlock without a
+-- matching password, so "unlock" cannot be used to bypass the lock.
+function disk.unlock(path, password)
+  local has = disk.hasPassword(path)
+  if has == nil then return false, "cannot read disk" end
+  if has then
+    if password == nil or password == "" then return false, "password required" end
+    if not disk.checkPassword(path, password) then return false, "wrong password" end
+  end
   local flags = readFlags(path)
   if not flags then return false, "cannot read disk" end
   if band(flags, FLAG_LOCKED) == 0 then return true end
@@ -729,15 +810,17 @@ function disk.isLocked(path)
 end
 
 -- Format: drop all files, keep label/size/tier
-function disk.format(path)
+function disk.format(path, password)
   local info = disk.load(path)
   if not info then return false, "cannot load disk" end
   -- Unlock first: format needs to read files
   if info.locked then
-    disk.unlock(path)
+    local ok = disk.unlock(path, password)
+    if not ok then return false, "wrong password" end
     info = disk.load(path)
     if not info then return false, "cannot load after unlock" end
   end
+  disk.clearPassword(path)
   local ok, err = disk.save(path, info.label, {}, info.size, info.tier, false)
   return ok, err
 end
@@ -764,6 +847,7 @@ function disk.getInfo(path)
     return {
       label = label, size = size, tier = tier, version = 4,
       fileCount = fileCount, locked = band(flags, FLAG_LOCKED) ~= 0,
+      hasPassword = band(flags, FLAG_PASSWORD) ~= 0,
       encrypted = band(flags, FLAG_ENCRYPT_V2) ~= 0,
       compressed = band(flags, FLAG_COMPRESSED) ~= 0
     }

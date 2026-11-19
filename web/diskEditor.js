@@ -60,7 +60,7 @@ const DiskEditor = (() => {
               <button class="btn btn-icon" title="${I18N.t('disk.collapse-all')}" data-action="collapse-all" id="disk-collapse-all-${cssEsc(diskPath)}">⊟</button>
             </div>
             <div class="disk-search-box">
-              <input type="text" id="disk-search-${cssEsc(diskPath)}" placeholder="🔍 ${I18N.t('disk.search')}" value="${escapeHTML(session.searchQuery)}">
+              <input type="text" id="disk-search-${cssEsc(diskPath)}" placeholder="${I18N.t('disk.search')}" value="${escapeHTML(session.searchQuery)}">
             </div>
           </div>
           <div class="disk-tree-body" id="disk-tree-${cssEsc(diskPath)}">
@@ -307,6 +307,7 @@ const DiskEditor = (() => {
     const row = document.createElement('div');
     row.className = 'disk-tree-row ' + (m.type === 'dir' ? 'dir' : 'file') + ' search-result';
     row.innerHTML = `<span class="icon"></span><span class="name"></span><span class="path-hint"></span>`;
+    row.querySelector('.icon').dataset.icon = m.type === 'dir' ? 'folder' : 'file';
     row.querySelector('.name').textContent = m.name;
     row.querySelector('.path-hint').textContent = m.path;
     row.dataset.path = m.path;
@@ -381,6 +382,7 @@ const DiskEditor = (() => {
     row.className = 'disk-tree-row ' + (child.type === 'dir' ? 'dir' : 'file');
     row.style.paddingLeft = (depth * 12 + 6) + 'px';
     row.innerHTML = `<span class="twisty"></span><span class="icon"></span><span class="name"></span>`;
+    row.querySelector('.icon').dataset.icon = child.type === 'dir' ? 'folder' : 'file';
     row.querySelector('.name').textContent = child.name;
     if (child.size != null) {
       row.querySelector('.name').textContent += ` (${formatSize(child.size)})`;
@@ -901,29 +903,131 @@ const DiskEditor = (() => {
   }
 
   async function unlock(diskPath) {
-    try {
-      await App.api(`disks/${diskApiPath(diskPath)}/unlock`, { method: 'POST' });
+    // Hidden keys unlock silently; a password-locked disk asks for the password
+    const r = await App.api(`disks/${diskApiPath(diskPath)}/unlock`, { method: 'POST', body: {} });
+    if (r && r.ok) {
       await loadInfo(diskPath);
       App.setStatus(I18N.t('disk.unlocked'));
-    } catch (e) {
-      alert(I18N.t('disk.unlock-failed') + ': ' + e.message);
+      return;
     }
+    openLockDialog(diskPath, 'unlock', r && r.code === 'wrong-password');
   }
 
   async function lock(diskPath) {
-    try {
-      await App.api(`disks/${diskApiPath(diskPath)}/lock`, { method: 'POST' });
-      await loadInfo(diskPath);
-      App.setStatus(I18N.t('disk.locked'));
-    } catch (e) {
-      alert(I18N.t('disk.lock-failed') + ': ' + e.message);
-    }
+    openLockDialog(diskPath, 'lock', false);
+  }
+
+  // Lock / unlock dialog. The password field is optional for locking (an empty
+  // password is a plain lock) and required for unlocking a protected image.
+  function openLockDialog(diskPath, mode, wrongPassword) {
+    const isLock = mode === 'lock';
+    const apiPath = diskApiPath(diskPath);
+    Modal.open({
+      title: I18N.t(isLock ? 'disk.lock-title' : 'disk.unlock-title'),
+      bodyHTML: `
+        <div class="form-row">
+          <label for="disk-pass">${I18N.t('disk.lock-password')}</label>
+          <input type="password" id="disk-pass" autocomplete="off" spellcheck="false"
+            placeholder="${I18N.t(isLock ? 'disk.lock-password-placeholder' : 'disk.unlock-password-placeholder')}">
+        </div>
+        <p class="hint">${I18N.t(isLock ? 'disk.lock-password-hint' : 'disk.unlock-password-hint')}</p>
+        <div class="form-error" id="disk-pass-error">${wrongPassword ? I18N.t('disk.wrong-password') : ''}</div>
+        ${isLock ? '' : `
+        <div class="disk-key-row">
+          <button class="btn" type="button" id="disk-key-upload">${I18N.t('disk.key-upload')}</button>
+          <button class="btn" type="button" id="disk-key-download">${I18N.t('disk.key-download')}</button>
+          <button class="btn" type="button" id="disk-key-remove">${I18N.t('disk.key-remove')}</button>
+        </div>
+        <input type="file" id="disk-key-file" accept=".key,.json,application/json" hidden>`}
+      `,
+      footerHTML: `
+        <button class="btn" data-action="modal-close">${I18N.t('disk.cancel')}</button>
+        <button class="btn btn-primary" id="disk-lock-confirm">${I18N.t(isLock ? 'disk.lock' : 'disk.unlock')}</button>
+      `,
+      onMount: (body, footer) => {
+        const input = body.querySelector('#disk-pass');
+        const errorEl = body.querySelector('#disk-pass-error');
+        const confirmBtn = footer.querySelector('#disk-lock-confirm');
+        const fail = (msg) => {
+          if (!errorEl) { alert(msg); return; }
+          errorEl.textContent = msg;
+          errorEl.style.display = '';
+        };
+        const showError = (r) => {
+          if (r && r.code === 'wrong-password') fail(I18N.t('disk.wrong-password'));
+          else if (r && r.code === 'wrong-key') fail(I18N.t('disk.wrong-key'));
+          else fail((r && r.error) || I18N.t(isLock ? 'disk.lock-failed' : 'disk.unlock-failed'));
+        };
+        confirmBtn.addEventListener('click', async () => {
+          confirmBtn.disabled = true;
+          try {
+            const password = input.value;
+            const r = await App.api(`disks/${apiPath}/${isLock ? 'lock' : 'unlock'}`, {
+              method: 'POST',
+              body: { password },
+            });
+            if (r && r.ok) {
+              Modal.close();
+              await loadInfo(diskPath);
+              App.setStatus(I18N.t(isLock ? 'disk.locked' : 'disk.unlocked'));
+            } else {
+              showError(r);
+            }
+          } catch (e) {
+            fail(e.message);
+          } finally {
+            confirmBtn.disabled = false;
+          }
+        });
+        input.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') confirmBtn.click();
+        });
+        if (isLock) { input.focus(); return; }
+
+        const fileInput = body.querySelector('#disk-key-file');
+        const uploadBtn = body.querySelector('#disk-key-upload');
+        const downloadBtn = body.querySelector('#disk-key-download');
+        const removeBtn = body.querySelector('#disk-key-remove');
+        if (uploadBtn && fileInput) {
+          uploadBtn.addEventListener('click', () => fileInput.click());
+          fileInput.addEventListener('change', async () => {
+            const file = fileInput.files && fileInput.files[0];
+            if (!file) return;
+            try {
+              const content = await App.fileToBase64(file);
+              const r = await App.api(`disks/${apiPath}/key`, { method: 'POST', body: { content } });
+              if (r && r.ok) {
+                Modal.close();
+                await loadInfo(diskPath);
+                App.setStatus(I18N.t('disk.key-uploaded'));
+              } else {
+                showError(r);
+              }
+            } catch (e) {
+              fail(e.message);
+            }
+          });
+        }
+        if (downloadBtn) {
+          downloadBtn.addEventListener('click', () => {
+            window.location.href = `/api/disks/${apiPath}/key`;
+          });
+        }
+        if (removeBtn) {
+          removeBtn.addEventListener('click', async () => {
+            if (!confirm(I18N.t('disk.key-remove-confirm'))) return;
+            await App.api(`disks/${apiPath}/key`, { method: 'DELETE' });
+            App.setStatus(I18N.t('disk.key-removed'));
+          });
+        }
+      },
+    });
   }
 
   async function format(diskPath) {
     if (!confirm(I18N.t('disk.format-confirm'))) return;
     try {
-      await App.api(`disks/${diskApiPath(diskPath)}/format`, { method: 'POST' });
+      await App.api(`disks/${diskApiPath(diskPath)}/format`, { method: 'POST', body: {} });
       await loadInfo(diskPath);
       App.setStatus(I18N.t('disk.formatted'));
     } catch (e) {

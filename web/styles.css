@@ -1764,9 +1764,8 @@ body.console-fullscreen { overflow: hidden; }
 .disk-tree-row.dir .twisty:before { content: "▶"; }
 .disk-tree-row.dir.expanded .twisty:before { content: "▼"; }
 .disk-tree-row.file .twisty { visibility: hidden; }
-.disk-tree-row .icon { width: 14px; display: inline-block; }
-.disk-tree-row.dir .icon:before { content: "📁"; }
-.disk-tree-row.file .icon:before { content: "📄"; }
+.disk-tree-row .icon { width: 14px; display: inline-flex; align-items: center; justify-content: center; }
+.disk-tree-row .icon .ui-icon { width: 14px; height: 14px; vertical-align: 0; }
 .disk-tree-row.search-result .path-hint {
   margin-left: auto;
   font-size: 10px;
@@ -3090,6 +3089,67 @@ body.mod-fullscreen-open { overflow: hidden; }
 
 /* 核电站面板内容较长, 允许滚轮上下滚动 */
 .mod-pane[data-pane="reactor"].active { overflow-y: auto; }
+
+/* ============================================================
+   像素风图标 (icons.js): 纯内联 SVG, 不依赖任何图片文件
+   ============================================================ */
+.ui-icon {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  display: inline-block;
+  vertical-align: -3px;
+  fill: currentColor;
+  shape-rendering: crispEdges;
+  pointer-events: none;
+}
+.vmouse-btn .ui-icon,
+.fs-btn .ui-icon,
+.ime-btn .ui-icon,
+.vkbd-btn .ui-icon,
+.scroll-btn .ui-icon { vertical-align: middle; }
+/* 大号位置 (品牌徽标 / 欢迎页) 跟随原来的字号放大 */
+.brand-logo .ui-icon { width: 18px; height: 18px; }
+.welcome-logo .ui-icon { width: 64px; height: 64px; vertical-align: 0; }
+
+/* ---------- 磁盘密码锁 ---------- */
+.form-error {
+  min-height: 16px;
+  font-size: 12px;
+  color: var(--err);
+  margin: 2px 0 8px;
+}
+.disk-key-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+.disk-lock-list {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 8px 10px;
+  max-height: 140px;
+  overflow-y: auto;
+  background: var(--bg-input, rgba(255, 255, 255, 0.04));
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font-size: 12px;
+}
+.disk-lock-list li {
+  display: flex;
+  gap: 10px;
+  padding: 3px 0;
+}
+.disk-lock-list li b { min-width: 52px; color: var(--fg-secondary); }
+.disk-lock-list li .disk-key-upload { margin-left: auto; flex: 0 0 auto; }
+.disk-lock-list li span {
+  color: var(--fg-dim);
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 @media (max-width: 900px) {
   .ic2-side { flex: 1 1 100%; }

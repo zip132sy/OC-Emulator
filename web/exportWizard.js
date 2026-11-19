@@ -24,6 +24,7 @@ const ExportWizard = (() => {
   let vmName = '';
   let currentStep = 0;
   let extraFiles = [];      // [{path, content(base64), binary, size}]
+  let includeKeys = false;  // export the disk lock key files (<disk>.key) too
   let importData = null;    // parsed import payload
   let onDone = null;
 
@@ -144,6 +145,12 @@ const ExportWizard = (() => {
           <label>${T('export.format', '格式')}</label>
           <span>${T('export.format-desc', '.ocvm (JSON, 含 base64 编码文件内容)')}</span>
         </div>
+        <div class="section-title" style="margin-top:16px;">${T('export.keys-title', '磁盘密钥')}</div>
+        <label class="checkbox-line">
+          <input type="checkbox" id="ew-include-keys" ${includeKeys ? 'checked' : ''}>
+          <span>${T('export.include-keys', '同时导出磁盘密钥 (导入后可自动解锁, 含明文密码)')}</span>
+        </label>
+        <p class="hint">${T('export.keys-hint', '不导出密钥时, 导入后首次启动需要输入磁盘密码。')}</p>
         <p class="hint" style="margin-top:8px;">
           ${T('export.format-hint', '导出包可通过「导入虚拟机」功能在其他 OC Emulator 实例中恢复。')}
         </p>
@@ -247,6 +254,12 @@ const ExportWizard = (() => {
   function bindStepEvents() {
     const body = document.getElementById('modal-body');
     const footer = document.getElementById('modal-footer');
+
+    // Step 0: whether the disk lock keys go into the export package
+    const keysCheck = body.querySelector('#ew-include-keys');
+    if (keysCheck) {
+      keysCheck.addEventListener('change', () => { includeKeys = keysCheck.checked; });
+    }
 
     // Step 1: extra files - file input
     const fileInput = body.querySelector('#ew-file-input');
@@ -360,6 +373,7 @@ const ExportWizard = (() => {
         body: {
           extraFiles: standaloneFiles,
           extraDirs: extraDirs,
+          includeKeys: includeKeys,
         },
       });
 
@@ -419,6 +433,7 @@ const ExportWizard = (() => {
     vmName = name;
     currentStep = 0;
     extraFiles = [];
+    includeKeys = false;
     onDone = null;
     Modal.open({
       title: I18N.t('export.title', { name }),

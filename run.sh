@@ -1,8 +1,8 @@
-#!/usr/bin/env bash
+﻿#!/usr/bin/env bash
 cd "$(dirname "$0")"
 
 echo "==============================================="
-echo "  OC Emulator - Web Control Panel v2.3"
+echo "  OC Emulator - Web Control Panel v2.4"
 echo "==============================================="
 echo ""
 

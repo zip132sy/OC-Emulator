@@ -260,7 +260,7 @@ const App = (() => {
   }
 
   // ---------- App version (header badge) ----------
-  // The server formats it per channel: v2.3(R) for Release, v2.3.0(B) for Beta
+  // The server formats it per channel: v2.4(R) for Release, v2.4.0(B) for Beta
   let versionText = '';
 
   function welcomeSubtitle() {
@@ -1890,11 +1890,108 @@ const App = (() => {
     });
   }
 
+  // Start a VM. A locked disk is unlocked with the local key on the server; when
+  // no key is available the user is asked for a password or a key file.
+  async function startVM(vmName) {
+    const r = await api(`vms/${encodeURIComponent(vmName)}/start`, { method: 'POST' });
+    if (r && r.code === 'disk-locked' && Array.isArray(r.locked)) {
+      promptDiskUnlock(vmName, r.locked);
+      return r;
+    }
+    refreshVMs();
+    return r;
+  }
+
+  // Unlock dialog shown at boot: one password field for every locked disk plus a
+  // per-disk key upload, then the start is retried.
+  function promptDiskUnlock(vmName, locked) {
+    Modal.open({
+      title: I18N.t('disk.boot-locked-title'),
+      bodyHTML: `
+        <p class="hint">${I18N.t('disk.boot-locked-hint')}</p>
+        <ul class="disk-lock-list">
+          ${locked.map((d, i) => `<li>
+            <b>${escapeHtml(d.slot)}</b>
+            <span>${escapeHtml(d.path)}</span>
+            <button class="btn btn-small disk-key-upload" type="button" data-idx="${i}">${I18N.t('disk.key-upload')}</button>
+          </li>`).join('')}
+        </ul>
+        <div class="form-row">
+          <label for="boot-disk-pass">${I18N.t('disk.lock-password')}</label>
+          <input type="password" id="boot-disk-pass" autocomplete="off" spellcheck="false"
+            placeholder="${escapeAttr(I18N.t('disk.unlock-password-placeholder'))}">
+        </div>
+        <div class="form-error" id="boot-disk-error"></div>
+        <input type="file" id="boot-disk-key-file" accept=".key,.json,application/json" hidden>`,
+      footerHTML: `
+        <button class="btn" data-action="modal-close">${I18N.t('settings.cancel')}</button>
+        <button class="btn btn-primary" id="boot-disk-unlock">${I18N.t('disk.unlock-and-start')}</button>`,
+      onMount(body, footer) {
+        const input = body.querySelector('#boot-disk-pass');
+        const errorEl = body.querySelector('#boot-disk-error');
+        const btn = footer.querySelector('#boot-disk-unlock');
+        const fileInput = body.querySelector('#boot-disk-key-file');
+        let uploadTarget = null;
+        const fail = (msg) => { errorEl.textContent = msg; };
+        const retryStart = async () => {
+          Modal.close();
+          await api(`vms/${encodeURIComponent(vmName)}/start`, { method: 'POST' });
+          refreshVMs();
+        };
+        body.querySelectorAll('.disk-key-upload').forEach((el) => {
+          el.addEventListener('click', () => {
+            uploadTarget = locked[parseInt(el.dataset.idx, 10)];
+            fileInput.click();
+          });
+        });
+        fileInput.addEventListener('change', async () => {
+          const file = fileInput.files && fileInput.files[0];
+          if (!file || !uploadTarget) return;
+          try {
+            const content = await fileToBase64(file);
+            const r = await api(`disks/${encodeURIComponent(uploadTarget.path)}/key`, {
+              method: 'POST',
+              body: { content },
+            });
+            if (r && r.ok) { await retryStart(); return; }
+            fail(r && r.code === 'wrong-key' ? I18N.t('disk.wrong-key')
+              : (r && r.error) || I18N.t('disk.key-upload-failed'));
+          } catch (e) {
+            fail(e.message);
+          }
+        });
+        btn.addEventListener('click', async () => {
+          btn.disabled = true;
+          try {
+            for (const d of locked) {
+              const r = await api(`disks/${encodeURIComponent(d.path)}/unlock`, {
+                method: 'POST',
+                body: { password: input.value },
+              });
+              if (!r || !r.ok) {
+                fail(r && r.code === 'wrong-password' ? I18N.t('disk.wrong-password')
+                  : (r && r.error) || I18N.t('disk.unlock-failed'));
+                return;
+              }
+            }
+            await retryStart();
+          } catch (e) {
+            fail(e.message);
+          } finally {
+            btn.disabled = false;
+          }
+        });
+        input.addEventListener('keydown', (e) => { if (e.key === 'Enter') btn.click(); });
+        input.focus();
+      },
+    });
+  }
+
   function showVMContextMenu(vmName, x, y) {
     closeVMContextMenu();
     const items = [
       { label: I18N.t('ctx.open'), action: () => openVMTab(vmName) },
-      { label: I18N.t('ctx.start'), action: () => api(`vms/${encodeURIComponent(vmName)}/start`, { method: 'POST' }).then(refreshVMs) },
+      { label: I18N.t('ctx.start'), action: () => startVM(vmName) },
       { label: I18N.t('ctx.stop'), action: () => api(`vms/${encodeURIComponent(vmName)}/stop`, { method: 'POST' }).then(refreshVMs) },
       { label: I18N.t('ctx.edit-disk'), action: () => openEditDisk(vmName) },
       ...(getDiskChoice(vmName)
@@ -2516,6 +2613,8 @@ const App = (() => {
     wsConnect();
     // Periodic VM / Mods refresh (light safety polling; manual refresh uses refreshX(true))
     setInterval(() => { refreshVMs(false); refreshMods(false); }, 5000);
+    // Language switching rewrites the static labels, so decorate once more here
+    if (window.Icons) window.Icons.refresh();
   }
 
   // ---------- Language ----------
@@ -2596,12 +2695,14 @@ const App = (() => {
     // Refresh list text
     renderVMList();
     renderModList();
+    // Labels are rewritten above, so re-apply the pixel icons afterwards
+    if (window.Icons) window.Icons.refresh();
   }
 
   return {
     state, $, $$, api, fileToBase64, uploadFile, UploadToast,
     init, refreshVMs, refreshMods, openVMTab, openModTab, openTab, closeTab, activateTab,
-    setSidebarMode,
+    setSidebarMode, startVM,
     wsSend, wsSubscribe, setStatus, setStatusRight,
     onServerMessage, showLanguageSelector, applyLanguage,
   };

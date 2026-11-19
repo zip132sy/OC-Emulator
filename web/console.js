@@ -633,7 +633,12 @@ const Console = (() => {
       view.state = 'running';
       updateStateBadge(vmName);
       try {
-        await App.api(`vms/${encodeURIComponent(vmName)}/start`, { method: 'POST' });
+        const r = await App.startVM(vmName);
+        // A locked disk is handled by its own dialog; roll the optimistic state back
+        if (r && r.ok === false) {
+          view.state = 'stopped';
+          updateStateBadge(vmName);
+        }
       } catch (e) {
         view.state = 'stopped';
         updateStateBadge(vmName);

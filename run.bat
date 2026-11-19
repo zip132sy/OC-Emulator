@@ -1,4 +1,4 @@
-@echo off
+﻿@echo off
 cd /d "%~dp0"
 title OC Emulator - Web Control Panel
 setlocal EnableDelayedExpansion
@@ -22,7 +22,7 @@ set "GUARD_LOG=%~dp0logs\guardian.log"
 if not exist "%~dp0logs" mkdir "%~dp0logs" >nul 2>nul
 
 echo ===============================================
-echo   OC Emulator - Web Control Panel v2.3
+echo   OC Emulator - Web Control Panel v2.4
 echo ===============================================
 echo.
 
