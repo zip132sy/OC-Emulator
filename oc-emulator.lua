@@ -1142,7 +1142,14 @@ local function loadDisk(path, password)
   -- Try .ocd first
   local loaded, loadErr = disk.load(path, password)
   if loaded and loaded.files == nil then
+    _diskLoadError = "locked"
     _stderr:write("[emulator] disk is locked (no matching password): " .. tostring(path) .. "\n")
+    return false
+  end
+  if not loaded and loadErr == "wrong password" then
+    -- The stored key does not match this image (edited or copied from elsewhere)
+    _diskLoadError = "password"
+    _stderr:write("[emulator] disk password rejected: " .. tostring(path) .. "\n")
     return false
   end
   if loaded then
@@ -5158,6 +5165,8 @@ local function _showScreenMessage(msg)
       local x = math.max(1, math.floor((w - #line) / 2) + 1)
       gpu.set(x, startY + i - 1, line)
     end
+    -- Flush right away: the caller exits immediately, before the render tick
+    sendScreenUpdate()
   end)
 end
 showScreenMessage = _showScreenMessage
@@ -5173,10 +5182,18 @@ elseif config.diskFile then
   _stderr:write("[emulator] loading disk: " .. config.diskFile .. "\n")
   local diskLoaded = loadDisk(config.diskFile, config.disk1Password)
   if not diskLoaded then
-    dlog("ERROR: disk not found")
-    _stderr:write("[emulator] ERROR: disk not found: " .. config.diskFile .. "\n")
-    _stderr:write("[emulator] Please create a disk image using the launcher GUI.\n")
-    _showScreenMessage("No bootable disk found\nPlease insert a disk and restart")
+    dlog("ERROR: disk not loaded")
+    if _diskLoadError == "password" then
+      _stderr:write("[emulator] ERROR: disk password rejected: " .. config.diskFile .. "\n")
+      _showScreenMessage("Disk password rejected\nUpdate the disk key in the control panel")
+    elseif _diskLoadError == "locked" then
+      _stderr:write("[emulator] ERROR: disk is locked: " .. config.diskFile .. "\n")
+      _showScreenMessage("Disk is locked\nUnlock it in the control panel")
+    else
+      _stderr:write("[emulator] ERROR: disk not found: " .. config.diskFile .. "\n")
+      _stderr:write("[emulator] Please create a disk image using the launcher GUI.\n")
+      _showScreenMessage("No bootable disk found\nPlease insert a disk and restart")
+    end
     os.exit(1)
   end
   dlog("disk loaded:", vdisk.label, "files:", #vdisk.files)
