@@ -2449,6 +2449,14 @@ const Console = (() => {
       e.preventDefault();
       return;
     }
+    // Keep the virtual keyboard's Caps Lock lamp in sync with the real keyboard
+    if (view.vkMods && typeof e.getModifierState === 'function') {
+      const caps = e.getModifierState('CapsLock');
+      if (caps !== !!view.vkMods.caps) {
+        view.vkMods.caps = caps;
+        updateVkbdMods(view);
+      }
+    }
     // Compatibility: treat wheel-mapped PageUp/PageDown as a real wheel
     if (isWheelKeyCompat() && (e.code === 'PageUp' || e.code === 'PageDown')) {
       e.preventDefault();
@@ -2552,7 +2560,7 @@ const Console = (() => {
       { l: '\\', c: 0x2B, ch: 0x5C, w: 1.5 },
     ],
     [
-      { l: 'Caps', c: 0x3A, w: 1.7, wide: true },
+      { l: 'Caps', mod: 'caps', w: 1.7, wide: true },
       { l: 'A', c: 0x1E, ch: 0x61, alpha: true }, { l: 'S', c: 0x1F, ch: 0x73, alpha: true },
       { l: 'D', c: 0x20, ch: 0x64, alpha: true }, { l: 'F', c: 0x21, ch: 0x66, alpha: true },
       { l: 'G', c: 0x22, ch: 0x67, alpha: true }, { l: 'H', c: 0x23, ch: 0x68, alpha: true },
@@ -2600,15 +2608,17 @@ const Console = (() => {
       sendInput(vmName, { event: 'key_down', char: VKBD_MODS[m].char, code: VKBD_MODS[m].code });
     }
     let ch = key.ch || 0;
-    if (key.alpha && view.vkMods.shift) ch = key.ch - 32;
+    // Caps Lock acts like a latched shift: shift + caps gives lowercase again
+    if (key.alpha && (!!view.vkMods.shift !== !!view.vkMods.caps)) ch = key.ch - 32;
     sendInput(vmName, { event: 'key_down', char: ch, code: key.c });
     sendInput(vmName, { event: 'key_up', char: ch, code: key.c });
     for (const m of held.slice().reverse()) {
       sendInput(vmName, { event: 'key_up', char: VKBD_MODS[m].char, code: VKBD_MODS[m].code });
     }
-    // Modifiers are one-shot, so the next press does not carry Ctrl/Shift by accident
+    // Modifiers are one-shot, so the next press does not carry Ctrl/Shift by accident.
+    // Caps Lock is a latch and stays on until it is pressed again.
     if (held.length) {
-      view.vkMods = { ctrl: false, alt: false, shift: false };
+      view.vkMods = { ctrl: false, alt: false, shift: false, caps: view.vkMods.caps };
       updateVkbdMods(view);
     }
   }
@@ -2618,7 +2628,7 @@ const Console = (() => {
     const panel = view.vkbdPanel;
     const rowsEl = view.vkbdRows;
     if (!btn || !panel || !rowsEl) return;
-    view.vkMods = { ctrl: false, alt: false, shift: false };
+    view.vkMods = { ctrl: false, alt: false, shift: false, caps: false };
 
     rowsEl.innerHTML = VKBD_ROWS.map((row, r) =>
       '<div class="vkbd-row">' + row.map((k, i) =>
@@ -2656,6 +2666,11 @@ const Console = (() => {
       if (key.mod) {
         view.vkMods[key.mod] = !view.vkMods[key.mod];
         updateVkbdMods(view);
+        // Caps Lock is latched by the guest as well, so it gets a normal press
+        if (key.mod === 'caps') {
+          sendInput(vmName, { event: 'key_down', char: 0, code: 0x3A });
+          sendInput(vmName, { event: 'key_up', char: 0, code: 0x3A });
+        }
         return;
       }
       sendVkbdKey(view, vmName, key);
