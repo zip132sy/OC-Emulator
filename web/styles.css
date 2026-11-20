@@ -1844,6 +1844,8 @@ body.console-fullscreen { overflow: hidden; }
 .disk-viewer-close { display: none; }
 /* 文件树头部的锁定 / 解锁按钮 (仅手机端显示, 桌面端在内容区工具栏里) */
 .disk-tree-lock-btn { display: none; }
+/* 其它只在手机端出现的磁盘级按钮 (如格式化) */
+.disk-tree-extra-btn { display: none; }
 .disk-mirror-status {
   background: var(--bg-sidebar);
   padding: 4px 12px;
@@ -2214,6 +2216,9 @@ body.console-fullscreen { overflow: hidden; }
   .disk-viewer-close { display: inline-flex; }
   /* 手机端内容区是悬浮窗口, 锁定 / 解锁入口放在文件树头部, 始终可见 */
   .disk-tree-lock-btn { display: inline-flex; }
+  /* 格式化属于磁盘级操作: 放在文件树头部, 不再重复出现在文件编辑器工具栏 */
+  .disk-tree-extra-btn { display: inline-flex; }
+  .disk-file-toolbar .disk-format-btn { display: none; }
 
   /* 日志: 独立成底部抽屉, 不参与画布列布局, 展开后有足够高度看完整内容 */
   .log-panel {
