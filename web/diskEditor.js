@@ -56,6 +56,7 @@ const DiskEditor = (() => {
               <div class="disk-tree-divider"></div>
               <button class="btn disk-tree-lock-btn" data-action="unlock" id="disk-tree-unlock-${cssEsc(diskPath)}" title="${I18N.t('disk.unlock')}">${I18N.t('disk.unlock')}</button>
               <button class="btn disk-tree-lock-btn" data-action="lock" id="disk-tree-lock-${cssEsc(diskPath)}" title="${I18N.t('disk.lock')}">${I18N.t('disk.lock')}</button>
+              <button class="btn btn-warn disk-tree-extra-btn" data-action="format" id="disk-tree-format-${cssEsc(diskPath)}" title="${I18N.t('disk.format')}">${I18N.t('disk.format')}</button>
               <button class="btn btn-icon" title="${I18N.t('disk.expand-all')}" data-action="expand-all" id="disk-expand-all-${cssEsc(diskPath)}">⊞</button>
               <button class="btn btn-icon" title="${I18N.t('disk.collapse-all')}" data-action="collapse-all" id="disk-collapse-all-${cssEsc(diskPath)}">⊟</button>
             </div>
@@ -74,7 +75,7 @@ const DiskEditor = (() => {
             <button class="btn" data-action="mirror" id="disk-mirror-${cssEsc(diskPath)}">${I18N.t('disk.mirror')}</button>
             <button class="btn btn-primary" data-action="unlock" id="disk-unlock-${cssEsc(diskPath)}">${I18N.t('disk.unlock')}</button>
             <button class="btn" data-action="lock" id="disk-lock-${cssEsc(diskPath)}">${I18N.t('disk.lock')}</button>
-            <button class="btn btn-warn" data-action="format" id="disk-format-${cssEsc(diskPath)}">${I18N.t('disk.format')}</button>
+            <button class="btn btn-warn disk-format-btn" data-action="format" id="disk-format-${cssEsc(diskPath)}">${I18N.t('disk.format')}</button>
             <button class="btn btn-icon disk-viewer-close" data-action="close-viewer" id="disk-close-viewer-${cssEsc(diskPath)}" title="${I18N.t('disk.close-viewer')}">✕</button>
           </div>
           <div class="disk-mirror-status" id="disk-mirror-status-${cssEsc(diskPath)}" style="display:none"></div>
@@ -117,6 +118,9 @@ const DiskEditor = (() => {
     // On mobile the content area floats, so the tree header also offers lock / unlock
     pane.querySelector(`#disk-tree-unlock-${cssEsc(diskPath)}`).addEventListener('click', () => unlock(diskPath));
     pane.querySelector(`#disk-tree-lock-${cssEsc(diskPath)}`).addEventListener('click', () => lock(diskPath));
+    // Format lives at the disk level on mobile (tree header), not on the file editor
+    const treeFormatBtn = pane.querySelector(`#disk-tree-format-${cssEsc(diskPath)}`);
+    if (treeFormatBtn) treeFormatBtn.addEventListener('click', () => format(diskPath));
 
     const actionsBar = pane.querySelector(`#disk-file-actions-${cssEsc(diskPath)}`);
     actionsBar.querySelector('button[data-action="save"]').addEventListener('click', () => saveCurrent(diskPath));
@@ -1035,13 +1039,55 @@ const DiskEditor = (() => {
 
   async function format(diskPath) {
     if (!confirm(I18N.t('disk.format-confirm'))) return;
-    try {
-      await App.api(`disks/${diskApiPath(diskPath)}/format`, { method: 'POST', body: {} });
-      await loadInfo(diskPath);
-      App.setStatus(I18N.t('disk.formatted'));
-    } catch (e) {
-      alert(I18N.t('disk.format-failed') + ': ' + e.message);
+    const apiPath = diskApiPath(diskPath);
+    const run = (body) => App.api(`disks/${apiPath}/format`, { method: 'POST', body });
+    let r = await run({});
+    // A protected image needs its password; ask for it and retry once
+    if (r && r.error && /password/i.test(r.error)) {
+      const password = await askDiskPassword();
+      if (password == null) return;
+      r = await run({ password });
     }
+    if (r && r.error) {
+      alert(I18N.t('disk.format-failed') + ': ' + r.error);
+      return;
+    }
+    await loadInfo(diskPath);
+    await loadTree(diskPath);
+    App.setStatus(I18N.t('disk.formatted'));
+  }
+
+  // Small password prompt used by format() when the image is locked
+  function askDiskPassword() {
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = (value) => {
+        if (done) return;
+        done = true;
+        resolve(value);
+      };
+      Modal.open({
+        title: I18N.t('disk.format'),
+        bodyHTML: `
+          <div class="form-row">
+            <label for="disk-fmt-pass">${I18N.t('disk.lock-password')}</label>
+            <input type="password" id="disk-fmt-pass" autocomplete="off" spellcheck="false"
+              placeholder="${I18N.t('disk.unlock-password-placeholder')}">
+          </div>`,
+        footerHTML: `
+          <button class="btn" data-action="modal-close">${I18N.t('disk.cancel')}</button>
+          <button class="btn btn-warn" id="disk-fmt-confirm">${I18N.t('disk.format')}</button>`,
+        onMount: (body, footer) => {
+          const input = body.querySelector('#disk-fmt-pass');
+          const btn = footer.querySelector('#disk-fmt-confirm');
+          const submit = () => { const v = input.value; finish(v); Modal.close(); };
+          btn.addEventListener('click', submit);
+          input.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
+          input.focus();
+        },
+        onClose: () => finish(null),
+      });
+    });
   }
 
   function setStatus(diskPath, text) {
