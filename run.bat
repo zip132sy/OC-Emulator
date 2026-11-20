@@ -1,4 +1,4 @@
-﻿@echo off
+@echo off
 cd /d "%~dp0"
 title OC Emulator - Web Control Panel
 setlocal EnableDelayedExpansion
@@ -86,14 +86,6 @@ set "MAX_RESTARTS=10"
 set "BACKOFF_SECONDS=2"
 set "WATCHDOG_INTERVAL=30"
 set "WATCHDOG_TIMEOUT=10"
-
-echo.
-echo ===============================================
-echo   Starting server...
-echo   If port 8080 is in use, the server will auto-switch.
-echo   Process guardian is ENABLED (auto-restart on crash/hang).
-echo ===============================================
-echo.
 
 :guardian_loop
 set /a RESTART_COUNT+=1
