@@ -965,6 +965,11 @@ const Console = (() => {
           alert(t('hw.disk-name-extension'));
           return;
         }
+        // Keep disk file names ASCII: Chinese and special characters are rejected
+        if (!/^[A-Za-z0-9][A-Za-z0-9._-]*\.ocd$/.test(diskName)) {
+          alert(t('hw.disk-name-invalid'));
+          return;
+        }
 
         let size;
         if (tier === 1) {
@@ -1150,6 +1155,7 @@ const Console = (() => {
       <div class="storage-option ${item.selected ? 'selected' : ''}" data-value="${escapeAttr(item.value)}" data-removable="${item.removable}">
         <span class="storage-radio">${item.selected ? '◉' : '○'}</span>
         <span class="storage-label">${escapeHTML(item.label)}</span>
+        ${item.removable ? `<button class="storage-export" title="${t('hw.eeprom-export')}" data-export="${escapeAttr(item.value)}">⬇</button>` : ''}
         ${item.removable ? `<button class="storage-remove" title="${t('hw.remove')}" data-filename="${escapeAttr(item.value)}">×</button>` : ''}
       </div>
     `).join('');
@@ -1219,9 +1225,11 @@ const Console = (() => {
             <div class="storage-add-row">
               <button type="button" class="btn btn-sm" id="hw-eeprom-add-oce" ${disabled}>+ ${t('hw.option-custom-oce')}</button>
               <button type="button" class="btn btn-sm" id="hw-eeprom-add-lua" ${disabled}>+ ${t('hw.option-custom-lua')}</button>
+              <button type="button" class="btn btn-sm" id="hw-eeprom-add-efi" ${disabled}>+ ${t('hw.option-custom-efi')}</button>
             </div>
             <input type="file" id="hw-eeprom-file-oce" accept=".oce" class="file-input-hidden">
             <input type="file" id="hw-eeprom-file-lua" accept=".lua" class="file-input-hidden">
+            <input type="file" id="hw-eeprom-file-efi" accept=".efi" class="file-input-hidden">
           </div>
           <label>${t('hw.disk1')}</label>
           <div class="hw-value">
@@ -1312,6 +1320,14 @@ const Console = (() => {
     const eepromList = document.querySelector('#hw-eeprom-list');
     if (eepromList) {
       eepromList.addEventListener('click', (e) => {
+        // Download the EEPROM as-is (.lua / .oce / .efi)
+        const exportBtn = e.target.closest('.storage-export');
+        if (exportBtn) {
+          e.stopPropagation();
+          const name = encodeURIComponent(exportBtn.dataset.export);
+          window.location.href = `/api/vms/${encodeURIComponent(vmName)}/eeprom-export?filename=${name}`;
+          return;
+        }
         // Remove button
         const removeBtn = e.target.closest('.storage-remove');
         if (removeBtn) {
@@ -1321,7 +1337,11 @@ const Console = (() => {
             App.api(`vms/${encodeURIComponent(vmName)}/eeprom-delete`, {
               method: 'POST',
               body: { filename },
-            }).then(() => {
+            }).then((r) => {
+              if (r && r.error) {
+                alert(t('hw.eeprom-remove-fail') + ': ' + r.error);
+                return;
+              }
               // Refresh the config and reopen the editor
               App.api(`vms/${encodeURIComponent(vmName)}`).then(newCfg => {
                 openHardwareEditor(vmName, newCfg);
@@ -1346,14 +1366,16 @@ const Console = (() => {
     // EEPROM file upload
     const fileInputOce = document.querySelector('#hw-eeprom-file-oce');
     const fileInputLua = document.querySelector('#hw-eeprom-file-lua');
+    const fileInputEfi = document.querySelector('#hw-eeprom-file-efi');
     const addOceBtn = document.querySelector('#hw-eeprom-add-oce');
     const addLuaBtn = document.querySelector('#hw-eeprom-add-lua');
+    const addEfiBtn = document.querySelector('#hw-eeprom-add-efi');
 
     async function uploadEeprom(file, format) {
       try {
         const b64 = await App.fileToBase64(file);
         const result = await App.uploadFile('eeprom/import',
-          { vmName, content: b64, format, filename: file.name.replace(/\.(lua|oce)$/i, '') },
+          { vmName, content: b64, format, filename: file.name.replace(/\.(lua|oce|efi)$/i, '') },
           t('upload.title.eeprom'));
         if (result && result.ok) {
           // Refresh the config and reopen the editor
@@ -1367,11 +1389,15 @@ const Console = (() => {
 
     if (addOceBtn) addOceBtn.addEventListener('click', () => fileInputOce.click());
     if (addLuaBtn) addLuaBtn.addEventListener('click', () => fileInputLua.click());
+    if (addEfiBtn) addEfiBtn.addEventListener('click', () => fileInputEfi.click());
     if (fileInputOce) fileInputOce.addEventListener('change', () => {
       if (fileInputOce.files[0]) uploadEeprom(fileInputOce.files[0], 'oce');
     });
     if (fileInputLua) fileInputLua.addEventListener('change', () => {
       if (fileInputLua.files[0]) uploadEeprom(fileInputLua.files[0], 'lua');
+    });
+    if (fileInputEfi) fileInputEfi.addEventListener('change', () => {
+      if (fileInputEfi.files[0]) uploadEeprom(fileInputEfi.files[0], 'efi');
     });
 
     // --- Memory size: "custom" reveals the MB input ---

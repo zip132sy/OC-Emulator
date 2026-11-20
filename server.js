@@ -897,6 +897,27 @@ const modsManager = new ModsManager({
 deviceBus.attach(vmManager);
 deviceBus.attach(modsManager);
 
+// ---------- File naming ----------
+// Disk images must use plain ASCII names (letters, digits, dot, dash, underscore).
+// A Chinese or exotic name breaks on some filesystems, is hard to type in a shell,
+// and mixed normalisation makes the same disk look like two different files.
+const DISK_FILE_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*\.(ocd|ocf)$/;
+const EEPROM_FILE_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*\.(lua|oce|efi)$/;
+
+function isValidDiskFileName(name) {
+  return typeof name === 'string' && DISK_FILE_RE.test(name);
+}
+
+// Turn an arbitrary uploaded name into a safe ASCII file name
+function safeFileName(name, fallback, ext) {
+  let base = String(name || '').replace(/^.*[\\/]/, '');       // drop any directory part
+  base = base.replace(/\.[^.]*$/, '');                          // drop the old extension
+  base = base.normalize('NFKD').replace(/[^\x20-\x7E]/g, '');   // keep ASCII only (drops CJK)
+  base = base.replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^[._-]+/, '').replace(/[._-]+$/, '');
+  if (!base) base = fallback;
+  return base + ext;
+}
+
 // ---------- Disk lock keys ----------
 // A password-protected .ocd stores only a verifier in its header. The plaintext
 // password lives next to the image as "<disk>.key", so this machine can unlock
@@ -1945,6 +1966,10 @@ async function handleApi(req, res, body) {
       if (parts[2] === 'create' && method === 'POST') {
         const spec = JSON.parse(body || '{}');
         const diskPath = spec.path;
+        if (!diskPath) return json(res, { error: 'path required' }, 400);
+        if (!isValidDiskFileName(path.basename(diskPath))) {
+          return json(res, { ok: false, code: 'invalid-name', error: 'disk name must be ASCII letters, digits, dot, dash or underscore' }, 400);
+        }
         const tier = Number(spec.tier) || 3;
         // T1 / T2 have a fixed capacity; only T3 is configurable.
         const size = tier === 1 ? 1048576 : tier === 2 ? 2097152 : (Number(spec.size) || 4194304);
@@ -2017,6 +2042,9 @@ async function handleApi(req, res, body) {
         const spec = JSON.parse(body || '{}');
         const diskPath = spec.path || spec.destPath;
         if (!diskPath) return json(res, { error: 'path required' }, 400);
+        if (!isValidDiskFileName(path.basename(diskPath))) {
+          return json(res, { ok: false, code: 'invalid-name', error: 'disk name must be ASCII letters, digits, dot, dash or underscore' }, 400);
+        }
 
         // Build files object for diskIO.save
         const files = {};
@@ -2354,8 +2382,9 @@ async function handleApi(req, res, body) {
     if (parts[1] === 'disks' && parts[2] === 'import' && method === 'POST') {
       const data = JSON.parse(body || '{}');
       const vmName = data.vmName;
-      let filename = data.filename || 'imported.ocd';
-      if (!filename.endsWith('.ocd')) filename += '.ocd';
+      // Keep the stored name ASCII: Chinese and exotic names break on some tools
+      let filename = safeFileName(data.filename, 'imported', '.ocd');
+      if (!isValidDiskFileName(filename)) filename = 'imported.ocd';
       const destDir = path.join(VMS_DIR, vmName);
       fs.mkdirSync(destDir, { recursive: true });
       let destPath = path.join(destDir, filename);
@@ -2371,23 +2400,21 @@ async function handleApi(req, res, body) {
       return json(res, { ok: true, filename });
     }
 
-    // /api/eeprom/import — accepts .oce (binary) or .lua (text) EEPROM
-    // Body: { vmName, content (base64), format: 'lua'|'oce', filename?: 'custom.lua' }
+    // /api/eeprom/import — accepts .oce (binary), .lua or .efi (text) EEPROM
+    // Body: { vmName, content (base64), format: 'lua'|'oce'|'efi', filename?: 'custom.lua' }
     if (parts[1] === 'eeprom' && parts[2] === 'import' && method === 'POST') {
       const data = JSON.parse(body || '{}');
-      const format = data.format || 'oce';
-      const ext = format === 'lua' ? '.lua' : '.oce';
-      // Use provided filename, or generate from original name, or default
-      let filename = data.filename;
-      if (!filename) {
-        filename = format === 'lua' ? 'eeprom.lua' : 'eeprom.oce';
-      }
-      // Ensure extension is correct
-      if (!filename.endsWith(ext)) filename += ext;
+      const format = data.format === 'lua' || data.format === 'efi' ? data.format : 'oce';
+      const ext = '.' + format;
+      // The stored name is always ASCII: a Chinese name used to save fine but
+      // failed the delete check afterwards
+      const fallback = format === 'oce' ? 'eeprom' : 'eeprom_' + format;
+      let filename = safeFileName(data.filename, fallback, ext);
+      if (!EEPROM_FILE_RE.test(filename)) filename = fallback + ext;
       // Avoid overwriting if file exists and is different from current
       const destPath = path.join(VMS_DIR, data.vmName, filename);
       if (fs.existsSync(destPath) && data.makeUnique !== false) {
-        const base = filename.replace(/\.lua$|\.oce$/, '');
+        const base = filename.slice(0, filename.length - ext.length);
         let i = 2;
         while (fs.existsSync(path.join(VMS_DIR, data.vmName, `${base}${i}${ext}`))) i++;
         filename = `${base}${i}${ext}`;
@@ -2438,16 +2465,34 @@ async function handleApi(req, res, body) {
         } catch { return null; }
       }
 
+      // Read the first "-- comment" of a Lua/EFI EEPROM as its label
+      function readLuaLabel(filePath) {
+        try {
+          const text = fs.readFileSync(filePath, 'utf8');
+          const first = text.split(/\r?\n/).slice(0, 3).find((line) => line.trim().startsWith('--'));
+          if (!first) return null;
+          const label = first.trim().replace(/^--+\s*/, '').trim();
+          if (!label) return null;
+          return label.length > 40 ? label.slice(0, 40) : label;
+        } catch { return null; }
+      }
+
       for (const fname of fs.readdirSync(vmDir)) {
         const fullPath = path.join(vmDir, fname);
         const stat = fs.statSync(fullPath);
         if (!stat.isFile()) continue;
 
-        if (fname.endsWith('.lua') || fname.endsWith('.oce')) {
-          // Skip non-EEPROM lua files? We'll include all .lua/.oce as potential EEPROMs
+        if (fname.endsWith('.lua') || fname.endsWith('.oce') || fname.endsWith('.efi')) {
+          // .lua / .efi are plain Lua source; .oce is the binary container
           let label = null;
+          let type = 'lua';
           if (fname.endsWith('.oce')) {
+            type = 'oce';
             label = readOceLabel(fullPath);
+          } else {
+            type = fname.endsWith('.efi') ? 'efi' : 'lua';
+            // Parse the EFI/Lua header: the first "-- comment" becomes the label
+            label = readLuaLabel(fullPath);
           }
           // For .lua, use config eepromLabel if it's the current one
           if (!label && fname === hw.eeprom) {
@@ -2455,8 +2500,8 @@ async function handleApi(req, res, body) {
           }
           eeproms.push({
             filename: fname,
-            label: label || fname.replace(/\.(lua|oce)$/, ''),
-            type: fname.endsWith('.lua') ? 'lua' : 'oce',
+            label: label || fname.replace(/\.(lua|oce|efi)$/, ''),
+            type,
             isCurrent: fname === hw.eeprom,
           });
         } else if (fname.endsWith('.ocd') || fname.endsWith('.ocf')) {
@@ -2491,8 +2536,9 @@ async function handleApi(req, res, body) {
       const data = JSON.parse(body || '{}');
       const filename = data.filename;
       if (!filename) return json(res, { error: 'filename required' }, 400);
-      // Safety: only allow .lua and .oce files, no path traversal
-      if (!/^[\w\-]+\.(lua|oce)$/.test(filename)) {
+      // Safety: a plain file name (no directories) with an EEPROM extension.
+      // Non-ASCII names are still allowed here so old imports can be removed.
+      if (!/^[^/\\]+\.(lua|oce|efi)$/i.test(filename)) {
         return json(res, { error: 'invalid filename' }, 400);
       }
       const filePath = path.join(VMS_DIR, vmName, filename);
@@ -2508,13 +2554,36 @@ async function handleApi(req, res, body) {
       return json(res, { ok: true });
     }
 
+    // /api/vms/:name/eeprom-export?filename=x.efi — download an EEPROM file as-is
+    if (parts[1] === 'vms' && parts[2] && parts[3] === 'eeprom-export' && method === 'GET') {
+      const vmName = parts[2];
+      const filename = String(req.query.filename || '');
+      if (!/^[^/\\]+\.(lua|oce|efi)$/i.test(filename)) {
+        return json(res, { error: 'invalid filename' }, 400);
+      }
+      const vmDirPath = path.join(VMS_DIR, vmName);
+      const filePath = path.join(vmDirPath, filename);
+      if (!filePath.startsWith(vmDirPath) || !fs.existsSync(filePath)) {
+        return json(res, { error: 'file not found' }, 404);
+      }
+      const buf = fs.readFileSync(filePath);
+      res.writeHead(200, {
+        'Content-Type': 'application/octet-stream',
+        'Content-Length': buf.length,
+        'Content-Disposition': `attachment; filename="${filename.replace(/[^\x20-\x7E]/g, '_')}"; filename*=UTF-8''${encodeURIComponent(filename)}`,
+        'Cache-Control': 'no-store',
+      });
+      res.end(buf);
+      return;
+    }
+
     // /api/vms/:name/disk-delete — delete a disk file
     if (parts[1] === 'vms' && parts[2] && parts[3] === 'disk-delete' && method === 'POST') {
       const vmName = parts[2];
       const data = JSON.parse(body || '{}');
       const filename = data.filename;
       if (!filename) return json(res, { error: 'filename required' }, 400);
-      if (!/^[\w\-]+\.ocd$/.test(filename)) {
+      if (!/^[^/\\]+\.ocd$/i.test(filename)) {
         return json(res, { error: 'invalid filename' }, 400);
       }
       const filePath = path.join(VMS_DIR, vmName, filename);

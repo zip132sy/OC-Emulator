@@ -908,6 +908,25 @@ body.console-fullscreen { overflow: hidden; }
 .storage-remove:hover {
   background: rgba(255,0,0,0.15);
 }
+/* 导出按钮: 与删除按钮同排, 用中性色 */
+.storage-export {
+  background: none;
+  border: none;
+  color: var(--fg-secondary);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  padding: 0 4px;
+  border-radius: 3px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+}
+.storage-export:hover {
+  background: var(--bg-tab-hover);
+  color: var(--fg-primary);
+}
+.storage-export .ui-icon { width: 14px; height: 14px; vertical-align: 0; }
 .storage-add-row {
   display: flex;
   gap: 6px;
