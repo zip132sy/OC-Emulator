@@ -522,7 +522,11 @@ local function readProtection(path)
   local rest = f:read(HEADER_SIZE_V4 - 7)
   f:close()
   if not rest or #rest < HEADER_SIZE_V4 - 7 then return nil end
-  return { flags = rest:byte(1), extra = rest:sub(27, 33) }
+  return {
+    flags = rest:byte(1),
+    label = rest:sub(2, 17):match("^%Z*") or "",
+    extra = rest:sub(27, 33),
+  }
 end
 
 -- ============================================================
@@ -571,6 +575,25 @@ local function deriveKeyFromPassword(password, salt, label)
   return key
 end
 
+-- Prove a password against an existing image before it may be re-encrypted.
+-- Re-encrypting with a password the image does not currently use used to be
+-- possible, which left the body double-encrypted and the real password useless.
+local function verifyCurrentPassword(path, password, prev)
+  if not prev then return false end
+  if password == nil or password == "" or password == false then return false end
+  if band(prev.flags, FLAG_KEYED) ~= 0 then
+    local f = io.open(path, "rb")
+    if not f then return false end
+    f:seek("set", HEADER_SIZE_V4)
+    local head = f:read(64) or ""
+    f:close()
+    if #head < 4 then return false end
+    local plain = xorTransformSalt(head, deriveKeyFromPassword(password, prev.extra, prev.label))
+    return plain:sub(1, 4) == PASSWORD_MAGIC
+  end
+  return prev.extra == passwordVerifier(password)
+end
+
 
 -- v4 save: tier + locked parameters and V2 encryption
 -- @param path     output path
@@ -581,10 +604,11 @@ end
 -- @param locked   lock flag (optional, default false)
 -- @param password optional lock password:
 --                 string  -> protect with this password (keyed body encryption)
---                 false/"" -> drop any existing protection
---                 nil      -> keep the existing protection mode (a keyed image
---                             cannot be rewritten without the password)
-function disk.save(path, label, files, size, tier, locked, password)
+--                 nil     -> keep the existing protection mode
+--                 false/"" -> drop the protection (see dropProtection)
+-- @param dropProtection optional: rewrite without protection. On a protected
+--                 image this still requires the current password.
+function disk.save(path, label, files, size, tier, locked, password, dropProtection)
   label = label or "Untitled"
   size = size or (4 * 1024 * 1024)
   files = files or {}
@@ -595,14 +619,24 @@ function disk.save(path, label, files, size, tier, locked, password)
   local prevKeyed = prev and band(prev.flags, FLAG_KEYED) ~= 0
   local prevProtected = prev and band(prev.flags, FLAG_PASSWORD) ~= 0
 
+  -- A protected image may only be rewritten by someone who knows its password.
+  -- Without this check a second lock pass re-encrypted the body with another
+  -- key, and the original password could no longer open the disk.
+  if prevProtected then
+    if password == nil or password == "" or password == false then
+      return false, "password required"
+    end
+    if not verifyCurrentPassword(path, password, prev) then
+      return false, "wrong password"
+    end
+  end
+
   -- Which protection the new image gets
   local mode          -- "keyed" | "legacy" | "none"
-  if password == false or password == "" then
+  if dropProtection or password == false or password == "" then
     mode = "none"                      -- explicit: strip protection
   elseif password ~= nil then
     mode = "keyed"                     -- explicit: protect with this password
-  elseif prevKeyed then
-    return false, "password required"  -- cannot re-encrypt without it
   elseif prevProtected then
     mode = "legacy"                    -- keep the old verifier-based scheme
   else
@@ -892,7 +926,7 @@ function disk.clearPassword(path, password)
   local info, err = disk.load(path, password)
   if not info then return false, err or "cannot load disk" end
   if info.files == nil then return false, "password required" end
-  return disk.save(path, info.label, info.files, info.size, info.tier, false, false)
+  return disk.save(path, info.label, info.files, info.size, info.tier, false, password, true)
 end
 
 -- Does this disk require a password to unlock?
@@ -955,8 +989,8 @@ function disk.format(path, password)
   local info, err = disk.load(path, password)
   if not info then return false, err or "cannot load disk" end
   if info.files == nil then return false, "password required" end
-  -- password=false: the fresh image carries no protection
-  local ok, saveErr = disk.save(path, info.label, {}, info.size, info.tier, false, false)
+  -- dropProtection: the fresh image carries no protection
+  local ok, saveErr = disk.save(path, info.label, {}, info.size, info.tier, false, password, true)
   return ok, saveErr
 end
 
