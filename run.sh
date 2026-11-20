@@ -2,7 +2,7 @@
 cd "$(dirname "$0")"
 
 echo "==============================================="
-echo "  OC Emulator - Web Control Panel v2.4"
+echo "  OC Emulator - Web Control Panel v2.3.6"
 echo "==============================================="
 echo ""
 

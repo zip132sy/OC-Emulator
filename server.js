@@ -2917,7 +2917,7 @@ function probeExistingInstance(host, port, timeoutMs = 1500) {
 async function main() {
   // Lua check
   logger.log('===============================================');
-  logger.log('  OC Emulator - Web Control Panel v2.4');
+  logger.log('  OC Emulator - Web Control Panel v2.3.6');
   logger.log('===============================================');
 
   const HOST = settings.host || '127.0.0.1';
