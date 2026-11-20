@@ -120,6 +120,98 @@ const Console = (() => {
   let showFps = false;
   try { showFps = localStorage.getItem(SHOW_FPS_KEY) === '1'; } catch (e) { /* ignore */ }
 
+  // ---------- Device profile ----------
+  // Handhelds (phones / tablets, no mouse) keep the on-screen IME, virtual keyboard and
+  // virtual mouse. A touchscreen computer also has a keyboard and a precise pointer, so
+  // those buttons stay hidden there unless the settings panel turns them on.
+  // Classes are written on <html> and the CSS keys off them.
+  const SHOW_VKBD_KEY = 'oc-virtual-keyboard';
+  const SHOW_VMOUSE_KEY = 'oc-virtual-mouse';
+  // null = follow the device default (handhelds on, computers off); '1'/'0' = user choice
+  let vkbdPref = null;
+  let vmousePref = null;
+  try {
+    const v = localStorage.getItem(SHOW_VKBD_KEY);
+    if (v === '1') vkbdPref = true;
+    else if (v === '0') vkbdPref = false;
+    const m = localStorage.getItem(SHOW_VMOUSE_KEY);
+    if (m === '1') vmousePref = true;
+    else if (m === '0') vmousePref = false;
+  } catch (e) { /* ignore */ }
+
+  const mqMatch = (q) => !!(window.matchMedia && window.matchMedia(q).matches);
+
+  function isTouchPc() {
+    // A fine pointer (mouse, trackpad or stylus) plus touch means the device is used
+    // like a computer. The width guard keeps pen phones out of this branch.
+    const touch = ('ontouchstart' in window) || (navigator.maxTouchPoints || 0) > 0;
+    return touch && mqMatch('(any-pointer: fine)') && window.innerWidth >= 768;
+  }
+
+  function isTouchOnly() {
+    const touch = ('ontouchstart' in window) || (navigator.maxTouchPoints || 0) > 0;
+    return touch && !isTouchPc();
+  }
+
+  function applyDeviceClasses() {
+    const root = document.documentElement;
+    const touch = ('ontouchstart' in window) || (navigator.maxTouchPoints || 0) > 0;
+    const touchPc = isTouchPc();
+    const touchOnly = touch && !touchPc;
+    root.classList.toggle('touch-pc', touchPc);
+    root.classList.toggle('touch-only', touchOnly);
+    // Unset preference follows the device default, so a phone keeps its buttons
+    // while a touchscreen computer hides them until the user turns them on.
+    root.classList.toggle('show-vkbd', vkbdPref === null ? touchOnly : vkbdPref);
+    root.classList.toggle('show-vmouse', vmousePref === null ? touchOnly : vmousePref);
+  }
+
+  applyDeviceClasses();
+  if (window.matchMedia) {
+    const onChange = () => applyDeviceClasses();
+    ['(any-pointer: fine)', '(pointer: coarse)'].forEach((q) => {
+      const m = window.matchMedia(q);
+      if (m.addEventListener) m.addEventListener('change', onChange);
+      else if (m.addListener) m.addListener(onChange);
+    });
+  }
+  window.addEventListener('resize', applyDeviceClasses);
+  window.addEventListener('orientationchange', applyDeviceClasses);
+
+  function isVkbdEnabled() { return document.documentElement.classList.contains('show-vkbd'); }
+  function setVkbdEnabled(on) {
+    vkbdPref = !!on;
+    try {
+      if (vkbdPref === true && isTouchOnly()) localStorage.removeItem(SHOW_VKBD_KEY);
+      else if (vkbdPref === false && !isTouchOnly()) localStorage.removeItem(SHOW_VKBD_KEY);
+      else localStorage.setItem(SHOW_VKBD_KEY, vkbdPref ? '1' : '0');
+    } catch (e) { /* ignore */ }
+    applyDeviceClasses();
+    if (!vkbdPref) {
+      views.forEach((view) => {
+        if (view.vkbdPanel) view.vkbdPanel.classList.remove('open');
+        if (view.vkbdBtn) view.vkbdBtn.classList.remove('active');
+        if (view.vkbdPanel) view.vkbdPanel.setAttribute('aria-hidden', 'true');
+      });
+    }
+  }
+
+  function isVmouseEnabled() { return document.documentElement.classList.contains('show-vmouse'); }
+  function setVmouseEnabled(on) {
+    vmousePref = !!on;
+    try {
+      if (vmousePref === true && isTouchOnly()) localStorage.removeItem(SHOW_VMOUSE_KEY);
+      else if (vmousePref === false && !isTouchOnly()) localStorage.removeItem(SHOW_VMOUSE_KEY);
+      else localStorage.setItem(SHOW_VMOUSE_KEY, vmousePref ? '1' : '0');
+    } catch (e) { /* ignore */ }
+    applyDeviceClasses();
+    if (!vmousePref) {
+      views.forEach((view, name) => {
+        if (view.vmouseOn) setVirtualMouse(name, false);
+      });
+    }
+  }
+
   function isShowFps() { return showFps; }
 
   function setShowFps(on) {
@@ -385,6 +477,13 @@ const Console = (() => {
       return null;
     };
     view.canvas.addEventListener('touchstart', (e) => {
+      // Two fingers = scroll. A touchscreen computer never synthesises wheel events for
+      // a finger on the glass, so without this the VM simply cannot be scrolled there.
+      if (e.touches.length >= 2) {
+        e.preventDefault();
+        beginScrollGesture(view, vmName);
+        return;
+      }
       if (e.touches.length !== 1) return;
       const touch = e.changedTouches[0];
       if (!touch) return;
@@ -420,6 +519,13 @@ const Console = (() => {
       onTouch(touch, vmName, 'touch');
     }, { passive: false });
     view.canvas.addEventListener('touchmove', (e) => {
+      if (view._scrollGesture) {
+        if (e.touches.length >= 2) {
+          e.preventDefault();
+          updateScrollGesture(view, vmName, e);
+        }
+        return;
+      }
       if (view._touchId == null) return;
       if (view._lpFired) return; // Right click already sent; this touch must not become a drag
       const touch = findTouch(e.changedTouches, view._touchId) || e.touches[0];
@@ -455,6 +561,11 @@ const Console = (() => {
       });
     }, { passive: false });
     view.canvas.addEventListener('touchend', (e) => {
+      // Lifting one of two scroll fingers ends the gesture instead of clicking
+      if (view._scrollGesture) {
+        if (e.touches.length < 2) view._scrollGesture = null;
+        return;
+      }
       const touch = findTouch(e.changedTouches, view._touchId);
       if (!touch) return;
       e.preventDefault();
@@ -485,6 +596,7 @@ const Console = (() => {
       onTouch(touch, vmName, 'drop');
     }, { passive: false });
     view.canvas.addEventListener('touchcancel', () => {
+      view._scrollGesture = null;
       view._touchId = null;
       view._touchPending = false;
       view._touchMoveEvent = null;
@@ -3237,6 +3349,49 @@ const Console = (() => {
     btn.addEventListener('click', (e) => e.stopPropagation());
   }
 
+  // ---------- Two-finger scroll ----------
+  // Finger travel that produces one wheel notch.
+  const SCROLL_GESTURE_STEP = 44;
+
+  function beginScrollGesture(view, vmName) {
+    // The first finger may already have pressed inside the guest; release it so the
+    // screen does not keep a held button while two fingers scroll.
+    if (view._touchId != null) {
+      const pt = view.lastPt;
+      if (pt) sendInput(vmName, { event: 'drop', x: pt.x, y: pt.y, px: pt.px, py: pt.py, btn: 0 });
+      view._touchId = null;
+      view._touchPending = false;
+      view._touchMoveEvent = null;
+      view._pressPoint = null;
+      view._lpFired = false;
+      clearLongPress(view);
+      cancelVirtualMouse(view);
+    }
+    view._scrollGesture = { y: 0, acc: 0, ready: false };
+  }
+
+  function updateScrollGesture(view, vmName, e) {
+    const g = view._scrollGesture;
+    if (!g || e.touches.length < 2) return;
+    const a = e.touches[0];
+    const b = e.touches[1] || a;
+    const y = (a.clientY + b.clientY) / 2;
+    if (!g.ready) {
+      g.y = y;
+      g.ready = true;
+      return;
+    }
+    g.acc += y - g.y;   // dragging down = scrolling up
+    g.y = y;
+    if (Math.abs(g.acc) < SCROLL_GESTURE_STEP) return;
+    const point = computePoint(view, a.clientX, y);
+    while (Math.abs(g.acc) >= SCROLL_GESTURE_STEP) {
+      const dir = g.acc > 0 ? 1 : -1;
+      g.acc -= dir * SCROLL_GESTURE_STEP;
+      sendScroll(vmName, point.x, point.y, point.px, point.py, dir);
+    }
+  }
+
   // Virtual wheel: use the last pointer position, else the screen center
   function sendScrollAtPointer(vmName, delta) {
     const view = getView(vmName);
@@ -3257,14 +3412,32 @@ const Console = (() => {
       flog('debug', 'wheel ignored: canvas not ready');
       return;
     }
+    // Ctrl+wheel is a pinch-zoom gesture on touchpads and touchscreens, not a scroll notch
+    if (e.ctrlKey) return;
+    // Normalise the delta units first: some mice and drivers report lines (deltaMode 1)
+    // or pages (2), and precision touchpads report small fractional pixel deltas that
+    // used to turn every event into its own scroll signal.
+    let dy = Number(e.deltaY) || 0;
+    if (e.deltaMode === 1) dy *= 16;
+    else if (e.deltaMode === 2) dy *= Math.max(1, (view.canvasStage ? view.canvasStage.clientHeight : 400));
+    if (!dy) return;
+    const acc = Math.max(-WHEEL_ACC_CAP, Math.min(WHEEL_ACC_CAP, (view._wheelAcc || 0) + dy));
+    view._wheelAcc = acc;
+    if (Math.abs(acc) < WHEEL_NOTCH_PX) return;
+    view._wheelAcc = 0;
     const point = computePoint(view, e.clientX, e.clientY);
     // OC scroll signal: scroll(address, x, y, direction, playerName)
     // Convention: positive direction scrolls up, negative scrolls down.
     // Browser wheel deltaY > 0 means "scroll down", the opposite of OC, hence the negation.
     // x/y use the same space as touch signals (pixel coordinates in precise mode).
-    const delta = e.deltaY < 0 ? 1 : -1;
+    const delta = acc < 0 ? 1 : -1;
     sendScroll(vmName, point.x, point.y, point.px, point.py, delta);
   }
+
+  // One scroll signal per notch: a mouse wheel sends ~100 px (or 3 lines), a precision
+  // touchpad only a few pixels per event, so the rest is accumulated.
+  const WHEEL_NOTCH_PX = 40;
+  const WHEEL_ACC_CAP = 240;
 
   function mapKeyCode(e) {
     // OC key codes are PS/2 scan codes (used by OpenOS keyboard.lua)
@@ -3392,7 +3565,7 @@ const Console = (() => {
     });
   }, 1000);
 
-  return { renderVMView, onServerMessage, loadHexFont, onConnectionLost, applyServerState, reloadView, diag, isWheelKeyCompat, setWheelKeyCompat, isShowFps, setShowFps, exitFullscreen };
+  return { renderVMView, onServerMessage, loadHexFont, onConnectionLost, applyServerState, reloadView, diag, isWheelKeyCompat, setWheelKeyCompat, isShowFps, setShowFps, isVkbdEnabled, setVkbdEnabled, isVmouseEnabled, setVmouseEnabled, exitFullscreen };
 })();
 
 window.Console = Console;

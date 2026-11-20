@@ -399,6 +399,28 @@ const App = (() => {
             <span class="hint">${I18N.t('settings.show-fps-hint')}</span>
           </div>
           <div class="form-row">
+            <label for="settings-vkbd">${I18N.t('settings.vkbd')}</label>
+            <label class="checkbox-line">
+              <input type="checkbox" id="settings-vkbd" ${(window.Console && Console.isVkbdEnabled && Console.isVkbdEnabled()) ? 'checked' : ''}>
+              <span id="settings-vkbd-state">${(window.Console && Console.isVkbdEnabled && Console.isVkbdEnabled()) ? I18N.t('settings.on') : I18N.t('settings.off')}</span>
+            </label>
+          </div>
+          <div class="form-row">
+            <label></label>
+            <span class="hint">${I18N.t('settings.vkbd-hint')}</span>
+          </div>
+          <div class="form-row">
+            <label for="settings-vmouse">${I18N.t('settings.vmouse')}</label>
+            <label class="checkbox-line">
+              <input type="checkbox" id="settings-vmouse" ${(window.Console && Console.isVmouseEnabled && Console.isVmouseEnabled()) ? 'checked' : ''}>
+              <span id="settings-vmouse-state">${(window.Console && Console.isVmouseEnabled && Console.isVmouseEnabled()) ? I18N.t('settings.on') : I18N.t('settings.off')}</span>
+            </label>
+          </div>
+          <div class="form-row">
+            <label></label>
+            <span class="hint">${I18N.t('settings.vmouse-hint')}</span>
+          </div>
+          <div class="form-row">
             <label for="settings-autoupdate">${I18N.t('settings.auto-update')}</label>
             <label class="checkbox-line">
               <input type="checkbox" id="settings-autoupdate" ${cur.autoUpdate !== false ? 'checked' : ''}>
@@ -522,6 +544,26 @@ const App = (() => {
               if (fpsState) {
                 fpsState.textContent = on ? I18N.t('settings.show-fps-on') : I18N.t('settings.show-fps-off');
               }
+            });
+          }
+          // Virtual keyboard / virtual mouse buttons (frontend-only, persisted in localStorage).
+          // Handhelds show them by default; on touchscreen computers they stay hidden until enabled here.
+          const vkbdBox = body.querySelector('#settings-vkbd');
+          const vkbdState = body.querySelector('#settings-vkbd-state');
+          if (vkbdBox) {
+            vkbdBox.addEventListener('change', () => {
+              const on = vkbdBox.checked;
+              if (window.Console && Console.setVkbdEnabled) Console.setVkbdEnabled(on);
+              if (vkbdState) vkbdState.textContent = on ? I18N.t('settings.on') : I18N.t('settings.off');
+            });
+          }
+          const vmouseBox = body.querySelector('#settings-vmouse');
+          const vmouseState = body.querySelector('#settings-vmouse-state');
+          if (vmouseBox) {
+            vmouseBox.addEventListener('change', () => {
+              const on = vmouseBox.checked;
+              if (window.Console && Console.setVmouseEnabled) Console.setVmouseEnabled(on);
+              if (vmouseState) vmouseState.textContent = on ? I18N.t('settings.on') : I18N.t('settings.off');
             });
           }
           // Auto-update toggle (stored in settings.json, applied on the next launcher start)

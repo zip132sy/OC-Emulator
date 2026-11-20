@@ -498,9 +498,9 @@ html, body {
   line-height: 1;
   z-index: 6;
 }
-@media (pointer: coarse) {
-  .ime-btn { display: inline-flex; }
-}
+/* 输入法 (软键盘) 按钮: 手机/平板显示; 带触屏的电脑有物理键盘, 不显示
+   (虚拟键盘按钮会占用它的位置) */
+html.touch-only .ime-btn { display: inline-flex; }
 /* 全屏模式 */
 .console-canvas-wrap.fullscreen {
   position: fixed;
@@ -604,9 +604,9 @@ body.console-fullscreen { overflow: hidden; }
   -webkit-tap-highlight-color: transparent;
   transition: opacity 0.15s, background 0.15s;
 }
-@media (pointer: coarse) {
-  .vmouse-btn { display: flex; }
-}
+/* 虚拟鼠标开关: 手机/平板默认显示; 带触屏的电脑默认隐藏, 可在设置中开启。
+   show-vmouse 由 console.js 按「用户偏好 / 设备默认」解析后写到 <html> 上 */
+html.show-vmouse .vmouse-btn { display: flex; }
 .vmouse-btn.active {
   opacity: 1;
   background: var(--accent);
@@ -627,10 +627,12 @@ body.console-fullscreen { overflow: hidden; }
   pointer-events: none;
   z-index: 3;
 }
-/* 虚拟键盘: 触屏设备的完整键盘 (手机软键盘缺少 F1-F12 等按键) */
+/* 虚拟键盘: 触屏设备的完整键盘 (手机软键盘缺少 F1-F12 等按键)。
+   手机/平板上占用输入法按钮下方的位置; 带触屏的电脑上输入法按钮不显示,
+   它直接顶替输入法按钮的位置 (见下方 html.touch-only 覆盖) */
 .vkbd-btn {
   position: absolute;
-  top: 44px;
+  top: 8px;
   left: 8px;
   display: none;
   background: rgba(0, 0, 0, 0.6);
@@ -645,9 +647,11 @@ body.console-fullscreen { overflow: hidden; }
   opacity: 0.6;
   transition: opacity 0.15s, background 0.15s;
 }
-@media (pointer: coarse) {
-  .vkbd-btn { display: inline-flex; }
-}
+/* 手机/平板默认显示; 带触屏的电脑默认隐藏, 可在设置中开启。
+   show-vkbd 由 console.js 按「用户偏好 / 设备默认」解析后写到 <html> 上 */
+html.show-vkbd .vkbd-btn { display: inline-flex; }
+/* 手机/平板保留了输入法按钮, 虚拟键盘按钮让到它下面 */
+html.touch-only .vkbd-btn { top: 44px; }
 .vkbd-btn:hover,
 .vkbd-btn.active {
   opacity: 1;
@@ -655,8 +659,13 @@ body.console-fullscreen { overflow: hidden; }
   border-color: var(--accent);
 }
 .console-canvas-wrap.fullscreen .vkbd-btn {
-  top: calc(48px + env(safe-area-inset-top, 0px));
+  top: calc(12px + env(safe-area-inset-top, 0px));
   left: calc(12px + env(safe-area-inset-left, 0px));
+  opacity: 0.5;
+}
+/* 手机/平板全屏时输入法按钮还在, 虚拟键盘按钮仍在其下方 */
+html.touch-only .console-canvas-wrap.fullscreen .vkbd-btn {
+  top: calc(48px + env(safe-area-inset-top, 0px));
 }
 .vkbd {
   position: fixed;
@@ -2299,9 +2308,10 @@ body.console-fullscreen { overflow: hidden; }
     align-items: center;
     justify-content: center;
   }
-  /* 画布右上角的全屏按钮 / 左上角的输入法按钮 */
+  /* 画布右上角的全屏按钮 / 左上角的输入法、虚拟键盘按钮 */
   .fs-btn,
-  .ime-btn {
+  .ime-btn,
+  .vkbd-btn {
     min-height: 40px;
     padding: 8px 12px;
     font-size: 13px;
